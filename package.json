@@ -1,0 +1,52 @@
+{
+  "name": "formuron-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Formulon Excel-compatible formula and workbook evaluation",
+  "license": "Apache-2.0",
+  "author": "libraz",
+  "type": "module",
+  "packageManager": "yarn@4.12.0",
+  "bin": "./dist/index.js",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/**",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "biome check . && tsc -p tsconfig.json --noEmit",
+    "format": "biome format --write .",
+    "lint": "biome lint .",
+    "test": "yarn run build && node --test test/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node ./dist/index.js"
+  },
+  "dependencies": {
+    "@libraz/formulon": "^0.9.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.15",
+    "@types/node": "^25.6.2",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "volta": {
+    "node": "22.15.0",
+    "yarn": "4.12.0"
+  },
+  "keywords": [
+    "mcp",
+    "formulon",
+    "excel",
+    "spreadsheet",
+    "formula",
+    "xlsx"
+  ],
+  "sideEffects": false
+}
