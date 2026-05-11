@@ -54,11 +54,21 @@
   },
   "keywords": [
     "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "claude",
+    "anthropic",
+    "ai-agents",
+    "llm-tools",
     "formulon",
     "excel",
+    "excel-formulas",
+    "xlsx",
     "spreadsheet",
     "formula",
-    "xlsx"
+    "office-365",
+    "typescript",
+    "nodejs"
   ],
   "sideEffects": false
 }
