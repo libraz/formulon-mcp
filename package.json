@@ -1,9 +1,17 @@
 {
-  "name": "formulon-mcp",
-  "version": "0.1.0",
+  "name": "@libraz/formulon-mcp",
+  "version": "0.1.1",
   "description": "MCP server for Formulon Excel-compatible formula and workbook evaluation",
   "license": "Apache-2.0",
   "author": "libraz",
+  "homepage": "https://github.com/libraz/formulon-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/libraz/formulon-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/libraz/formulon-mcp/issues"
+  },
   "type": "module",
   "packageManager": "yarn@4.12.0",
   "bin": "./dist/index.js",
@@ -14,6 +22,9 @@
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "biome check . && tsc -p tsconfig.json --noEmit",
@@ -21,7 +32,8 @@
     "lint": "biome lint .",
     "test": "yarn run build && node --test test/*.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "start": "node ./dist/index.js"
+    "start": "node ./dist/index.js",
+    "prepare": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@libraz/formulon": "^0.9.0",

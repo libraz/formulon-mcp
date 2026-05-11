@@ -9,23 +9,13 @@ recalculate, read ranges, save, and close the in-memory session.
 
 ## Install
 
-Requires Node.js 22+. Build the server once, then register it with your MCP
-client.
-
-```sh
-git clone https://github.com/libraz/formulon-mcp.git
-cd formulon-mcp
-yarn install
-yarn run build
-```
-
-The entry point is `./dist/index.js`. Use its absolute path in the snippets
-below (replace `/absolute/path/to/formulon-mcp`).
+Requires Node.js 22+. No clone needed — `npx` fetches and runs the server on
+demand. The CLI binary is `formulon-mcp`.
 
 ### Claude Code
 
 ```sh
-claude mcp add --scope user formulon node /absolute/path/to/formulon-mcp/dist/index.js
+claude mcp add --scope user formulon -- npx -y @libraz/formulon-mcp
 ```
 
 Verify with `claude mcp list` — `formulon` should report `✓ Connected`.
@@ -36,8 +26,8 @@ Add to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.formulon]
-command = "node"
-args = ["/absolute/path/to/formulon-mcp/dist/index.js"]
+command = "npx"
+args = ["-y", "@libraz/formulon-mcp"]
 ```
 
 ### Claude Desktop
@@ -50,8 +40,8 @@ Add to `claude_desktop_config.json`
 {
   "mcpServers": {
     "formulon": {
-      "command": "node",
-      "args": ["/absolute/path/to/formulon-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@libraz/formulon-mcp"]
     }
   }
 }
@@ -59,8 +49,31 @@ Add to `claude_desktop_config.json`
 
 ### Other MCP clients
 
-Any stdio-capable MCP client works. Point it at `node` with the absolute path
-to `dist/index.js` as the only argument.
+Any stdio-capable MCP client works. Point it at `npx -y @libraz/formulon-mcp`,
+or run `formulon-mcp` directly after `npm install -g @libraz/formulon-mcp`.
+
+### From source
+
+For development or to pin a fork, clone and build instead of using npm:
+
+```sh
+git clone https://github.com/libraz/formulon-mcp.git
+cd formulon-mcp
+yarn install
+yarn run build
+```
+
+Then register the absolute path to `dist/index.js`, e.g.:
+
+```sh
+claude mcp add --scope user formulon node /absolute/path/to/formulon-mcp/dist/index.js
+```
+
+Or install the latest `main` directly without a local clone:
+
+```sh
+npx -y github:libraz/formulon-mcp
+```
 
 ## Development
 

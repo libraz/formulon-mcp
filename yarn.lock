@@ -105,6 +105,21 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@libraz/formulon-mcp@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "@libraz/formulon-mcp@workspace:."
+  dependencies:
+    "@biomejs/biome": "npm:^2.4.15"
+    "@libraz/formulon": "npm:^0.9.0"
+    "@modelcontextprotocol/sdk": "npm:^1.29.0"
+    "@types/node": "npm:^25.6.2"
+    typescript: "npm:^6.0.3"
+    zod: "npm:^4.4.3"
+  bin:
+    formulon-mcp: ./dist/index.js
+  languageName: unknown
+  linkType: soft
+
 "@libraz/formulon@npm:^0.9.0":
   version: 0.9.0
   resolution: "@libraz/formulon@npm:0.9.0"
@@ -468,21 +483,6 @@ __metadata:
   checksum: 10c0/6bd664e21b7b2e79efcaace7d1a427169f61cce048fae68eb56290e6934e676b78e55d89f5998c5508871345bc59a61f47002dc505dc7288be68cceac1b701e2
   languageName: node
   linkType: hard
-
-"formulon-mcp@workspace:.":
-  version: 0.0.0-use.local
-  resolution: "formulon-mcp@workspace:."
-  dependencies:
-    "@biomejs/biome": "npm:^2.4.15"
-    "@libraz/formulon": "npm:^0.9.0"
-    "@modelcontextprotocol/sdk": "npm:^1.29.0"
-    "@types/node": "npm:^25.6.2"
-    typescript: "npm:^6.0.3"
-    zod: "npm:^4.4.3"
-  bin:
-    formulon-mcp: ./dist/index.js
-  languageName: unknown
-  linkType: soft
 
 "forwarded@npm:0.2.0":
   version: 0.2.0
