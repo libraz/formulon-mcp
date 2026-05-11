@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -27,10 +28,12 @@ import {
   setSessionSheetView,
 } from "../dist/sessions.js";
 
+const FORMULON_VERSION = createRequire(import.meta.url)("@libraz/formulon/package.json").version;
+
 test("evaluates a formula through Formulon", async () => {
   const module = await formulonModule();
   const result = module.evalFormula("=SUM(1,2,3)");
-  assert.equal(module.versionString(), "0.9.0");
+  assert.equal(module.versionString(), FORMULON_VERSION);
   assert.equal(result.status.ok, true);
   assert.equal(result.value.kind, 1);
   assert.equal(result.value.number, 6);

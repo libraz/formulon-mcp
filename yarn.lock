@@ -121,9 +121,9 @@ __metadata:
   linkType: soft
 
 "@libraz/formulon@npm:^0.9.0":
-  version: 0.9.0
-  resolution: "@libraz/formulon@npm:0.9.0"
-  checksum: 10c0/650c5633d6871e60158cf0b4fc9244f3bacbea1f83eaff9f41c4646384ab8af06302c37dcc1dfcca12a73e3908fca31f5158a3e3f9948d985ba1d293b659ec31
+  version: 0.9.1
+  resolution: "@libraz/formulon@npm:0.9.1"
+  checksum: 10c0/7e83a2c6bed0b32f01f5df13cf04744cc02ffdd630880b70afc0c0141166e545ea6b84d4f65833d59652ada165173efb66b488d9c4d37aacafa7581a94ece8f8
   languageName: node
   linkType: hard
 

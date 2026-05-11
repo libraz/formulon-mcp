@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+const require = createRequire(import.meta.url);
+const FORMULON_VERSION = require("@libraz/formulon/package.json").version;
 
 function textPayload(result) {
   assert.equal(result.content[0].type, "text");
@@ -438,6 +442,6 @@ test("MCP stdio reports tool errors without crashing the server", async () => {
     assert.match(errorPayload(afterClose), /session not found/);
 
     const version = textPayload(await client.callTool({ name: "formulon_version", arguments: {} }));
-    assert.equal(version.version, "0.9.0");
+    assert.equal(version.version, FORMULON_VERSION);
   });
 });
