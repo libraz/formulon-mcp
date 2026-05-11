@@ -469,9 +469,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"formuron-mcp@workspace:.":
+"formulon-mcp@workspace:.":
   version: 0.0.0-use.local
-  resolution: "formuron-mcp@workspace:."
+  resolution: "formulon-mcp@workspace:."
   dependencies:
     "@biomejs/biome": "npm:^2.4.15"
     "@libraz/formulon": "npm:^0.9.0"
@@ -480,7 +480,7 @@ __metadata:
     typescript: "npm:^6.0.3"
     zod: "npm:^4.4.3"
   bin:
-    formuron-mcp: ./dist/index.js
+    formulon-mcp: ./dist/index.js
   languageName: unknown
   linkType: soft
 

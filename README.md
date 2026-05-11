@@ -1,4 +1,4 @@
-# formuron-mcp
+# formulon-mcp
 
 MCP server for [Formulon](https://github.com/libraz/formulon). It uses the
 published npm package `@libraz/formulon@0.9.0` and exposes Excel-compatible
@@ -32,9 +32,9 @@ MCP client config:
 ```json
 {
   "mcpServers": {
-    "formuron": {
+    "formulon": {
       "command": "node",
-      "args": ["/absolute/path/to/formuron-mcp/dist/index.js"]
+      "args": ["/absolute/path/to/formulon-mcp/dist/index.js"]
     }
   }
 }

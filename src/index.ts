@@ -41,7 +41,7 @@ import {
 } from "./sessions.js";
 
 const server = new McpServer({
-  name: "formuron-mcp",
+  name: "formulon-mcp",
   version: "0.1.0",
 });
 

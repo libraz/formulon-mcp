@@ -239,7 +239,7 @@ test("inspects layout, detects regions, and analyzes workbook shape across sheet
 });
 
 test("saves and reloads a workbook", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "formuron-mcp-test-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-test-"));
   const file = path.join(dir, "roundtrip.xlsx");
   await openSession(undefined, "roundtrip");
   try {
@@ -426,7 +426,7 @@ test("supports layout, comments, hyperlinks, validations, and conditional format
 });
 
 test("round-trips comments, hyperlinks, validations, and conditional formats through xlsx", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "formuron-mcp-objects-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-objects-"));
   const file = path.join(dir, "objects.xlsx");
   await openSession(undefined, "objects-roundtrip");
   try {
@@ -719,7 +719,7 @@ test("supports style and number format APIs", async () => {
 });
 
 test("round-trips style, layout, and protection metadata through xlsx", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "formuron-mcp-style-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-style-"));
   const file = path.join(dir, "style.xlsx");
   await openSession(undefined, "style-roundtrip");
   try {

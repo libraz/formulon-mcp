@@ -18,7 +18,7 @@ function errorPayload(result) {
 }
 
 async function withClient(fn) {
-  const client = new Client({ name: "formuron-mcp-test", version: "0.1.0" });
+  const client = new Client({ name: "formulon-mcp-test", version: "0.1.0" });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ["./dist/index.js"],
@@ -62,7 +62,7 @@ test("MCP stdio lists and calls core tools", async () => {
 });
 
 test("MCP stdio edits, reads, saves, and closes a workbook session", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "formuron-mcp-mcp-test-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-mcp-test-"));
   const outputPath = path.join(dir, "mcp.xlsx");
   try {
     await withClient(async (client) => {
@@ -370,7 +370,7 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
 });
 
 test("MCP stdio supports one-shot path tools", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "formuron-mcp-one-shot-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-one-shot-"));
   const outputPath = path.join(dir, "one-shot.xlsx");
   try {
     await withClient(async (client) => {
