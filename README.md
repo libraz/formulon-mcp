@@ -7,27 +7,44 @@ formula and `.xlsx` workbook operations over stdio.
 This is designed for agent use: open a workbook once, inspect it, mutate cells,
 recalculate, read ranges, save, and close the in-memory session.
 
-## Toolchain
+## Install
 
-- Node.js 22 via Volta
-- Yarn 4 with `nodeLinker: node-modules`
-- Biome 2 for format/lint
-- TypeScript 6
+Requires Node.js 22+. Build the server once, then register it with your MCP
+client.
 
 ```sh
+git clone https://github.com/libraz/formulon-mcp.git
+cd formulon-mcp
 yarn install
-yarn run check
 yarn run build
 ```
 
-## Run
+The entry point is `./dist/index.js`. Use its absolute path in the snippets
+below (replace `/absolute/path/to/formulon-mcp`).
+
+### Claude Code
 
 ```sh
-yarn run build
-node ./dist/index.js
+claude mcp add --scope user formulon node /absolute/path/to/formulon-mcp/dist/index.js
 ```
 
-MCP client config:
+Verify with `claude mcp list` — `formulon` should report `✓ Connected`.
+
+### Codex CLI
+
+Add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.formulon]
+command = "node"
+args = ["/absolute/path/to/formulon-mcp/dist/index.js"]
+```
+
+### Claude Desktop
+
+Add to `claude_desktop_config.json`
+(`~/Library/Application Support/Claude/` on macOS,
+`%APPDATA%\Claude\` on Windows):
 
 ```json
 {
@@ -38,6 +55,31 @@ MCP client config:
     }
   }
 }
+```
+
+### Other MCP clients
+
+Any stdio-capable MCP client works. Point it at `node` with the absolute path
+to `dist/index.js` as the only argument.
+
+## Development
+
+- Node.js 22 via Volta
+- Yarn 4 with `nodeLinker: node-modules`
+- Biome 2 for format/lint
+- TypeScript 6
+
+```sh
+yarn install
+yarn run check
+yarn run build
+yarn run test
+```
+
+Run the server directly for local debugging:
+
+```sh
+node ./dist/index.js
 ```
 
 ## Tools
