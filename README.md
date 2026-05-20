@@ -52,6 +52,33 @@ Add to `claude_desktop_config.json`
 Any stdio-capable MCP client works. Point it at `npx -y @libraz/formulon-mcp`,
 or run `formulon-mcp` directly after `npm install -g @libraz/formulon-mcp`.
 
+### Interactive setup (optional)
+
+If you'd rather not edit config files by hand for Codex CLI or Claude Desktop,
+run the bundled installer:
+
+```sh
+npx -y @libraz/formulon-mcp init
+```
+
+Pick one or more targets (comma-separated, e.g. `1,3,4`):
+
+- **Claude Code — user** (`~/.claude.json`)
+- **Claude Code — project** (`./.mcp.json`)
+- **Codex CLI** (`~/.codex/config.toml`)
+- **Claude Desktop** (`claude_desktop_config.json` at the platform path above)
+
+Re-running `init` safely replaces the existing `formulon` entry without
+touching other servers. Restart your MCP client to pick up the change.
+
+To remove the entry later:
+
+```sh
+npx -y @libraz/formulon-mcp uninstall
+```
+
+It drops only the `formulon` server; other entries are kept.
+
 ### From source
 
 For development or to pin a fork, clone and build instead of using npm:
