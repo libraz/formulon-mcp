@@ -5,15 +5,24 @@ import {
   assertStatus,
   type CellMutation,
   createOrLoadWorkbook,
+  errorName,
   findSheetIndex,
-  normalizeFormula,
   resultToJson,
+  type Status,
   saveWorkbook,
   statusToJson,
   valueToJson,
   type Workbook,
   workbookSummary,
 } from "./formulon.js";
+import { describeNumberFormat, type NumberFormatInfo } from "./numfmt.js";
+
+/** Excel's maximum zero-based row index (1,048,576 rows). */
+const MAX_ROW = 1_048_575;
+/** Excel's maximum zero-based column index (16,384 columns, XFD). */
+const MAX_COL = 16_383;
+/** Hard ceiling on cells materialized by a single range read. */
+const MAX_RANGE_CELLS = 100_000;
 
 export type SessionInfo = {
   id: string;
@@ -92,7 +101,6 @@ type CellReplaceResult = CellSearchResult & {
 const sessions = new Map<string, WorkbookSession>();
 
 const WORKBOOK_METHODS = new Set([
-  "save",
   "addSheet",
   "removeSheet",
   "renameSheet",
@@ -106,6 +114,8 @@ const WORKBOOK_METHODS = new Set([
   "setFormula",
   "getValue",
   "getLambdaText",
+  "evaluateFormulaText",
+  "evaluateConditionalFormula",
   "recalc",
   "partialRecalc",
   "setIterative",
@@ -223,6 +233,7 @@ const WORKBOOK_METHODS = new Set([
   "clearMerges",
   "getMerges",
   "getComment",
+  "getComments",
   "setComment",
   "addHyperlink",
   "removeHyperlink",
@@ -246,17 +257,75 @@ const WORKBOOK_METHODS = new Set([
   "spillInfo",
 ]);
 
-const MUTATING_METHOD_PREFIXES = [
-  "add",
-  "clear",
-  "delete",
-  "insert",
-  "move",
-  "pivot",
-  "remove",
-  "rename",
-  "set",
-];
+/**
+ * Allowlisted Workbook methods that only read state. Any allowlisted method not
+ * in this set is treated as a mutation and marks the session dirty. An explicit
+ * read-only set is used instead of a name-prefix heuristic because prefixes
+ * misclassify both ways — `pivotLayout`/`pivotCount` read but start with
+ * `pivot`, while `recalc` mutates cached values but matches no mutating prefix.
+ */
+const READ_ONLY_METHODS = new Set([
+  "sheetCount",
+  "sheetName",
+  "getValue",
+  "getLambdaText",
+  "evaluateFormulaText",
+  "evaluateConditionalFormula",
+  "calcMode",
+  "excelProfileId",
+  "cellCount",
+  "cellAt",
+  "definedNameCount",
+  "definedNameAt",
+  "tableCount",
+  "tableAt",
+  "passthroughCount",
+  "passthroughAt",
+  "pivotCount",
+  "pivotLayout",
+  "pivotCacheCount",
+  "pivotCacheIdAt",
+  "pivotCacheFieldCount",
+  "pivotCacheFieldName",
+  "pivotCacheFieldSharedItemCount",
+  "pivotCacheRecordCount",
+  "pivotFieldCount",
+  "pivotDataFieldCount",
+  "pivotFilterCount",
+  "evaluateCfRange",
+  "getSheetView",
+  "getSheetProtection",
+  "getSheetColumns",
+  "getSheetRowOverrides",
+  "getCellXfIndex",
+  "getCellXf",
+  "getFont",
+  "getFill",
+  "getBorder",
+  "getNumFmt",
+  "fontCount",
+  "fillCount",
+  "borderCount",
+  "xfCount",
+  "cellStyleCount",
+  "cellStyleXfCount",
+  "getCellStyle",
+  "getCellStyleXf",
+  "getExternalLinks",
+  "getMerges",
+  "getComment",
+  "getComments",
+  "getHyperlinks",
+  "getValidations",
+  "getConditionalFormats",
+  "precedents",
+  "dependents",
+  "functionMetadata",
+  "functionNames",
+  "localizeFunctionName",
+  "canonicalizeFunctionName",
+  "spillInfo",
+]);
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -290,6 +359,95 @@ function refA1(row: number, col: number): string {
 
 function rangeA1(firstRow: number, firstCol: number, lastRow: number, lastCol: number): string {
   return `${refA1(firstRow, firstCol)}:${refA1(lastRow, lastCol)}`;
+}
+
+/** Rejects a cell address that falls outside Excel's grid limits. */
+function assertInGrid(row: number, col: number): void {
+  if (row > MAX_ROW || col > MAX_COL) {
+    throw new Error(
+      `cell ${cellToA1(row, col)} exceeds Excel sheet limits (max row ${MAX_ROW + 1}, max col XFD)`,
+    );
+  }
+}
+
+/**
+ * Builds a `"row,col" -> formula` map for a sheet by scanning its non-empty
+ * cells once, so a range read can annotate which cells are computed without a
+ * per-cell scan.
+ */
+function formulaMap(session: WorkbookSession, sheet: number): Map<string, string> {
+  const map = new Map<string, string>();
+  const count = session.workbook.cellCount(sheet);
+  for (let idx = 0; idx < count; idx += 1) {
+    const cell = session.workbook.cellAt(sheet, idx);
+    if (cell.status.ok && cell.formula) {
+      map.set(`${cell.row},${cell.col}`, cell.formula);
+    }
+  }
+  return map;
+}
+
+/** Reads the formula text at one cell, or an empty string for a constant. */
+function formulaAt(session: WorkbookSession, sheet: number, row: number, col: number): string {
+  const count = session.workbook.cellCount(sheet);
+  for (let idx = 0; idx < count; idx += 1) {
+    const cell = session.workbook.cellAt(sheet, idx);
+    if (cell.status.ok && cell.row === row && cell.col === col) {
+      return cell.formula ?? "";
+    }
+  }
+  return "";
+}
+
+/**
+ * Resolves the number-format code applied to a cell by chaining
+ * `getCellXfIndex -> getCellXf -> getNumFmt`. Returns null when the cell has no
+ * resolvable format (empty cell, default style, or an engine read error).
+ */
+function cellNumberFormat(
+  session: WorkbookSession,
+  sheet: number,
+  row: number,
+  col: number,
+): { numFmtId: number; formatCode: string } | null {
+  const xfIndexResult = safeWorkbookCall(session, "getCellXfIndex", [sheet, row, col]) as {
+    xfIndex?: number;
+  } | null;
+  if (typeof xfIndexResult?.xfIndex !== "number") {
+    return null;
+  }
+  const xf = safeWorkbookCall(session, "getCellXf", [xfIndexResult.xfIndex]) as {
+    numFmtId?: number;
+  } | null;
+  if (typeof xf?.numFmtId !== "number") {
+    return null;
+  }
+  const numFmt = safeWorkbookCall(session, "getNumFmt", [xf.numFmtId]) as {
+    formatCode?: string;
+  } | null;
+  return { numFmtId: xf.numFmtId, formatCode: numFmt?.formatCode ?? "" };
+}
+
+/**
+ * Decodes a numeric cell's applied format into a readable annotation (ISO date,
+ * currency/percent label). Returns undefined for non-numeric cells and plain
+ * unformatted numbers so the output stays sparse.
+ */
+function decodeNumberCell(
+  session: WorkbookSession,
+  sheet: number,
+  row: number,
+  col: number,
+  value: PrimitiveCellValue,
+): NumberFormatInfo | undefined {
+  if (value.kind !== "number" || typeof value.value !== "number") {
+    return undefined;
+  }
+  const format = cellNumberFormat(session, sheet, row, col);
+  if (!format) {
+    return undefined;
+  }
+  return describeNumberFormat(format.numFmtId, format.formatCode, value.value);
 }
 
 function safeWorkbookCall(session: WorkbookSession, method: string, args: unknown[]): unknown {
@@ -417,6 +575,28 @@ function textValue(value: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * Renders a constant (non-formula) cell as searchable text so `find_cells` can
+ * match numbers and booleans by value, not just text cells. Blank/other kinds
+ * return undefined and are skipped.
+ */
+function cellDisplayText(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null || !("kind" in value)) {
+    return undefined;
+  }
+  const envelope = value as { kind: number; number?: number; boolean?: number; text?: string };
+  switch (envelope.kind) {
+    case 1:
+      return typeof envelope.number === "number" ? String(envelope.number) : undefined;
+    case 2:
+      return envelope.boolean ? "TRUE" : "FALSE";
+    case 3:
+      return typeof envelope.text === "string" ? envelope.text : undefined;
+    default:
+      return undefined;
+  }
+}
+
 function makeMatcher(
   query: string,
   options: Pick<SearchOptions, "matchCase" | "wholeCell" | "regex">,
@@ -470,6 +650,10 @@ export async function openSession(
     throw new Error(`session already exists: ${id}`);
   }
   const workbook = await createOrLoadWorkbook(inputPath);
+  // Excel caches formula results, but the engine leaves formula cells blank
+  // until recalculated. Recalc once on open so the first read of a formula
+  // cell returns its computed value rather than a stale blank.
+  assertStatus(workbook.recalc(), "recalc workbook on open");
   const createdAt = nowIso();
   const session: WorkbookSession = {
     id,
@@ -557,7 +741,7 @@ export function findSessionCells(id: string, query: string, options: SearchOptio
           addResult("formula", cell.formula);
         }
       } else {
-        const text = textValue(cell.value);
+        const text = cellDisplayText(cell.value);
         if ((options.target === "texts" || options.target === "both") && text !== undefined) {
           addResult("text", text);
         }
@@ -1132,7 +1316,11 @@ export function applySheetOperation(
 /** Adds, replaces, or removes a workbook-scoped defined name. */
 export function setSessionDefinedName(id: string, name: string, formula: string) {
   const session = getSession(id);
-  const status = session.workbook.setDefinedName(name, formula ? normalizeFormula(formula) : "");
+  // OOXML <definedName> content is a bare expression with no leading '='.
+  // Strip one if the caller supplied it so the saved file is Excel-conformant.
+  const trimmed = formula.trim();
+  const refersTo = trimmed.startsWith("=") ? trimmed.slice(1) : trimmed;
+  const status = session.workbook.setDefinedName(name, refersTo);
   assertStatus(status, "set defined name");
   touch(session, true);
   return { session: publicInfo(session), status: statusToJson(status) };
@@ -1210,6 +1398,7 @@ export function getSessionMetadata(id: string, kind: "functions" | "externalLink
 function resolveCell(session: WorkbookSession, mutation: FlexibleCellMutation) {
   if (mutation.a1) {
     const parsed = parseCellRef(mutation.a1);
+    assertInGrid(parsed.row, parsed.col);
     return {
       sheet: findSheetIndex(session.workbook, parsed.sheetName ?? mutation.sheet),
       row: parsed.row,
@@ -1219,6 +1408,7 @@ function resolveCell(session: WorkbookSession, mutation: FlexibleCellMutation) {
   if (mutation.row === undefined || mutation.col === undefined) {
     throw new Error("mutation requires either a1 or row/col");
   }
+  assertInGrid(mutation.row, mutation.col);
   return {
     sheet: findSheetIndex(session.workbook, mutation.sheet),
     row: mutation.row,
@@ -1233,24 +1423,127 @@ export function applySessionMutations(
   recalc: boolean,
 ) {
   const session = getSession(id);
+  // Resolve (and bounds-check) every address up front so a bad ref or sheet
+  // name aborts before any cell is written, keeping addressing errors atomic.
+  const resolved = mutations.map((mutation, idx) => {
+    try {
+      return resolveCell(session, mutation);
+    } catch (error) {
+      throw new Error(`mutation ${idx}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
   const applied = [];
+  let appliedCount = 0;
+  try {
+    for (const [idx, mutation] of mutations.entries()) {
+      const address = resolved[idx];
+      const concrete = { ...mutation, ...address } as CellMutation;
+      const status = applyMutation(session.workbook, concrete);
+      assertStatus(status, `apply mutation ${idx}`);
+      appliedCount += 1;
+      applied.push({
+        index: idx,
+        a1: cellToA1(address.row, address.col),
+        sheet: address.sheet,
+        status: statusToJson(status),
+      });
+    }
+  } finally {
+    // Even on a mid-batch failure, recalc what landed and mark the session
+    // dirty so the partial write is not silently reported as unchanged.
+    if (appliedCount > 0) {
+      if (recalc) {
+        assertStatus(session.workbook.recalc(), "recalc workbook");
+      }
+      touch(session, true);
+    }
+  }
+  // Surface formula cells that evaluated to an error, so a mistyped function
+  // (#NAME?, #REF!, ...) is not reported as an all-green success.
+  const errorCells = [];
   for (const [idx, mutation] of mutations.entries()) {
-    const address = resolveCell(session, mutation);
-    const concrete = { ...mutation, ...address } as CellMutation;
-    const status = applyMutation(session.workbook, concrete);
-    assertStatus(status, `apply mutation ${idx}`);
-    applied.push({
-      index: idx,
-      a1: cellToA1(address.row, address.col),
-      sheet: address.sheet,
-      status: statusToJson(status),
-    });
+    if (mutation.type !== "formula") {
+      continue;
+    }
+    const address = resolved[idx];
+    const result = session.workbook.getValue(address.sheet, address.row, address.col);
+    const value = jsonCellValue(result.value);
+    if (value.kind === "error") {
+      errorCells.push({
+        index: idx,
+        ref: `${sheetName(session, address.sheet)}!${cellToA1(address.row, address.col)}`,
+        errorName: errorName(value.errorCode ?? -1),
+      });
+    }
   }
-  if (recalc) {
-    assertStatus(session.workbook.recalc(), "recalc workbook");
+  return { session: publicInfo(session), applied, errorCells };
+}
+
+/** One cell of a `set_range` block: a scalar literal, a formula, or a skip. */
+export type RangeWriteCell = number | boolean | string | null | { f: string };
+
+/**
+ * Writes a 2D block of values starting at an anchor cell. Each element's JSON
+ * type selects the cell type (number/bool/text); `{f: "..."}` writes a formula;
+ * `null` leaves the cell untouched. Returns a compact summary plus any error
+ * cells produced by written formulas.
+ */
+export function setSessionRange(
+  id: string,
+  start: string,
+  values: RangeWriteCell[][],
+  fallbackSheet: number | string | undefined,
+  recalc: boolean,
+) {
+  const session = getSession(id);
+  const anchor = parseCellRef(start);
+  const sheetIndex = findSheetIndex(session.workbook, anchor.sheetName ?? fallbackSheet);
+  const mutations: FlexibleCellMutation[] = [];
+  for (const [r, rowValues] of values.entries()) {
+    for (const [c, cell] of rowValues.entries()) {
+      if (cell === null) {
+        continue;
+      }
+      const row = anchor.row + r;
+      const col = anchor.col + c;
+      assertInGrid(row, col);
+      const base = { sheet: sheetIndex, row, col };
+      if (typeof cell === "number") {
+        mutations.push({ ...base, type: "number", value: cell });
+      } else if (typeof cell === "boolean") {
+        mutations.push({ ...base, type: "bool", value: cell });
+      } else if (typeof cell === "string") {
+        mutations.push({ ...base, type: "text", value: cell });
+      } else if (typeof cell === "object" && typeof cell.f === "string") {
+        mutations.push({ ...base, type: "formula", formula: cell.f });
+      } else {
+        throw new Error(
+          `invalid cell at row ${r}, col ${c}: expected number|boolean|string|{f}|null`,
+        );
+      }
+    }
   }
-  touch(session, true);
-  return { session: publicInfo(session), applied };
+  if (mutations.length === 0) {
+    return {
+      session: publicInfo(session),
+      range: { sheet: sheetIndex, start: cellToA1(anchor.row, anchor.col) },
+      cellsWritten: 0,
+      errorCells: [],
+    };
+  }
+  const result = applySessionMutations(id, mutations, recalc);
+  const rows = values.length;
+  const cols = values.reduce((max, row) => Math.max(max, row.length), 0);
+  return {
+    session: result.session,
+    range: {
+      sheet: sheetIndex,
+      start: cellToA1(anchor.row, anchor.col),
+      end: cellToA1(anchor.row + rows - 1, anchor.col + cols - 1),
+    },
+    cellsWritten: result.applied.length,
+    errorCells: result.errorCells,
+  };
 }
 
 /** Reads one cell from an open session using zero-based coordinates. */
@@ -1259,55 +1552,146 @@ export function getSessionCell(
   sheet: number | string | undefined,
   row: number,
   col: number,
+  recalc = false,
 ) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
+  if (recalc) {
+    assertStatus(session.workbook.recalc(), "recalc workbook");
+  }
   const result = session.workbook.getValue(sheetIndex, row, col);
   assertStatus(result.status, "get cell");
+  const value = valueToJson(result.value) as PrimitiveCellValue;
   touch(session, false);
   return {
     session: publicInfo(session),
     address: { sheet: sheetIndex, row, col, a1: cellToA1(row, col) },
     status: statusToJson(result.status),
-    value: valueToJson(result.value),
+    value,
+    formula: formulaAt(session, sheetIndex, row, col),
+    ...decodeNumberCell(session, sheetIndex, row, col, value),
   };
 }
 
-/** Reads one cell from an open session using an A1 reference. */
-export function getSessionCellByA1(id: string, ref: string) {
+/**
+ * Reads one cell from an open session using an A1 reference. When the ref has
+ * no sheet prefix, `fallbackSheet` (the tool's `sheet` argument) is used.
+ */
+export function getSessionCellByA1(
+  id: string,
+  ref: string,
+  fallbackSheet?: number | string,
+  recalc = false,
+) {
   const parsed = parseCellRef(ref);
-  return getSessionCell(id, parsed.sheetName, parsed.row, parsed.col);
+  return getSessionCell(id, parsed.sheetName ?? fallbackSheet, parsed.row, parsed.col, recalc);
 }
 
-/** Reads a rectangular A1 range from an open session. */
-export function getSessionRange(id: string, ref: string) {
+export type RangeReadOptions = {
+  sheet?: number | string;
+  maxCells: number;
+  recalc: boolean;
+  includeFormulas: boolean;
+};
+
+/**
+ * Reads a rectangular A1 range from an open session as a sparse cell list.
+ *
+ * The requested rectangle is clipped to the sheet's used range, blank cells are
+ * omitted, and materialization is capped at `maxCells` (with a `truncated`
+ * flag) so an over-wide request cannot blow up the response or hang the server.
+ */
+export function getSessionRange(id: string, ref: string, options: RangeReadOptions) {
   const session = getSession(id);
-  const range = normalizeRange(parseRangeRef(ref));
-  const sheetIndex = findSheetIndex(session.workbook, range.sheetName);
-  const rows = [];
-  for (let row = range.start.row; row <= range.end.row; row += 1) {
-    const values = [];
-    for (let col = range.start.col; col <= range.end.col; col += 1) {
+  const parsed = parseRangeRef(ref);
+  const range = normalizeRange(parsed);
+  const sheetIndex = findSheetIndex(session.workbook, range.sheetName ?? options.sheet);
+  if (options.recalc) {
+    assertStatus(session.workbook.recalc(), "recalc workbook");
+  }
+
+  // Clip the requested rectangle to the sheet's used extent so a generous
+  // "A1:Z1000" request only scans cells that can actually hold data.
+  const used = sheetUsedBounds(session, sheetIndex);
+  const startRow = range.start.row;
+  const startCol = range.start.col;
+  const endRow = used ? Math.min(range.end.row, used.maxRow) : range.start.row - 1;
+  const endCol = used ? Math.min(range.end.col, used.maxCol) : range.start.col - 1;
+
+  const rectCells = (endRow - startRow + 1) * (endCol - startCol + 1);
+  if (rectCells > MAX_RANGE_CELLS) {
+    throw new Error(
+      `range ${ref} spans ${rectCells} cells (limit ${MAX_RANGE_CELLS}); read a smaller range or use inspect_layout for the used range`,
+    );
+  }
+
+  const formulas = options.includeFormulas ? formulaMap(session, sheetIndex) : undefined;
+  const cells = [];
+  let truncated = false;
+  for (let row = startRow; row <= endRow && !truncated; row += 1) {
+    for (let col = startCol; col <= endCol; col += 1) {
       const result = session.workbook.getValue(sheetIndex, row, col);
       assertStatus(result.status, `get cell ${cellToA1(row, col)}`);
-      values.push({
+      const value = valueToJson(result.value) as PrimitiveCellValue;
+      const formula = formulas?.get(`${row},${col}`) ?? "";
+      // Skip cells that are both blank and formula-free to keep output sparse.
+      if (value.kind === "blank" && !formula) {
+        continue;
+      }
+      if (cells.length >= options.maxCells) {
+        truncated = true;
+        break;
+      }
+      cells.push({
         a1: cellToA1(row, col),
-        value: valueToJson(result.value),
+        row,
+        col,
+        value,
+        ...decodeNumberCell(session, sheetIndex, row, col, value),
+        ...(options.includeFormulas ? { formula } : {}),
       });
     }
-    rows.push(values);
   }
   touch(session, false);
   return {
     session: publicInfo(session),
     range: {
       sheet: sheetIndex,
+      sheetName: sheetName(session, sheetIndex),
       ref,
       start: cellToA1(range.start.row, range.start.col),
       end: cellToA1(range.end.row, range.end.col),
     },
-    rows,
+    cellCount: cells.length,
+    truncated,
+    cells,
   };
+}
+
+/** Returns the max non-empty (row, col) extent of a sheet, or null when empty. */
+function sheetUsedBounds(
+  session: WorkbookSession,
+  sheet: number,
+): { maxRow: number; maxCol: number } | null {
+  const count = session.workbook.cellCount(sheet);
+  if (count === 0) {
+    return null;
+  }
+  let maxRow = 0;
+  let maxCol = 0;
+  for (let idx = 0; idx < count; idx += 1) {
+    const cell = session.workbook.cellAt(sheet, idx);
+    if (!cell.status.ok) {
+      continue;
+    }
+    if (cell.row > maxRow) {
+      maxRow = cell.row;
+    }
+    if (cell.col > maxCol) {
+      maxCol = cell.col;
+    }
+  }
+  return { maxRow, maxCol };
 }
 
 /** Calls an allowlisted low-level Formulon Workbook method with positional JSON arguments. */
@@ -1321,12 +1705,157 @@ export function callWorkbookMethod(id: string, method: string, args: unknown[]) 
     throw new Error(`workbook method is not callable: ${method}`);
   }
   const result = (callable as (...methodArgs: unknown[]) => unknown).apply(session.workbook, args);
-  const dirty = MUTATING_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix));
+  const dirty = !READ_ONLY_METHODS.has(method);
   touch(session, dirty);
   return {
     session: publicInfo(session),
     method,
     result: resultToJson(result),
+  };
+}
+
+/** Resolves a sheet reference (zero-based index or name) to an index for a session. */
+export function resolveSessionSheet(id: string, sheet: number | string | undefined): number {
+  return findSheetIndex(getSession(id).workbook, sheet);
+}
+
+/**
+ * Traces cell precedents, dependents, or spill region, returning A1 references
+ * (with sheet names) instead of raw zero-based indices so results are readable.
+ */
+export function traceSession(
+  id: string,
+  operation: "precedents" | "dependents" | "spillInfo",
+  sheet: number | string | undefined,
+  row: number,
+  col: number,
+  depth: number,
+) {
+  const session = getSession(id);
+  const sheetIndex = findSheetIndex(session.workbook, sheet);
+  const cellRef = (s: number, r: number, c: number) => ({
+    sheet: s,
+    sheetName: sheetName(session, s),
+    row: r,
+    col: c,
+    ref: `${sheetName(session, s)}!${refA1(r, c)}`,
+  });
+  touch(session, false);
+  if (operation === "spillInfo") {
+    const info = session.workbook.spillInfo(sheetIndex, row, col);
+    return {
+      session: publicInfo(session),
+      operation,
+      cell: cellRef(sheetIndex, row, col),
+      spill: {
+        engaged: info.engaged,
+        anchor: info.engaged ? cellRef(sheetIndex, info.anchorRow, info.anchorCol) : null,
+        rows: info.rows,
+        cols: info.cols,
+        range: info.engaged
+          ? `${sheetName(session, sheetIndex)}!${rangeA1(
+              info.anchorRow,
+              info.anchorCol,
+              info.anchorRow + info.rows - 1,
+              info.anchorCol + info.cols - 1,
+            )}`
+          : null,
+      },
+    };
+  }
+  const nodes =
+    operation === "precedents"
+      ? session.workbook.precedents(sheetIndex, row, col, depth)
+      : session.workbook.dependents(sheetIndex, row, col, depth);
+  const cells = Array.from({ length: nodes.length }, (_, index) => {
+    const node = nodes[index];
+    return cellRef(node.sheet, node.row, node.col);
+  });
+  return {
+    session: publicInfo(session),
+    operation,
+    cell: cellRef(sheetIndex, row, col),
+    depth,
+    count: cells.length,
+    cells,
+  };
+}
+
+export type DimensionAxis = "column" | "row";
+export type DimensionOperation = "list" | "size" | "hidden" | "outline";
+
+/**
+ * Reads or sets column-width / row-height, hidden, and outline-level overrides.
+ * Columns act on an inclusive `[first, last]` span; rows act on a single index.
+ */
+export function sessionDimension(
+  id: string,
+  axis: DimensionAxis,
+  operation: DimensionOperation,
+  params: {
+    sheet?: number | string;
+    first?: number;
+    last?: number;
+    row?: number;
+    size?: number;
+    hidden?: boolean;
+    level?: number;
+  },
+) {
+  const session = getSession(id);
+  const workbook = session.workbook;
+  const sheetIndex = findSheetIndex(workbook, params.sheet);
+  if (operation === "list") {
+    const value =
+      axis === "column"
+        ? resultToJson(workbook.getSheetColumns(sheetIndex))
+        : resultToJson(workbook.getSheetRowOverrides(sheetIndex));
+    touch(session, false);
+    return { session: publicInfo(session), axis, operation, sheet: sheetIndex, value };
+  }
+
+  let status: Status;
+  if (axis === "column") {
+    const first = requiredNumber(params.first, "first");
+    const last = params.last ?? first;
+    if (last < first) {
+      throw new Error(`last (${last}) must be >= first (${first})`);
+    }
+    if (operation === "size") {
+      status = workbook.setColumnWidth(
+        sheetIndex,
+        first,
+        last,
+        requiredNumber(params.size, "size"),
+      );
+    } else if (operation === "hidden") {
+      status = workbook.setColumnHidden(sheetIndex, first, last, requiredBoolean(params.hidden));
+    } else {
+      status = workbook.setColumnOutline(
+        sheetIndex,
+        first,
+        last,
+        requiredNumber(params.level, "level"),
+      );
+    }
+  } else {
+    const rowIndex = requiredNumber(params.row, "row");
+    if (operation === "size") {
+      status = workbook.setRowHeight(sheetIndex, rowIndex, requiredNumber(params.size, "size"));
+    } else if (operation === "hidden") {
+      status = workbook.setRowHidden(sheetIndex, rowIndex, requiredBoolean(params.hidden));
+    } else {
+      status = workbook.setRowOutline(sheetIndex, rowIndex, requiredNumber(params.level, "level"));
+    }
+  }
+  assertStatus(status, `${axis} ${operation}`);
+  touch(session, true);
+  return {
+    session: publicInfo(session),
+    axis,
+    operation,
+    sheet: sheetIndex,
+    status: statusToJson(status),
   };
 }
 
@@ -1354,6 +1883,13 @@ function requiredString(value: string | undefined, name: string): string {
 function requiredNumber(value: number | undefined, name: string): number {
   if (value === undefined) {
     throw new Error(`${name} is required`);
+  }
+  return value;
+}
+
+function requiredBoolean(value: boolean | undefined): boolean {
+  if (value === undefined) {
+    throw new Error("hidden is required");
   }
   return value;
 }

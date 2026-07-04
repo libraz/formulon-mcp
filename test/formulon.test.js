@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { formulonModule, loadWorkbook } from "../dist/formulon.js";
 import {
   analyzeSessionWorkbook,
@@ -14,6 +14,7 @@ import {
   detectSessionRegions,
   editSessionStructure,
   findSessionCells,
+  getSessionCell,
   getSessionCellByA1,
   getSessionMetadata,
   getSessionRange,
@@ -23,9 +24,13 @@ import {
   openSession,
   recalcSession,
   replaceSessionCells,
+  resolveSessionSheet,
   saveSession,
+  sessionDimension,
   setSessionDefinedName,
+  setSessionRange,
   setSessionSheetView,
+  traceSession,
 } from "../dist/sessions.js";
 
 const FORMULON_VERSION = createRequire(import.meta.url)("@libraz/formulon/package.json").version;
@@ -69,14 +74,21 @@ test("mutates cells, recalculates, and reads cells and ranges", async () => {
     const b1 = getSessionCellByA1("calc", "Sheet1!B1");
     assert.deepEqual(b1.value, { kind: "number", value: 42 });
 
-    const range = getSessionRange("calc", "Sheet1!A1:B1");
+    const range = getSessionRange("calc", "Sheet1!A1:B1", {
+      maxCells: 100,
+      recalc: false,
+      includeFormulas: true,
+    });
     assert.deepEqual(
-      range.rows[0].map((entry) => entry.value),
+      range.cells.map((entry) => entry.value),
       [
         { kind: "number", value: 41 },
         { kind: "number", value: 42 },
       ],
     );
+    assert.equal(range.cells[1].formula, "=A1+1");
+    assert.equal(range.cells[0].formula, "");
+    assert.equal(range.truncated, false);
   } finally {
     closeSession("calc");
   }
@@ -407,7 +419,7 @@ test("supports layout, comments, hyperlinks, validations, and conditional format
           type: 0,
           formula1: "=A1>0",
         },
-      ]).result.ok,
+      ]).result.status.ok,
       true,
     );
     assert.equal(callWorkbookMethod("objects", "getConditionalFormats", [0]).result.length, 1);
@@ -469,7 +481,7 @@ test("round-trips comments, hyperlinks, validations, and conditional formats thr
           type: 0,
           formula1: "=A1>0",
         },
-      ]).result.ok,
+      ]).result.status.ok,
       true,
     );
     await saveSession("objects-roundtrip", file);
@@ -843,5 +855,359 @@ test("recalculates sessions explicitly", async () => {
     });
   } finally {
     closeSession("recalc");
+  }
+});
+
+test("recalculates formulas on open so the first read is not blank", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-open-recalc-"));
+  const file = path.join(dir, "open-recalc.xlsx");
+  await openSession(undefined, "open-recalc-src");
+  try {
+    applySessionMutations(
+      "open-recalc-src",
+      [
+        { type: "number", a1: "Sheet1!A1", value: 21 },
+        { type: "formula", a1: "Sheet1!B1", formula: "=A1*2" },
+      ],
+      true,
+    );
+    await saveSession("open-recalc-src", file);
+  } finally {
+    closeSession("open-recalc-src");
+  }
+
+  await openSession(file, "open-recalc-dst");
+  try {
+    // No explicit recalc_session: recalc-on-open must make B1 read 42, not blank.
+    assert.deepEqual(getSessionCellByA1("open-recalc-dst", "Sheet1!B1").value, {
+      kind: "number",
+      value: 42,
+    });
+  } finally {
+    closeSession("open-recalc-dst");
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("annotates error cells with an Excel error literal", async () => {
+  await openSession(undefined, "errname");
+  try {
+    const result = applySessionMutations(
+      "errname",
+      [
+        { type: "formula", a1: "Sheet1!A1", formula: "=1/0" },
+        { type: "formula", a1: "Sheet1!A2", formula: "=NOTAFUNC(1)" },
+        { type: "number", a1: "Sheet1!A3", value: 5 },
+      ],
+      true,
+    );
+    assert.deepEqual(result.errorCells, [
+      { index: 0, ref: "Sheet1!A1", errorName: "#DIV/0!" },
+      { index: 1, ref: "Sheet1!A2", errorName: "#NAME?" },
+    ]);
+    const a1 = getSessionCellByA1("errname", "Sheet1!A1");
+    assert.equal(a1.value.kind, "error");
+    assert.equal(a1.value.errorName, "#DIV/0!");
+  } finally {
+    closeSession("errname");
+  }
+});
+
+test("get_range clips to used range, drops blanks, and caps output", async () => {
+  await openSession(undefined, "range-cap");
+  try {
+    applySessionMutations(
+      "range-cap",
+      [
+        { type: "number", a1: "Sheet1!A1", value: 1 },
+        { type: "number", a1: "Sheet1!C3", value: 9 },
+      ],
+      true,
+    );
+    // A generous request is clipped to the A1:C3 used range and skips blanks.
+    const full = getSessionRange("range-cap", "Sheet1!A1:Z1000", {
+      maxCells: 100,
+      recalc: false,
+      includeFormulas: false,
+    });
+    assert.equal(full.cells.length, 2);
+    assert.equal(full.truncated, false);
+    assert.deepEqual(
+      full.cells.map((c) => c.a1),
+      ["A1", "C3"],
+    );
+    // A tiny cap truncates.
+    const capped = getSessionRange("range-cap", "Sheet1!A1:Z1000", {
+      maxCells: 1,
+      recalc: false,
+      includeFormulas: false,
+    });
+    assert.equal(capped.cells.length, 1);
+    assert.equal(capped.truncated, true);
+  } finally {
+    closeSession("range-cap");
+  }
+});
+
+test("get_cell honors the sheet argument for a bare A1 reference", async () => {
+  await openSession(undefined, "sheet-fallback");
+  try {
+    applySheetOperation("sheet-fallback", "add", { name: "Data" });
+    applySessionMutations(
+      "sheet-fallback",
+      [
+        { type: "text", a1: "Sheet1!A1", value: "on-Sheet1" },
+        { type: "text", a1: "Data!A1", value: "on-Data" },
+      ],
+      true,
+    );
+    // Bare "A1" with sheet:1 must read the Data sheet, not sheet 0.
+    assert.deepEqual(getSessionCell("sheet-fallback", 1, 0, 0).value, {
+      kind: "text",
+      value: "on-Data",
+    });
+  } finally {
+    closeSession("sheet-fallback");
+  }
+});
+
+test("set_range writes a 2D block and reports formula error cells", async () => {
+  await openSession(undefined, "setrange");
+  try {
+    const result = setSessionRange(
+      "setrange",
+      "Sheet1!A1",
+      [
+        ["Item", "Qty", "Price"],
+        ["Apple", 3, 1.5],
+        ["Total", null, { f: "=B2*C2" }],
+        [{ f: "=BADFN(1)" }, null, null],
+      ],
+      undefined,
+      true,
+    );
+    assert.equal(result.cellsWritten, 9);
+    assert.equal(result.range.start, "A1");
+    assert.equal(result.range.end, "C4");
+    assert.deepEqual(getSessionCellByA1("setrange", "Sheet1!C3").value, {
+      kind: "number",
+      value: 4.5,
+    });
+    assert.deepEqual(getSessionCellByA1("setrange", "Sheet1!B2").value, {
+      kind: "number",
+      value: 3,
+    });
+    assert.equal(result.errorCells.length, 1);
+    assert.equal(result.errorCells[0].ref, "Sheet1!A4");
+    assert.equal(result.errorCells[0].errorName, "#NAME?");
+  } finally {
+    closeSession("setrange");
+  }
+});
+
+test("rejects writes past Excel grid limits", async () => {
+  await openSession(undefined, "bounds");
+  try {
+    assert.throws(
+      () =>
+        applySessionMutations(
+          "bounds",
+          [{ type: "number", row: 2_000_000, col: 0, value: 1 }],
+          false,
+        ),
+      /exceeds Excel sheet limits/,
+    );
+  } finally {
+    closeSession("bounds");
+  }
+});
+
+test("defined-name refersTo is stored without a leading '='", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-defname-"));
+  const file = path.join(dir, "defname.xlsx");
+  await openSession(undefined, "defname");
+  try {
+    setSessionDefinedName("defname", "MyRange", "=Sheet1!$A$1:$A$5");
+    await saveSession("defname", file);
+  } finally {
+    closeSession("defname");
+  }
+
+  const wb = await loadWorkbook(file);
+  try {
+    const entry = wb.definedNameAt(0);
+    assert.equal(entry.status.ok, true);
+    assert.equal(entry.formula.startsWith("="), false);
+    assert.equal(entry.formula, "Sheet1!$A$1:$A$5");
+  } finally {
+    wb.delete();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/** Applies a custom number format to a cell via the low-level style APIs. */
+function applyNumberFormat(id, sheet, row, col, formatCode) {
+  const numFmtId = callWorkbookMethod(id, "addNumFmt", [formatCode]).result.numFmtId;
+  const xfIndex = callWorkbookMethod(id, "addXf", [
+    {
+      fontIndex: 0,
+      fillIndex: 0,
+      borderIndex: 0,
+      numFmtId,
+      horizontalAlign: 0,
+      verticalAlign: 0,
+      wrapText: false,
+    },
+  ]).result.index;
+  callWorkbookMethod(id, "setCellXfIndex", [sheet, row, col, xfIndex]);
+}
+
+test("decodes date, currency, and percent number formats on reads", async () => {
+  await openSession(undefined, "numfmt");
+  try {
+    applySessionMutations(
+      "numfmt",
+      [
+        { type: "number", row: 0, col: 0, value: 45000 },
+        { type: "number", row: 1, col: 0, value: 1500 },
+        { type: "number", row: 2, col: 0, value: 0.153 },
+        { type: "number", row: 3, col: 0, value: 42 },
+      ],
+      false,
+    );
+    applyNumberFormat("numfmt", 0, 0, 0, "yyyy-mm-dd");
+    applyNumberFormat("numfmt", 0, 1, 0, '"¥"#,##0');
+    applyNumberFormat("numfmt", 0, 2, 0, "0.0%");
+
+    const date = getSessionCell("numfmt", 0, 0, 0);
+    assert.equal(date.formatKind, "date");
+    assert.equal(date.formatted, "2023-03-15");
+    assert.equal(date.value.value, 45000);
+
+    const currency = getSessionCell("numfmt", 0, 1, 0);
+    assert.equal(currency.formatKind, "currency");
+    assert.equal(currency.formatted, undefined);
+
+    const percent = getSessionCell("numfmt", 0, 2, 0);
+    assert.equal(percent.formatKind, "percent");
+    assert.equal(percent.formatted, "15.3%");
+
+    // Unformatted number carries no format annotation.
+    const plain = getSessionCell("numfmt", 0, 3, 0);
+    assert.equal(plain.formatKind, undefined);
+    assert.equal(plain.numberFormat, undefined);
+
+    const range = getSessionRange("numfmt", "A1:A4", {
+      maxCells: 100,
+      recalc: false,
+      includeFormulas: false,
+    });
+    const a1 = range.cells.find((cell) => cell.a1 === "A1");
+    assert.equal(a1.formatted, "2023-03-15");
+    const a4 = range.cells.find((cell) => cell.a1 === "A4");
+    assert.equal(a4.formatKind, undefined);
+  } finally {
+    closeSession("numfmt");
+  }
+});
+
+test("find_cells matches numeric cell values, not only text", async () => {
+  await openSession(undefined, "findnum");
+  try {
+    applySessionMutations(
+      "findnum",
+      [
+        { type: "number", row: 0, col: 0, value: 1500 },
+        { type: "text", row: 1, col: 0, value: "budget" },
+      ],
+      false,
+    );
+    const found = findSessionCells("findnum", "1500", {
+      target: "both",
+      matchCase: false,
+      wholeCell: false,
+      regex: false,
+      maxResults: 10,
+    });
+    assert.equal(found.count, 1);
+    assert.equal(found.results[0].a1, "A1");
+    assert.equal(found.results[0].text, "1500");
+  } finally {
+    closeSession("findnum");
+  }
+});
+
+test("trace returns A1 references with sheet names", async () => {
+  await openSession(undefined, "trace-a1");
+  try {
+    applySessionMutations(
+      "trace-a1",
+      [
+        { type: "number", row: 0, col: 0, value: 10 },
+        { type: "formula", row: 0, col: 1, formula: "=A1+1" },
+      ],
+      true,
+    );
+    const precedents = traceSession("trace-a1", "precedents", 0, 0, 1, 1);
+    assert.equal(precedents.count, 1);
+    assert.deepEqual(precedents.cells, [
+      { sheet: 0, sheetName: "Sheet1", row: 0, col: 0, ref: "Sheet1!A1" },
+    ]);
+    assert.equal(precedents.cell.ref, "Sheet1!B1");
+
+    const spill = traceSession("trace-a1", "spillInfo", 0, 0, 0, 1);
+    assert.equal(typeof spill.spill.engaged, "boolean");
+  } finally {
+    closeSession("trace-a1");
+  }
+});
+
+test("dimension operation lists and sets column width and row height", async () => {
+  await openSession(undefined, "dims");
+  try {
+    const setWidth = sessionDimension("dims", "column", "size", {
+      sheet: 0,
+      first: 0,
+      last: 2,
+      size: 120,
+    });
+    assert.equal(setWidth.status.ok, true);
+    const setHeight = sessionDimension("dims", "row", "size", { sheet: 0, row: 0, size: 30 });
+    assert.equal(setHeight.status.ok, true);
+    const cols = sessionDimension("dims", "column", "list", { sheet: 0 });
+    assert.equal(cols.value.status.ok, true);
+    assert.throws(
+      () => sessionDimension("dims", "column", "size", { sheet: 0, first: 0 }),
+      /size is required/,
+    );
+  } finally {
+    closeSession("dims");
+  }
+});
+
+test("resolves sheet references by name for session operations", async () => {
+  await openSession(undefined, "sheetname");
+  try {
+    applySheetOperation("sheetname", "rename", { index: 0, newName: "Data" });
+    assert.equal(resolveSessionSheet("sheetname", "Data"), 0);
+    assert.throws(() => resolveSessionSheet("sheetname", "Missing"), /sheet not found/);
+  } finally {
+    closeSession("sheetname");
+  }
+});
+
+test("workbook_call marks pivot reads clean and rejects the removed save method", async () => {
+  await openSession(undefined, "dirty");
+  try {
+    // A read-only allowlisted method must not flag the session dirty.
+    const read = callWorkbookMethod("dirty", "getMerges", [0]);
+    assert.equal(read.session.dirty, false);
+    // A mutating method flags the session dirty.
+    const write = callWorkbookMethod("dirty", "setNumber", [0, 0, 0, 1]);
+    assert.equal(write.session.dirty, true);
+    // Low-level `save` is no longer allowlisted; saveSession is the real path.
+    assert.throws(() => callWorkbookMethod("dirty", "save", []), /not allowlisted/);
+  } finally {
+    closeSession("dirty");
   }
 });

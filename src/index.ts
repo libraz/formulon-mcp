@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -34,16 +35,32 @@ import {
   inspectSessionLayout,
   listSessions,
   openSession,
+  type RangeWriteCell,
   recalcSession,
   replaceSessionCells,
+  resolveSessionSheet,
   saveSession,
+  sessionDimension,
   setSessionDefinedName,
+  setSessionRange,
   setSessionSheetView,
+  traceSession,
 } from "./sessions.js";
+
+/** Single source of truth for the server version: package.json at runtime. */
+const PACKAGE_VERSION = ((): string => {
+  try {
+    const pkgUrl = new URL("../package.json", import.meta.url);
+    const pkg = JSON.parse(readFileSync(pkgUrl, "utf8")) as { version?: string };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
 
 const server = new McpServer({
   name: "formulon-mcp",
-  version: "0.1.0",
+  version: PACKAGE_VERSION,
 });
 
 function ok(value: unknown) {
@@ -162,7 +179,9 @@ const searchInputSchema = {
 
 const sheetInputSchema = {
   sessionId: z.string(),
-  sheet: z.number().int().nonnegative().default(0),
+  sheet: sheetRefSchema
+    .default(0)
+    .describe("Zero-based sheet index or sheet name; defaults to the first sheet."),
 };
 
 function methodOk(sessionId: string, method: string, args: unknown[]) {
@@ -179,7 +198,7 @@ server.registerTool(
   async () => {
     try {
       const module = await formulonModule();
-      return ok({ version: module.versionString() });
+      return ok({ version: module.versionString(), serverVersion: PACKAGE_VERSION });
     } catch (error) {
       return fail(error);
     }
@@ -190,13 +209,39 @@ server.registerTool(
   "formulon_eval_formula",
   {
     title: "Evaluate formula",
-    description: "Evaluate one Excel formula with Formulon.",
+    description:
+      "Evaluate one Excel formula with Formulon. With sessionId, evaluates read-only against the open workbook (resolving refs, defined names, and ROW()/COLUMN() anchored at the given cell) without mutating it.",
     inputSchema: {
       formula: z.string().describe("Excel formula, with or without a leading '='."),
+      sessionId: z
+        .string()
+        .optional()
+        .describe("Evaluate against this open workbook session instead of a fresh workbook."),
+      sheet: z.number().int().nonnegative().default(0),
+      row: z
+        .number()
+        .int()
+        .nonnegative()
+        .default(0)
+        .describe("Anchor row for ROW()/COLUMN() and relative refs (session mode)."),
+      col: z
+        .number()
+        .int()
+        .nonnegative()
+        .default(0)
+        .describe("Anchor column for ROW()/COLUMN() and relative refs (session mode)."),
     },
   },
-  async ({ formula }) => {
+  async ({ formula, sessionId, sheet, row, col }) => {
     try {
+      if (sessionId !== undefined) {
+        return methodOk(sessionId, "evaluateFormulaText", [
+          sheet,
+          row,
+          col,
+          normalizeFormula(formula),
+        ]);
+      }
       const module = await formulonModule();
       const result = module.evalFormula(normalizeFormula(formula));
       return ok({
@@ -461,6 +506,38 @@ server.registerTool(
 );
 
 server.registerTool(
+  "formulon_set_range",
+  {
+    title: "Set range block",
+    description:
+      'Write a 2D block of values starting at an anchor cell. Each element\'s JSON type picks the cell type: number, boolean, or string. Use {"f":"=SUM(A1:A3)"} for a formula and null to skip a cell. Far more compact than set_cells for tables.',
+    inputSchema: {
+      sessionId: z.string(),
+      start: z.string().describe("Anchor (top-left) A1 cell, for example Sheet1!B2 or B2."),
+      sheet: sheetRefSchema
+        .optional()
+        .describe("Sheet used when start has no Sheet!-prefix; defaults to the first sheet."),
+      values: z
+        .array(
+          z.array(
+            z.union([z.number(), z.boolean(), z.string(), z.null(), z.object({ f: z.string() })]),
+          ),
+        )
+        .min(1)
+        .describe("Row-major 2D array of cell values."),
+      recalc: z.boolean().default(true),
+    },
+  },
+  ({ sessionId, start, sheet, values, recalc }) => {
+    try {
+      return ok(setSessionRange(sessionId, start, values as RangeWriteCell[][], sheet, recalc));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.registerTool(
   "formulon_sheet_operation",
   {
     title: "Sheet operation",
@@ -557,14 +634,24 @@ server.registerTool(
   {
     title: "Get cell",
     description:
-      "Get one cell from either an open session or a workbook path. A1 refs are supported for sessions.",
+      "Get one cell from either an open session or a workbook path. A1 refs are supported for sessions. Date/currency/percent cells carry a decoded `formatted` string alongside the raw value.",
     inputSchema: {
       sessionId: z.string().optional(),
       path: z.string().optional(),
       a1: z.string().optional(),
       sheet: sheetRefSchema.optional().default(0),
-      row: z.number().int().nonnegative().optional(),
-      col: z.number().int().nonnegative().optional(),
+      row: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("Zero-based row (when a1 is omitted)."),
+      col: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("Zero-based column (when a1 is omitted)."),
       recalc: z.boolean().default(true),
     },
   },
@@ -573,12 +660,12 @@ server.registerTool(
     try {
       if (sessionId) {
         if (a1) {
-          return ok(getSessionCellByA1(sessionId, a1));
+          return ok(getSessionCellByA1(sessionId, a1, sheet, recalc));
         }
         if (row === undefined || col === undefined) {
           throw new Error("row and col are required when a1 is omitted");
         }
-        return ok(getSessionCell(sessionId, sheet, row, col));
+        return ok(getSessionCell(sessionId, sheet, row, col, recalc));
       }
       if (!path) {
         throw new Error("path is required when sessionId is omitted");
@@ -610,15 +697,25 @@ server.registerTool(
   "formulon_get_range",
   {
     title: "Get range",
-    description: "Get a rectangular A1 range from an open workbook session.",
+    description:
+      "Get a rectangular A1 range from an open workbook session. Output is sparse (blank cells omitted), clipped to the sheet's used range, and capped at maxCells. Cells with a date/currency/percent number format carry a decoded `formatted` string (for example an ISO date) alongside the raw value.",
     inputSchema: {
       sessionId: z.string(),
       range: z.string().describe("A1 range, for example Sheet1!A1:C10 or A1:C10."),
+      sheet: sheetRefSchema
+        .optional()
+        .describe("Sheet used when range has no Sheet!-prefix; defaults to the first sheet."),
+      maxCells: z.number().int().positive().max(50_000).default(10_000),
+      includeFormulas: z
+        .boolean()
+        .default(false)
+        .describe("Include each cell's formula text (empty for constants)."),
+      recalc: z.boolean().default(false).describe("Recalculate before reading."),
     },
   },
-  ({ sessionId, range }) => {
+  ({ sessionId, range, sheet, maxCells, includeFormulas, recalc }) => {
     try {
-      return ok(getSessionRange(sessionId, range));
+      return ok(getSessionRange(sessionId, range, { sheet, maxCells, includeFormulas, recalc }));
     } catch (error) {
       return fail(error);
     }
@@ -677,22 +774,26 @@ server.registerTool(
   },
   ({ sessionId, sheet, operation, range, index }) => {
     try {
+      const sheetIndex = resolveSessionSheet(sessionId, sheet);
       if (operation === "list") {
-        return methodOk(sessionId, "getMerges", [sheet]);
+        return methodOk(sessionId, "getMerges", [sheetIndex]);
       }
       if (operation === "clear") {
-        return methodOk(sessionId, "clearMerges", [sheet]);
+        return methodOk(sessionId, "clearMerges", [sheetIndex]);
       }
       if (operation === "removeAt") {
         if (index === undefined) {
           throw new Error("index is required for removeAt");
         }
-        return methodOk(sessionId, "removeMergeAt", [sheet, index]);
+        return methodOk(sessionId, "removeMergeAt", [sheetIndex, index]);
       }
       if (!range) {
         throw new Error("range is required for add/remove");
       }
-      return methodOk(sessionId, operation === "add" ? "addMerge" : "removeMerge", [sheet, range]);
+      return methodOk(sessionId, operation === "add" ? "addMerge" : "removeMerge", [
+        sheetIndex,
+        range,
+      ]);
     } catch (error) {
       return fail(error);
     }
@@ -703,23 +804,30 @@ server.registerTool(
   "formulon_comment_operation",
   {
     title: "Comment operation",
-    description: "Get, set, or remove a cell comment.",
+    description: "List, get, set, or remove a cell comment.",
     inputSchema: {
       ...sheetInputSchema,
-      operation: z.enum(["get", "set", "remove"]),
-      row: z.number().int().nonnegative(),
-      col: z.number().int().nonnegative(),
+      operation: z.enum(["list", "get", "set", "remove"]),
+      row: z.number().int().nonnegative().optional(),
+      col: z.number().int().nonnegative().optional(),
       author: z.string().optional(),
       text: z.string().optional(),
     },
   },
   ({ sessionId, sheet, operation, row, col, author, text }) => {
     try {
+      const sheetIndex = resolveSessionSheet(sessionId, sheet);
+      if (operation === "list") {
+        return methodOk(sessionId, "getComments", [sheetIndex]);
+      }
+      if (row === undefined || col === undefined) {
+        throw new Error("row and col are required");
+      }
       if (operation === "get") {
-        return methodOk(sessionId, "getComment", [sheet, row, col]);
+        return methodOk(sessionId, "getComment", [sheetIndex, row, col]);
       }
       return methodOk(sessionId, "setComment", [
-        sheet,
+        sheetIndex,
         row,
         col,
         operation === "remove" ? "" : (author ?? ""),
@@ -749,26 +857,27 @@ server.registerTool(
   },
   ({ sessionId, sheet, operation, row, col, index, target, display, tooltip }) => {
     try {
+      const sheetIndex = resolveSessionSheet(sessionId, sheet);
       if (operation === "list") {
-        return methodOk(sessionId, "getHyperlinks", [sheet]);
+        return methodOk(sessionId, "getHyperlinks", [sheetIndex]);
       }
       if (operation === "clear") {
-        return methodOk(sessionId, "clearHyperlinks", [sheet]);
+        return methodOk(sessionId, "clearHyperlinks", [sheetIndex]);
       }
       if (operation === "removeAt") {
         if (index === undefined) {
           throw new Error("index is required for removeAt");
         }
-        return methodOk(sessionId, "removeHyperlinkAt", [sheet, index]);
+        return methodOk(sessionId, "removeHyperlinkAt", [sheetIndex, index]);
       }
       if (row === undefined || col === undefined) {
         throw new Error("row and col are required");
       }
       if (operation === "remove") {
-        return methodOk(sessionId, "removeHyperlink", [sheet, row, col]);
+        return methodOk(sessionId, "removeHyperlink", [sheetIndex, row, col]);
       }
       return methodOk(sessionId, "addHyperlink", [
-        sheet,
+        sheetIndex,
         row,
         col,
         target ?? "",
@@ -795,22 +904,23 @@ server.registerTool(
   },
   ({ sessionId, sheet, operation, index, validation }) => {
     try {
+      const sheetIndex = resolveSessionSheet(sessionId, sheet);
       if (operation === "list") {
-        return methodOk(sessionId, "getValidations", [sheet]);
+        return methodOk(sessionId, "getValidations", [sheetIndex]);
       }
       if (operation === "clear") {
-        return methodOk(sessionId, "clearValidations", [sheet]);
+        return methodOk(sessionId, "clearValidations", [sheetIndex]);
       }
       if (operation === "removeAt") {
         if (index === undefined) {
           throw new Error("index is required for removeAt");
         }
-        return methodOk(sessionId, "removeValidationAt", [sheet, index]);
+        return methodOk(sessionId, "removeValidationAt", [sheetIndex, index]);
       }
       if (!validation) {
         throw new Error("validation is required for add");
       }
-      return methodOk(sessionId, "addValidation", [sheet, validation]);
+      return methodOk(sessionId, "addValidation", [sheetIndex, validation]);
     } catch (error) {
       return fail(error);
     }
@@ -847,17 +957,18 @@ server.registerTool(
     todaySerial,
   }) => {
     try {
+      const sheetIndex = resolveSessionSheet(sessionId, sheet);
       if (operation === "list") {
-        return methodOk(sessionId, "getConditionalFormats", [sheet]);
+        return methodOk(sessionId, "getConditionalFormats", [sheetIndex]);
       }
       if (operation === "clear") {
-        return methodOk(sessionId, "clearConditionalFormats", [sheet]);
+        return methodOk(sessionId, "clearConditionalFormats", [sheetIndex]);
       }
       if (operation === "removeAt") {
         if (index === undefined) {
           throw new Error("index is required for removeAt");
         }
-        return methodOk(sessionId, "removeConditionalFormatAt", [sheet, index]);
+        return methodOk(sessionId, "removeConditionalFormatAt", [sheetIndex, index]);
       }
       if (operation === "evaluate") {
         if (
@@ -869,7 +980,7 @@ server.registerTool(
           throw new Error("firstRow, firstCol, lastRow, and lastCol are required for evaluate");
         }
         return methodOk(sessionId, "evaluateCfRange", [
-          sheet,
+          sheetIndex,
           firstRow,
           firstCol,
           lastRow,
@@ -880,7 +991,7 @@ server.registerTool(
       if (!rule) {
         throw new Error("rule is required for add");
       }
-      return methodOk(sessionId, "addConditionalFormat", [sheet, rule]);
+      return methodOk(sessionId, "addConditionalFormat", [sheetIndex, rule]);
     } catch (error) {
       return fail(error);
     }
@@ -891,21 +1002,71 @@ server.registerTool(
   "formulon_trace",
   {
     title: "Trace dependencies",
-    description: "Read precedents, dependents, or spill info for a cell.",
+    description:
+      "Read precedents, dependents, or spill info for a cell. Results carry A1 references (with sheet names), not raw indices.",
     inputSchema: {
       ...sheetInputSchema,
       operation: z.enum(["precedents", "dependents", "spillInfo"]),
-      row: z.number().int().nonnegative(),
-      col: z.number().int().nonnegative(),
+      row: z.number().int().nonnegative().describe("Zero-based row of the cell to trace."),
+      col: z.number().int().nonnegative().describe("Zero-based column of the cell to trace."),
       depth: z.number().int().positive().max(32).default(1),
     },
   },
   ({ sessionId, sheet, operation, row, col, depth }) => {
     try {
-      if (operation === "spillInfo") {
-        return methodOk(sessionId, "spillInfo", [sheet, row, col]);
-      }
-      return methodOk(sessionId, operation, [sheet, row, col, depth]);
+      return ok(traceSession(sessionId, operation, sheet, row, col, depth));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.registerTool(
+  "formulon_dimension_operation",
+  {
+    title: "Column/row dimension operation",
+    description:
+      "List column-width/row-height overrides, or set width/height, hidden, or outline level. Columns act on an inclusive [first, last] span; rows act on a single row index.",
+    inputSchema: {
+      ...sheetInputSchema,
+      axis: z.enum(["column", "row"]),
+      operation: z.enum(["list", "size", "hidden", "outline"]),
+      first: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("Zero-based first column index (column axis)."),
+      last: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("Zero-based last column index; defaults to first (column axis)."),
+      row: z.number().int().nonnegative().optional().describe("Zero-based row index (row axis)."),
+      size: z.number().optional().describe("Column width or row height for the 'size' operation."),
+      hidden: z.boolean().optional().describe("Hidden flag for the 'hidden' operation."),
+      level: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("Outline level for the 'outline' operation."),
+    },
+  },
+  ({ sessionId, sheet, axis, operation, first, last, row, size, hidden, level }) => {
+    try {
+      return ok(
+        sessionDimension(sessionId, axis, operation, {
+          sheet,
+          first,
+          last,
+          row,
+          size,
+          hidden,
+          level,
+        }),
+      );
     } catch (error) {
       return fail(error);
     }
@@ -1035,8 +1196,6 @@ server.registerTool(
     }
   },
 );
-
-const PACKAGE_VERSION = "0.1.3";
 
 const HELP = `formulon-mcp ${PACKAGE_VERSION}
 MCP server for Formulon Excel-compatible formula and workbook evaluation.

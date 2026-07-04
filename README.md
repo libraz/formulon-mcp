@@ -1,7 +1,7 @@
 # formulon-mcp
 
 MCP server for [Formulon](https://github.com/libraz/formulon). It uses the
-published npm package `@libraz/formulon@0.9.0` and exposes Excel-compatible
+published npm package `@libraz/formulon@0.9.5` and exposes Excel-compatible
 formula and `.xlsx` workbook operations over stdio.
 
 This is designed for agent use: open a workbook once, inspect it, mutate cells,
@@ -108,6 +108,7 @@ npx -y github:libraz/formulon-mcp
 - Yarn 4 with `nodeLinker: node-modules`
 - Biome 2 for format/lint
 - TypeScript 6
+- Vitest for tests (`yarn test`, `yarn test:watch`, `yarn test:coverage`)
 
 ```sh
 yarn install
@@ -124,8 +125,11 @@ node ./dist/index.js
 
 ## Tools
 
-- `formulon_version`: returns the loaded Formulon engine version.
-- `formulon_eval_formula`: evaluates one Excel formula.
+- `formulon_version`: returns the loaded Formulon engine version and the MCP
+  server version.
+- `formulon_eval_formula`: evaluates one Excel formula. With `sessionId`, it
+  evaluates read-only against an open workbook, resolving references, defined
+  names, and `ROW()`/`COLUMN()` anchored at the given cell.
 - `formulon_open_workbook`: creates a workbook session from an `.xlsx` path, or
   creates a new default workbook.
 - `formulon_list_sessions`: lists open workbook sessions.
@@ -133,15 +137,20 @@ node ./dist/index.js
 - `formulon_inspect_session`: returns sheets, defined names, tables, and
   optionally sparse cell entries for an open session.
 - `formulon_set_cells`: applies mutations to a session. Cells can be addressed
-  with A1 refs like `Sheet1!B2` or zero-based `sheet`/`row`/`col`.
+  with A1 refs like `Sheet1!B2` or zero-based `sheet`/`row`/`col`. Writes are
+  bounds-checked against Excel's grid, and formula cells that evaluate to an
+  error are reported back in `errorCells`.
+- `formulon_set_range`: writes a 2D block of values from an anchor cell; each
+  element's JSON type picks the cell type, `{"f":"=…"}` writes a formula, and
+  `null` skips a cell. Much more compact than `set_cells` for tables.
 - `formulon_sheet_operation`: adds, removes, renames, or moves sheets.
 - `formulon_set_defined_name`: adds, replaces, or removes workbook-scoped
   defined names.
 - `formulon_edit_structure`: inserts or deletes rows and columns.
 - `formulon_set_sheet_view`: sets zoom, frozen panes, or sheet-tab hidden state.
 - `formulon_recalc_session`: recalculates an open session.
-- `formulon_find_cells`: searches text cell values and/or formula text in a
-  session.
+- `formulon_find_cells`: searches cell values (text, numbers, booleans) and/or
+  formula text in a session.
 - `formulon_replace_cells`: replaces matching text cell values and/or formula
   text in a session.
 - `formulon_inspect_layout`: returns stable per-sheet layout data, including
@@ -151,18 +160,27 @@ node ./dist/index.js
   total-like fields with rule-based confidence and evidence.
 - `formulon_analyze_workbook`: classifies workbook shape such as invoice, list,
   report, schedule, or form using deterministic features and evidence.
-- `formulon_get_cell`: reads one cell from a session or directly from a path.
-- `formulon_get_range`: reads an A1 rectangular range from a session.
+- `formulon_get_cell`: reads one cell from a session or directly from a path,
+  including its formula text (empty for constants). Date/currency/percent cells
+  carry a decoded `formatted` string alongside the raw value.
+- `formulon_get_range`: reads an A1 rectangular range from a session as a sparse
+  cell list — blanks omitted, clipped to the sheet's used range, and capped at
+  `maxCells`. Set `includeFormulas` to annotate computed cells. Formatted
+  numeric cells (dates, currency, percent) carry a decoded `formatted` string.
+- `formulon_dimension_operation`: lists column-width / row-height overrides, or
+  sets width/height, hidden, or outline level. Columns act on an inclusive
+  `[first, last]` span; rows act on a single row index.
 - `formulon_save_session`: writes a session to `.xlsx`.
 - `formulon_session_metadata`: reads function names or external links.
 - `formulon_merge_operation`: lists, adds, removes, or clears merged ranges.
-- `formulon_comment_operation`: gets, sets, or removes cell comments.
+- `formulon_comment_operation`: lists, gets, sets, or removes cell comments.
 - `formulon_hyperlink_operation`: lists, adds, removes, or clears hyperlinks.
 - `formulon_validation_operation`: lists, adds, removes, or clears data
   validations.
 - `formulon_conditional_format_operation`: lists, adds, removes, clears, or
   evaluates conditional formats.
-- `formulon_trace`: reads precedents, dependents, or spill info.
+- `formulon_trace`: reads precedents, dependents, or spill info. Results carry
+  A1 references with sheet names, not raw indices.
 - `formulon_function_lookup`: lists functions and resolves function metadata or
   localized names.
 - `formulon_workbook_call`: allowlisted low-level access to the Formulon
@@ -173,7 +191,18 @@ node ./dist/index.js
 - `formulon_update_workbook`: one-shot load/create, mutate, recalc, save.
 
 Unless A1 notation is used, sheet, row, and column indexes are zero-based to
-match the Formulon API.
+match the Formulon API. Operation tools (`merge`, `comment`, `hyperlink`,
+`validation`, `conditional_format`, `trace`, `dimension`) accept a sheet name in
+their `sheet` argument as well as a zero-based index.
+
+Cell values are returned as `{kind, value}` envelopes. Formula cells are
+recalculated when a session is opened, so the first read returns the computed
+value rather than a blank. Error cells include an `errorName` Excel literal
+(`#DIV/0!`, `#REF!`, `#NAME?`, …) beside the numeric `errorCode`. Cells whose
+number format is a date, currency, or percent carry a `numberFormat` code, a
+`formatKind`, and — for dates and percentages — a decoded `formatted` string
+(for example an ISO date), while `value` keeps the raw Excel serial / number.
+The full cell style is available through `inspect_layout` with `includeStyles`.
 
 ## Agent Workflow
 

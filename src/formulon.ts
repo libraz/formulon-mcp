@@ -1,4 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import createFormulon, {
   type FormulonModule,
@@ -35,6 +36,27 @@ const VALUE_KIND = Object.freeze({
   7: "lambda",
 } as const);
 
+/**
+ * Maps a Formulon `ErrorCode` ordinal to its Excel error literal.
+ *
+ * Ordinals are the engine's own enum order (not Excel's BIFF codes),
+ * determined against @libraz/formulon by generating each error kind.
+ */
+const ERROR_NAME = Object.freeze({
+  0: "#NULL!",
+  1: "#DIV/0!",
+  2: "#VALUE!",
+  3: "#REF!",
+  4: "#NAME?",
+  5: "#NUM!",
+  6: "#N/A",
+} as const);
+
+/** Returns the Excel error literal for an ErrorCode ordinal, or a fallback. */
+export function errorName(errorCode: number): string {
+  return ERROR_NAME[errorCode as keyof typeof ERROR_NAME] ?? `#ERR(${errorCode})`;
+}
+
 let modulePromise: Promise<FormulonModule> | undefined;
 
 /** Returns the singleton Formulon WASM module instance. */
@@ -49,9 +71,16 @@ export function normalizeFormula(formula: string): string {
   return trimmed.startsWith("=") ? trimmed : `=${trimmed}`;
 }
 
-/** Serializes an MCP tool response payload as stable pretty JSON. */
+/**
+ * Serializes an MCP tool response payload as compact JSON.
+ *
+ * Compact output keeps token cost proportional to the data; set
+ * `FORMULON_MCP_PRETTY=1` to pretty-print for human debugging.
+ */
 export function jsonText(value: unknown): string {
-  return JSON.stringify(value, null, 2);
+  return process.env.FORMULON_MCP_PRETTY === "1"
+    ? JSON.stringify(value, null, 2)
+    : JSON.stringify(value);
 }
 
 /** Converts a Formulon value envelope into a compact JSON shape for MCP responses. */
@@ -67,7 +96,7 @@ export function valueToJson(value: Value) {
     case 3:
       return { kind, value: value.text };
     case 4:
-      return { kind, errorCode: value.errorCode };
+      return { kind, errorCode: value.errorCode, errorName: errorName(value.errorCode) };
     default:
       return { kind, raw: value };
   }
@@ -303,6 +332,15 @@ export async function saveWorkbook(wb: Workbook, outputPath: string): Promise<nu
     throw new Error("save workbook failed: no bytes returned");
   }
   const resolved = resolveUserPath(outputPath);
-  await writeFile(resolved, saved.bytes);
+  // Write to a sibling temp file then atomically rename, so a crash or error
+  // mid-write never truncates or corrupts an existing workbook at `resolved`.
+  const tmp = `${resolved}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tmp, saved.bytes);
+    await rename(tmp, resolved);
+  } catch (error) {
+    await unlink(tmp).catch(() => {});
+    throw error;
+  }
   return saved.bytes.byteLength;
 }

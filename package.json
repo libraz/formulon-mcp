@@ -1,6 +1,6 @@
 {
   "name": "@libraz/formulon-mcp",
-  "version": "0.1.4",
+  "version": "0.3.0",
   "description": "MCP server for Formulon Excel-compatible formula and workbook evaluation",
   "license": "Apache-2.0",
   "author": "libraz",
@@ -30,20 +30,24 @@
     "check": "biome check . && tsc -p tsconfig.json --noEmit",
     "format": "biome format --write .",
     "lint": "biome lint .",
-    "test": "yarn run build && node --test test/*.test.js",
+    "test": "yarn run build && vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "yarn run build && vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node ./dist/index.js",
     "prepare": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@libraz/formulon": "^0.9.2",
+    "@libraz/formulon": "^0.9.5",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.15",
-    "@types/node": "^25.6.2",
-    "typescript": "^6.0.3"
+    "@biomejs/biome": "^2.5.2",
+    "@types/node": "^26.1.0",
+    "@vitest/coverage-v8": "^4.1.6",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
   },
   "engines": {
     "node": ">=22"

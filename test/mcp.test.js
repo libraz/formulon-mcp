@@ -3,9 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { test } from "vitest";
 
 const require = createRequire(import.meta.url);
 const FORMULON_VERSION = require("@libraz/formulon/package.json").version;
@@ -50,6 +50,7 @@ test("MCP stdio lists and calls core tools", async () => {
     assert.equal(names.includes("formulon_inspect_layout"), true);
     assert.equal(names.includes("formulon_detect_regions"), true);
     assert.equal(names.includes("formulon_analyze_workbook"), true);
+    assert.equal(names.includes("formulon_dimension_operation"), true);
     assert.equal(
       tools.tools.every((tool) => tool.inputSchema && typeof tool.inputSchema === "object"),
       true,
@@ -100,12 +101,20 @@ test("MCP stdio edits, reads, saves, and closes a workbook session", async () =>
         }),
       );
       assert.deepEqual(
-        range.rows[0].map((entry) => entry.value),
+        range.cells.map((entry) => entry.value),
         [
           { kind: "number", value: 7 },
           { kind: "number", value: 42 },
         ],
       );
+
+      const sessionEval = textPayload(
+        await client.callTool({
+          name: "formulon_eval_formula",
+          arguments: { sessionId: "mcp-session", formula: "=A1+B1" },
+        }),
+      );
+      assert.deepEqual(sessionEval.result.value, { kind: "number", value: 49 });
 
       await client.callTool({
         name: "formulon_set_cells",
@@ -226,6 +235,14 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
       );
       assert.deepEqual(comment.result, { author: "tester", text: "note" });
 
+      const commentList = textPayload(
+        await client.callTool({
+          name: "formulon_comment_operation",
+          arguments: { sessionId: "advanced-session", operation: "list" },
+        }),
+      );
+      assert.deepEqual(commentList.result, [{ row: 1, col: 0, author: "tester", text: "note" }]);
+
       const hyperlinkAdd = textPayload(
         await client.callTool({
           name: "formulon_hyperlink_operation",
@@ -289,7 +306,8 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           },
         }),
       );
-      assert.equal(cfAdd.result.ok, true);
+      assert.equal(cfAdd.result.status.ok, true);
+      assert.equal(cfAdd.result.index, 0);
 
       const cfs = textPayload(
         await client.callTool({
@@ -322,7 +340,11 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           },
         }),
       );
-      assert.deepEqual(precedents.result, [{ sheet: 0, row: 0, col: 0 }]);
+      assert.equal(precedents.operation, "precedents");
+      assert.equal(precedents.count, 1);
+      assert.deepEqual(precedents.cells, [
+        { sheet: 0, sheetName: "Sheet1", row: 0, col: 0, ref: "Sheet1!A1" },
+      ]);
 
       const metadata = textPayload(
         await client.callTool({
@@ -411,6 +433,58 @@ test("MCP stdio supports one-shot path tools", async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("MCP stdio supports dimensions and sheet-name references", async () => {
+  await withClient(async (client) => {
+    await client.callTool({
+      name: "formulon_open_workbook",
+      arguments: { sessionId: "dim-session" },
+    });
+    try {
+      await client.callTool({
+        name: "formulon_sheet_operation",
+        arguments: { sessionId: "dim-session", operation: "rename", index: 0, newName: "Data" },
+      });
+
+      const width = textPayload(
+        await client.callTool({
+          name: "formulon_dimension_operation",
+          arguments: {
+            sessionId: "dim-session",
+            sheet: "Data",
+            axis: "column",
+            operation: "size",
+            first: 0,
+            last: 1,
+            size: 100,
+          },
+        }),
+      );
+      assert.equal(width.status.ok, true);
+      assert.equal(width.sheet, 0);
+
+      // An operation-tool must accept a sheet name, not just an index.
+      const merges = textPayload(
+        await client.callTool({
+          name: "formulon_merge_operation",
+          arguments: { sessionId: "dim-session", sheet: "Data", operation: "list" },
+        }),
+      );
+      assert.equal(Array.isArray(merges.result), true);
+
+      const badSheet = await client.callTool({
+        name: "formulon_merge_operation",
+        arguments: { sessionId: "dim-session", sheet: "Missing", operation: "list" },
+      });
+      assert.match(errorPayload(badSheet), /sheet not found/);
+    } finally {
+      await client.callTool({
+        name: "formulon_close_workbook",
+        arguments: { sessionId: "dim-session" },
+      });
+    }
+  });
 });
 
 test("MCP stdio reports tool errors without crashing the server", async () => {
