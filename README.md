@@ -145,8 +145,10 @@ node ./dist/index.js
   element's JSON type picks the cell type, `{"f":"=…"}` writes a formula, and
   `null` skips a cell. Much more compact than `set_cells` for tables.
 - `formulon_sheet_operation`: adds, removes, renames, or moves sheets.
-- `formulon_set_defined_name`: adds, replaces, or removes workbook-scoped
-  defined names.
+- `formulon_set_defined_name`: adds, replaces, or removes defined names, either
+  workbook-scoped or local to one sheet. Print settings such as
+  `_xlnm.Print_Area` must be sheet-scoped, since Excel ignores a
+  workbook-scoped one without reporting an error.
 - `formulon_edit_structure`: inserts or deletes rows and columns.
 - `formulon_set_sheet_view`: sets zoom, frozen panes, or sheet-tab hidden state.
 - `formulon_recalc_session`: recalculates an open session.
@@ -190,10 +192,11 @@ node ./dist/index.js
   localized names.
 - `formulon_workbook_call`: allowlisted low-level access to the Formulon
   `Workbook` API for advanced features, including PivotTables, PivotCaches,
-  worksheet tables and their AutoFilter, styles, merges, comments, hyperlinks,
-  validations, conditional formatting, dependency graph queries, function
-  metadata, spill info, phonetic guides, print pagination, and the workbook
-  clock pin.
+  worksheet tables and their AutoFilter, styles and differential formats,
+  merges, comments, hyperlinks, validations, conditional formatting, sheet
+  display flags such as gridlines and the page-layout view, dependency graph
+  queries, function metadata, spill info, phonetic guides, print pagination,
+  and the workbook clock pin.
 - `formulon_inspect_workbook`: one-shot workbook summary from path.
 - `formulon_update_workbook`: one-shot load/create, mutate, recalc, save.
 

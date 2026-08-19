@@ -16,6 +16,7 @@ import {
   saveWorkbook,
   statusToJson,
   valueToJson,
+  WORKBOOK_SCOPE,
   type Workbook,
   workbookSummary,
 } from "./formulon.js";
@@ -110,6 +111,12 @@ const sessions = new Map<string, WorkbookSession>();
  * Workbook methods `formulon_workbook_call` may dispatch. Exported so a test
  * can assert every name still exists on the engine's Workbook: an entry that
  * an engine release renames or drops would otherwise fail only at call time.
+ *
+ * Three engine methods are withheld on purpose rather than overlooked:
+ * `save` / `saveAs` / `saveWithDiagnostics` would hand back raw bytes with no
+ * session bookkeeping, so saving goes through `formulon_save_session`; and
+ * `setIterativeProgress` takes a JS callback, which no JSON tool argument can
+ * express.
  */
 export const WORKBOOK_METHODS = new Set([
   "addSheet",
@@ -123,6 +130,7 @@ export const WORKBOOK_METHODS = new Set([
   "setText",
   "setBlank",
   "setFormula",
+  "setError",
   "getValue",
   "getCellPhonetic",
   "setCellPhonetic",
@@ -152,6 +160,7 @@ export const WORKBOOK_METHODS = new Set([
   "definedNameCount",
   "definedNameAt",
   "setDefinedName",
+  "setDefinedNameScoped",
   "tableCount",
   "tableAt",
   "createTable",
@@ -167,6 +176,7 @@ export const WORKBOOK_METHODS = new Set([
   "pivotCacheIdAt",
   "pivotCacheCreate",
   "pivotCacheRemove",
+  "pivotCacheGetWorksheetSource",
   "pivotCacheSetWorksheetSource",
   "pivotCacheFieldCount",
   "pivotCacheFieldName",
@@ -177,6 +187,7 @@ export const WORKBOOK_METHODS = new Set([
   "pivotCacheFieldAddSharedItemText",
   "pivotCacheFieldAddSharedItemBool",
   "pivotCacheFieldAddSharedItemBlank",
+  "pivotCacheFieldAddSharedItemError",
   "pivotCacheFieldClearSharedItems",
   "pivotCacheRecordCount",
   "pivotCacheRecordAdd",
@@ -191,6 +202,8 @@ export const WORKBOOK_METHODS = new Set([
   "pivotSetName",
   "pivotSetAnchor",
   "pivotSetGrandTotals",
+  "pivotGetLayout",
+  "pivotSetLayout",
   "pivotFieldCount",
   "pivotFieldAdd",
   "pivotFieldClear",
@@ -223,6 +236,12 @@ export const WORKBOOK_METHODS = new Set([
   "setSheetZoom",
   "setSheetFreeze",
   "setSheetTabHidden",
+  "setSheetTabSelected",
+  "setSheetShowGridLines",
+  "setSheetShowRowColHeaders",
+  "setSheetShowZeros",
+  "setSheetRightToLeft",
+  "setSheetViewMode",
   "getSheetProtection",
   "setSheetProtection",
   "getSheetColumns",
@@ -240,15 +259,18 @@ export const WORKBOOK_METHODS = new Set([
   "getFill",
   "getBorder",
   "getNumFmt",
+  "getDxf",
   "addFont",
   "addFill",
   "addBorder",
   "addNumFmt",
   "addXf",
+  "addDxf",
   "fontCount",
   "fillCount",
   "borderCount",
   "xfCount",
+  "dxfCount",
   "cellStyleCount",
   "cellStyleXfCount",
   "getCellStyle",
@@ -320,8 +342,10 @@ const READ_ONLY_METHODS = new Set([
   "passthroughAt",
   "pivotCount",
   "pivotLayout",
+  "pivotGetLayout",
   "pivotCacheCount",
   "pivotCacheIdAt",
+  "pivotCacheGetWorksheetSource",
   "pivotCacheFieldCount",
   "pivotCacheFieldName",
   "pivotCacheFieldSharedItemCount",
@@ -341,10 +365,12 @@ const READ_ONLY_METHODS = new Set([
   "getFill",
   "getBorder",
   "getNumFmt",
+  "getDxf",
   "fontCount",
   "fillCount",
   "borderCount",
   "xfCount",
+  "dxfCount",
   "cellStyleCount",
   "cellStyleXfCount",
   "getCellStyle",
@@ -1362,17 +1388,33 @@ export function applySheetOperation(
   return { session: publicInfo(session), status: statusToJson(status) };
 }
 
-/** Adds, replaces, or removes a workbook-scoped defined name. */
-export function setSessionDefinedName(id: string, name: string, formula: string) {
+/**
+ * Adds, replaces, or removes a defined name, scoped to one sheet when `sheet`
+ * is given and to the whole workbook otherwise. Scope is not cosmetic: Excel
+ * only honours `_xlnm.Print_Area` and `_xlnm.Print_Titles` when they are
+ * sheet-local, and writing them in workbook scope fails silently — the file
+ * opens, the name is there, and the print range simply does not apply.
+ */
+export function setSessionDefinedName(
+  id: string,
+  name: string,
+  formula: string,
+  sheet?: number | string,
+) {
   const session = getSession(id);
   // OOXML <definedName> content is a bare expression with no leading '='.
   // Strip one if the caller supplied it so the saved file is Excel-conformant.
   const trimmed = formula.trim();
   const refersTo = trimmed.startsWith("=") ? trimmed.slice(1) : trimmed;
-  const status = session.workbook.setDefinedName(name, refersTo);
+  const localSheetId =
+    sheet === undefined ? WORKBOOK_SCOPE : findSheetIndex(session.workbook, sheet);
+  const status =
+    localSheetId === WORKBOOK_SCOPE
+      ? session.workbook.setDefinedName(name, refersTo)
+      : session.workbook.setDefinedNameScoped(name, refersTo, localSheetId);
   assertStatus(status, "set defined name");
   touch(session, true);
-  return { session: publicInfo(session), status: statusToJson(status) };
+  return { session: publicInfo(session), status: statusToJson(status), localSheetId };
 }
 
 /** Inserts or deletes rows or columns while letting Formulon rewrite affected references. */

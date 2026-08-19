@@ -568,16 +568,19 @@ server.registerTool(
   {
     title: "Set defined name",
     description:
-      "Add, replace, or remove a workbook-scoped defined name. Empty formula removes it.",
+      "Add, replace, or remove a defined name. Without `sheet` the name is workbook-scoped; with it the name is local to that sheet. Print settings (_xlnm.Print_Area, _xlnm.Print_Titles) must be sheet-scoped — Excel ignores a workbook-scoped one without reporting an error. Empty formula removes it.",
     inputSchema: {
       sessionId: z.string(),
       name: z.string(),
       formula: z.string().describe("Formula with or without '='; pass empty string to remove."),
+      sheet: sheetRefSchema
+        .optional()
+        .describe("Scope the name to this sheet. Omit for workbook scope."),
     },
   },
-  ({ sessionId, name, formula }) => {
+  ({ sessionId, name, formula, sheet }) => {
     try {
-      return ok(setSessionDefinedName(sessionId, name, formula));
+      return ok(setSessionDefinedName(sessionId, name, formula, sheet));
     } catch (error) {
       return fail(error);
     }

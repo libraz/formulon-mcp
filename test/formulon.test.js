@@ -319,6 +319,66 @@ test("keeps the workbook method allowlist callable on the engine", async () => {
   }
 });
 
+/**
+ * Engine methods deliberately kept out of `WORKBOOK_METHODS`. Saving is routed
+ * through `formulon_save_session` so a session keeps its bookkeeping, the
+ * iterative-progress hook takes a JS callback no JSON argument can express, and
+ * the rest are handle lifecycle rather than workbook operations.
+ */
+const UNEXPOSED_WORKBOOK_METHODS = new Set([
+  "constructor",
+  "delete",
+  "isValid",
+  "save",
+  "saveAs",
+  "saveWithDiagnostics",
+  "setIterativeProgress",
+]);
+
+test("exposes every engine workbook method that is not deliberately withheld", async () => {
+  const module = await formulonModule();
+  const wb = module.Workbook.createDefault();
+  try {
+    // The complementary direction of the guard above: that test catches a
+    // renamed or dropped method, this one catches an engine release adding
+    // methods that silently stay unreachable through formulon_workbook_call.
+    const unreachable = Object.getOwnPropertyNames(Object.getPrototypeOf(wb))
+      .filter((name) => typeof wb[name] === "function")
+      .filter((name) => !(WORKBOOK_METHODS.has(name) || UNEXPOSED_WORKBOOK_METHODS.has(name)));
+    assert.deepEqual(unreachable, []);
+  } finally {
+    wb.delete();
+  }
+});
+
+test("scopes a defined name to one sheet and reports the scope back", async () => {
+  await openSession(undefined, "defined-name-scope");
+  try {
+    applySheetOperation("defined-name-scope", "add", { name: "Sheet2" });
+
+    const workbookScoped = setSessionDefinedName("defined-name-scope", "Rate", "0.08");
+    assert.equal(workbookScoped.localSheetId, -1);
+
+    // Print settings only take effect sheet-locally, so the scope has to reach
+    // the engine rather than being flattened to workbook scope.
+    const sheetScoped = setSessionDefinedName(
+      "defined-name-scope",
+      "_xlnm.Print_Area",
+      "'Sheet2'!$A$1:$C$3",
+      "Sheet2",
+    );
+    assert.equal(sheetScoped.localSheetId, 1);
+
+    const { workbook } = inspectSession("defined-name-scope");
+    const byName = Object.fromEntries(workbook.definedNames.map((entry) => [entry.name, entry]));
+    assert.equal(byName.Rate.localSheetId, -1);
+    assert.equal(byName["_xlnm.Print_Area"].localSheetId, 1);
+    assert.equal(byName["_xlnm.Print_Area"].formula, "'Sheet2'!$A$1:$C$3");
+  } finally {
+    closeSession("defined-name-scope");
+  }
+});
+
 test("reports the written container and its loss counters", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-save-"));
   await openSession(undefined, "save-diagnostics");

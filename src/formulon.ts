@@ -43,9 +43,23 @@ const VALUE_KIND = Object.freeze({
 let modulePromise: Promise<FormulonModule> | undefined;
 let loadedModule: FormulonModule | undefined;
 
-/** Returns the singleton Formulon WASM module instance. */
+/** Sends one engine output line to stderr, keeping fd 1 free for JSON-RPC. */
+function toStderr(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
+/**
+ * Returns the singleton Formulon WASM module instance.
+ *
+ * Both engine output streams are pinned to stderr. The MCP stdio transport owns
+ * fd 1, and Emscripten's Node default writes there with `fs.writeSync(1, ...)`
+ * rather than `console.log` — so a single line of engine output would land in
+ * the middle of a JSON-RPC frame, and replacing `console.log` would not stop it.
+ */
 export function formulonModule(): Promise<FormulonModule> {
-  modulePromise ??= (createFormulon() as Promise<FormulonModule>).then((module) => {
+  modulePromise ??= (
+    createFormulon({ print: toStderr, printErr: toStderr }) as Promise<FormulonModule>
+  ).then((module) => {
     // Cache the resolved instance so synchronous helpers such as errorName()
     // can reach the engine without threading a promise through every caller.
     loadedModule = module;
@@ -255,6 +269,12 @@ export function findSheetIndex(wb: Workbook, sheet: number | string | undefined)
   throw new Error(`sheet not found: ${sheet}`);
 }
 
+/**
+ * `localSheetId` value denoting a workbook-scoped defined name, as opposed to
+ * one scoped to a single sheet. Matches the engine's own sentinel.
+ */
+export const WORKBOOK_SCOPE = -1;
+
 /** Builds a summary of workbook sheets, defined names, tables, and optionally sparse cells. */
 export function workbookSummary(wb: Workbook, includeCells: boolean, maxCells: number) {
   const sheets: SheetJson[] = [];
@@ -294,7 +314,14 @@ export function workbookSummary(wb: Workbook, includeCells: boolean, maxCells: n
   for (let idx = 0; idx < wb.definedNameCount(); idx += 1) {
     const entry = wb.definedNameAt(idx);
     assertStatus(entry.status, `read defined name ${idx}`);
-    definedNames.push({ name: entry.name, formula: entry.formula });
+    // Scope is reported because a sheet-local name such as `_xlnm.Print_Area`
+    // exists once per sheet: without it, several entries share one name and
+    // differ only in the sheet their formula happens to mention.
+    definedNames.push({
+      name: entry.name,
+      formula: entry.formula,
+      localSheetId: entry.localSheetId ?? WORKBOOK_SCOPE,
+    });
   }
 
   const tables = [];
