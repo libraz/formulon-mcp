@@ -107,7 +107,7 @@ npx -y github:libraz/formulon-mcp
 - Node.js 22 via mise
 - Yarn 4 with `nodeLinker: node-modules`
 - Biome 2 for format/lint
-- TypeScript 6
+- TypeScript 7
 - Vitest for tests (`yarn test`, `yarn test:watch`, `yarn test:coverage`)
 
 ```sh
