@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { stdin, stdout } from "node:process";
@@ -23,6 +23,26 @@ const buildEntry = (): McpServerEntry => ({
   args: ["-y", PACKAGE_SPEC],
 });
 
+/**
+ * Writes `data` to `path` through a sibling temp file and an atomic rename.
+ *
+ * These are other tools' config files, and `~/.claude.json` in particular is
+ * large and read by a client that may be running right now, so a partial
+ * in-place write would leave it truncated and unparseable.
+ */
+const writeFileAtomic = async (path: string, data: string): Promise<void> => {
+  const tmp = `${path}.formulon-mcp.tmp`;
+  try {
+    await writeFile(tmp, data);
+    await rename(tmp, path);
+  } catch (error) {
+    await unlink(tmp).catch(() => {
+      // Best effort: there is nothing to clean up if the temp file never existed.
+    });
+    throw error;
+  }
+};
+
 const writeJsonConfig = async (path: string): Promise<void> => {
   let data: ClaudeConfig = {};
   if (existsSync(path)) {
@@ -40,11 +60,23 @@ const writeJsonConfig = async (path: string): Promise<void> => {
   data.mcpServers = data.mcpServers ?? {};
   data.mcpServers[SERVER_NAME] = buildEntry();
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(data, null, 2)}\n`);
+  await writeFileAtomic(path, `${JSON.stringify(data, null, 2)}\n`);
 };
 
 export const writeClaudeConfig = (path: string): Promise<void> => writeJsonConfig(path);
 export const writeClaudeDesktopConfig = (path: string): Promise<void> => writeJsonConfig(path);
+
+/**
+ * Matches the server's own Codex TOML header and any sub-table under it, so a
+ * hand-added `[mcp_servers.formulon.env]` is rewritten with its parent rather
+ * than left behind as an orphan section.
+ */
+const CODEX_SECTION_HEADER = new RegExp(
+  `^[ \\t]*\\[mcp_servers\\.${SERVER_NAME}(?:\\.[^\\]]+)?\\][ \\t]*$`,
+);
+
+/** The same matcher applied line-by-line across a whole document. */
+const CODEX_SECTION_HEADER_ANYWHERE = new RegExp(CODEX_SECTION_HEADER.source, "m");
 
 const stripCodexFormulonSection = (content: string): string => {
   const lines = content.split("\n");
@@ -52,7 +84,7 @@ const stripCodexFormulonSection = (content: string): string => {
   let inBlock = false;
   for (const line of lines) {
     const trimmed = line.trim();
-    if (trimmed === `[mcp_servers.${SERVER_NAME}]`) {
+    if (CODEX_SECTION_HEADER.test(trimmed)) {
       inBlock = true;
       continue;
     }
@@ -81,7 +113,7 @@ export const writeCodexConfig = async (path: string): Promise<void> => {
     `args = ["-y", "${PACKAGE_SPEC}"]`,
   ].join("\n");
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${prefix}${block}\n`);
+  await writeFileAtomic(path, `${prefix}${block}\n`);
 };
 
 export const displayPath = (path: string): string => {
@@ -111,9 +143,7 @@ export const previewWriteImpact = async (path: string): Promise<string> => {
     const data = JSON.parse(raw) as { mcpServers?: Record<string, unknown> };
     return hasFormulonEntry(data) ? `(replace ${SERVER_NAME})` : "(merge)";
   } catch {
-    return new RegExp(`^\\[mcp_servers\\.${SERVER_NAME}\\]\\s*$`, "m").test(raw)
-      ? `(replace ${SERVER_NAME})`
-      : "(merge)";
+    return CODEX_SECTION_HEADER_ANYWHERE.test(raw) ? `(replace ${SERVER_NAME})` : "(merge)";
   }
 };
 
@@ -129,7 +159,7 @@ export const previewRemoveImpact = async (path: string): Promise<string> => {
     const data = JSON.parse(raw) as { mcpServers?: Record<string, unknown> };
     return hasFormulonEntry(data) ? `(remove ${SERVER_NAME})` : `(no ${SERVER_NAME}; skip)`;
   } catch {
-    return new RegExp(`^\\[mcp_servers\\.${SERVER_NAME}\\]\\s*$`, "m").test(raw)
+    return CODEX_SECTION_HEADER_ANYWHERE.test(raw)
       ? `(remove ${SERVER_NAME})`
       : `(no ${SERVER_NAME}; skip)`;
   }
@@ -157,7 +187,7 @@ const removeFromJsonConfig = async (path: string): Promise<RemoveOutcome> => {
     return "absent";
   }
   delete data.mcpServers[SERVER_NAME];
-  await writeFile(path, `${JSON.stringify(data, null, 2)}\n`);
+  await writeFileAtomic(path, `${JSON.stringify(data, null, 2)}\n`);
   return "removed";
 };
 
@@ -171,11 +201,11 @@ export const removeFromCodexConfig = async (path: string): Promise<RemoveOutcome
     return "no-file";
   }
   const existing = await readFile(path, "utf8");
-  if (!new RegExp(`^\\[mcp_servers\\.${SERVER_NAME}\\]\\s*$`, "m").test(existing)) {
+  if (!CODEX_SECTION_HEADER_ANYWHERE.test(existing)) {
     return "absent";
   }
   const stripped = stripCodexFormulonSection(existing).replace(/\n*$/, "");
-  await writeFile(path, stripped.length > 0 ? `${stripped}\n` : "");
+  await writeFileAtomic(path, stripped.length > 0 ? `${stripped}\n` : "");
   return "removed";
 };
 

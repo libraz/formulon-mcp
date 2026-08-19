@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "vitest";
@@ -150,6 +150,56 @@ test("removeFromCodexConfig keeps other TOML sections intact", async () => {
 
     assert.equal(await removeFromCodexConfig(file), "absent");
     assert.equal(await removeFromCodexConfig(path.join(dir, "missing.toml")), "no-file");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("removeFromCodexConfig drops sub-tables under the formulon section", async () => {
+  const { dir, cleanup } = await makeTmp();
+  try {
+    const file = path.join(dir, "config.toml");
+    // A hand-added [mcp_servers.formulon.env] must go with its parent: left
+    // behind, it is an orphan sub-table of a server that no longer exists.
+    await writeFile(
+      file,
+      [
+        "[mcp_servers.other]",
+        'command = "node"',
+        "",
+        "[mcp_servers.formulon]",
+        'command = "npx"',
+        'args = ["-y", "@libraz/formulon-mcp"]',
+        "",
+        "[mcp_servers.formulon.env]",
+        'FORMULON_MCP_PRETTY = "1"',
+        "",
+        "[other_section]",
+        'value = "kept"',
+        "",
+      ].join("\n"),
+    );
+    assert.equal(await previewRemoveImpact(file), "(remove formulon)");
+
+    assert.equal(await removeFromCodexConfig(file), "removed");
+    const content = await readFile(file, "utf8");
+    assert.doesNotMatch(content, /mcp_servers\.formulon/);
+    assert.doesNotMatch(content, /FORMULON_MCP_PRETTY/);
+    assert.match(content, /\[mcp_servers\.other\]/);
+    assert.match(content, /\[other_section\]/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("config writes leave no temp file behind", async () => {
+  const { dir, cleanup } = await makeTmp();
+  try {
+    const file = path.join(dir, ".claude.json");
+    await writeClaudeConfig(file);
+    await removeFromClaudeConfig(file);
+    const leftovers = (await readdir(dir)).filter((name) => name.endsWith(".tmp"));
+    assert.deepEqual(leftovers, []);
   } finally {
     await cleanup();
   }
