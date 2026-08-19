@@ -2,10 +2,14 @@ import { randomUUID } from "node:crypto";
 import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import createFormulon, {
+  type CellEntry,
   type FormulonModule,
+  type ReadDiagnosticsResult,
+  type SaveDiagnosticsResult,
   type Status,
   type Value,
   type Workbook,
+  WorkbookFormat,
 } from "@libraz/formulon";
 
 export type { Status, Workbook };
@@ -36,33 +40,63 @@ const VALUE_KIND = Object.freeze({
   7: "lambda",
 } as const);
 
-/**
- * Maps a Formulon `ErrorCode` ordinal to its Excel error literal.
- *
- * Ordinals are the engine's own enum order (not Excel's BIFF codes),
- * determined against @libraz/formulon by generating each error kind.
- */
-const ERROR_NAME = Object.freeze({
-  0: "#NULL!",
-  1: "#DIV/0!",
-  2: "#VALUE!",
-  3: "#REF!",
-  4: "#NAME?",
-  5: "#NUM!",
-  6: "#N/A",
-} as const);
-
-/** Returns the Excel error literal for an ErrorCode ordinal, or a fallback. */
-export function errorName(errorCode: number): string {
-  return ERROR_NAME[errorCode as keyof typeof ERROR_NAME] ?? `#ERR(${errorCode})`;
-}
-
 let modulePromise: Promise<FormulonModule> | undefined;
+let loadedModule: FormulonModule | undefined;
 
 /** Returns the singleton Formulon WASM module instance. */
 export function formulonModule(): Promise<FormulonModule> {
-  modulePromise ??= createFormulon() as Promise<FormulonModule>;
+  modulePromise ??= (createFormulon() as Promise<FormulonModule>).then((module) => {
+    // Cache the resolved instance so synchronous helpers such as errorName()
+    // can reach the engine without threading a promise through every caller.
+    loadedModule = module;
+    return module;
+  });
   return modulePromise;
+}
+
+/**
+ * Returns the Excel error literal for an `ErrorCode` ordinal.
+ *
+ * Ordinals are the engine's own enum order (not Excel's BIFF codes), so the
+ * mapping is asked of the engine rather than restated here. Every read that
+ * can surface an error code happens after a workbook is open, so the module is
+ * loaded by then; the ordinal fallback only covers a call made before that.
+ */
+export function errorName(errorCode: number): string {
+  return loadedModule?.errorDisplayName(errorCode) ?? `#ERR(${errorCode})`;
+}
+
+/**
+ * Fields of a `cellAt` entry, which the engine leaves unset when the read
+ * fails. Throws on a failed read so callers get the populated record.
+ */
+export type ResolvedCell = {
+  row: number;
+  col: number;
+  formula: string;
+  value: Value;
+};
+
+/** Asserts a `cellAt` read succeeded and returns its populated fields. */
+export function requireCell(entry: CellEntry, action: string): ResolvedCell {
+  assertStatus(entry.status, action);
+  if (entry.row === undefined || entry.col === undefined || entry.value === undefined) {
+    throw new Error(`${action} failed: incomplete cell record`);
+  }
+  return { row: entry.row, col: entry.col, formula: entry.formula ?? "", value: entry.value };
+}
+
+/** Returns a `cellAt` entry's fields, or null when the read failed. */
+export function readCell(entry: CellEntry): ResolvedCell | null {
+  if (
+    !entry.status.ok ||
+    entry.row === undefined ||
+    entry.col === undefined ||
+    entry.value === undefined
+  ) {
+    return null;
+  }
+  return { row: entry.row, col: entry.col, formula: entry.formula ?? "", value: entry.value };
 }
 
 /** Ensures a formula has a leading equals sign. */
@@ -134,23 +168,6 @@ function isValueLike(value: unknown): value is Value {
   );
 }
 
-function isVectorLike(value: unknown): value is {
-  size(): number;
-  get(index: number): unknown;
-  delete(): void;
-} {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "size" in value &&
-    "get" in value &&
-    "delete" in value &&
-    typeof (value as { size: unknown }).size === "function" &&
-    typeof (value as { get: unknown }).get === "function" &&
-    typeof (value as { delete: unknown }).delete === "function"
-  );
-}
-
 /** Converts arbitrary Formulon return values into JSON-friendly data. */
 export function resultToJson(value: unknown): unknown {
   if (isStatusLike(value)) {
@@ -161,13 +178,6 @@ export function resultToJson(value: unknown): unknown {
   }
   if (value instanceof Uint8Array) {
     return { byteLength: value.byteLength };
-  }
-  if (isVectorLike(value)) {
-    try {
-      return Array.from({ length: value.size() }, (_, index) => resultToJson(value.get(index)));
-    } finally {
-      value.delete();
-    }
   }
   if (Array.isArray(value)) {
     return value.map((item) => resultToJson(item));
@@ -267,8 +277,7 @@ export function workbookSummary(wb: Workbook, includeCells: boolean, maxCells: n
       const limit = Math.max(0, Math.min(maxCells, cellCount));
       sheetJson.cells = [];
       for (let idx = 0; idx < limit; idx += 1) {
-        const cell = wb.cellAt(sheet, idx);
-        assertStatus(cell.status, `read sheet ${sheet} cell ${idx}`);
+        const cell = requireCell(wb.cellAt(sheet, idx), `read sheet ${sheet} cell ${idx}`);
         sheetJson.cells.push({
           row: cell.row,
           col: cell.col,
@@ -324,9 +333,54 @@ export function applyMutation(wb: Workbook, mutation: CellMutation): Status {
   }
 }
 
-/** Saves a workbook to disk and returns the byte length written by Formulon. */
-export async function saveWorkbook(wb: Workbook, outputPath: string): Promise<number> {
-  const saved = wb.save();
+/** Counters describing what a save or load could not carry, keyed by event. */
+export type LossCounters = Record<string, number>;
+
+/**
+ * Keeps only the non-zero counters of a diagnostics record, so a clean save or
+ * load reports nothing and a lossy one reports exactly what it lost.
+ */
+function reportedLosses(counters: LossCounters): LossCounters | undefined {
+  const lost = Object.entries(counters).filter(([, count]) => count > 0);
+  return lost.length > 0 ? Object.fromEntries(lost) : undefined;
+}
+
+/** Reports what a load could not decode, or undefined for a clean load. */
+export function readLosses(wb: Workbook): LossCounters | undefined {
+  const diagnostics: ReadDiagnosticsResult = wb.readDiagnostics();
+  if (!diagnostics.status.ok) {
+    return undefined;
+  }
+  return reportedLosses({
+    undecodedFormulas: diagnostics.undecodedFormulaCount,
+    undecodedDefinedNames: diagnostics.undecodedDefinedNameCount,
+    undecodedParts: diagnostics.undecodedPartCount,
+    skippedFeatures: diagnostics.skippedFeatureCount,
+    unknownContentTypes: diagnostics.unknownContentTypeCount,
+  });
+}
+
+/** Selects the container format Formulon writes from the output extension. */
+export function workbookFormatFor(outputPath: string): WorkbookFormat {
+  return path.extname(outputPath).toLowerCase() === ".xlsb"
+    ? WorkbookFormat.Xlsb
+    : WorkbookFormat.Xlsx;
+}
+
+export type SavedWorkbook = {
+  bytes: number;
+  format: "xlsx" | "xlsb";
+  /** Present only when the writer dropped or downgraded something. */
+  losses?: LossCounters;
+};
+
+/**
+ * Saves a workbook to disk, choosing the container from the output extension,
+ * and reports what the writer could not carry.
+ */
+export async function saveWorkbook(wb: Workbook, outputPath: string): Promise<SavedWorkbook> {
+  const format = workbookFormatFor(outputPath);
+  const saved: SaveDiagnosticsResult = wb.saveWithDiagnostics(format);
   assertStatus(saved.status, "save workbook");
   if (!saved.bytes) {
     throw new Error("save workbook failed: no bytes returned");
@@ -342,5 +396,15 @@ export async function saveWorkbook(wb: Workbook, outputPath: string): Promise<nu
     await unlink(tmp).catch(() => {});
     throw error;
   }
-  return saved.bytes.byteLength;
+  return {
+    bytes: saved.bytes.byteLength,
+    format: format === WorkbookFormat.Xlsb ? "xlsb" : "xlsx",
+    losses: reportedLosses({
+      downgradedFormulas: saved.downgradedFormulaCount,
+      deferredFeatures: saved.deferredFeatureCount,
+      droppedParts: saved.droppedPartCount,
+      droppedRelationships: saved.droppedRelationshipCount,
+      renumberedParts: saved.renumberedPartCount,
+    }),
+  };
 }

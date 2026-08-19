@@ -7,6 +7,10 @@ import {
   createOrLoadWorkbook,
   errorName,
   findSheetIndex,
+  type LossCounters,
+  readCell,
+  readLosses,
+  requireCell,
   resultToJson,
   type Status,
   saveWorkbook,
@@ -31,6 +35,8 @@ export type SessionInfo = {
   createdAt: string;
   updatedAt: string;
   dirty: boolean;
+  /** Counters for what the loader could not decode; absent for a clean load. */
+  loadLosses?: LossCounters;
 };
 
 type WorkbookSession = SessionInfo & {
@@ -100,7 +106,12 @@ type CellReplaceResult = CellSearchResult & {
 
 const sessions = new Map<string, WorkbookSession>();
 
-const WORKBOOK_METHODS = new Set([
+/**
+ * Workbook methods `formulon_workbook_call` may dispatch. Exported so a test
+ * can assert every name still exists on the engine's Workbook: an entry that
+ * an engine release renames or drops would otherwise fail only at call time.
+ */
+export const WORKBOOK_METHODS = new Set([
   "addSheet",
   "removeSheet",
   "renameSheet",
@@ -113,16 +124,25 @@ const WORKBOOK_METHODS = new Set([
   "setBlank",
   "setFormula",
   "getValue",
+  "getCellPhonetic",
+  "setCellPhonetic",
   "getLambdaText",
   "evaluateFormulaText",
+  "evaluateFormulaArray",
   "evaluateConditionalFormula",
   "recalc",
+  "recalcParallel",
   "partialRecalc",
   "setIterative",
   "calcMode",
   "setCalcMode",
+  "pinnedNow",
+  "setPinnedNow",
+  "clearPinnedNow",
   "excelProfileId",
   "setExcelProfileId",
+  "readDiagnostics",
+  "paginate",
   "insertRows",
   "deleteRows",
   "insertCols",
@@ -134,6 +154,11 @@ const WORKBOOK_METHODS = new Set([
   "setDefinedName",
   "tableCount",
   "tableAt",
+  "createTable",
+  "updateTable",
+  "removeTable",
+  "getSheetAutoFilterXml",
+  "setSheetAutoFilterXml",
   "passthroughCount",
   "passthroughAt",
   "pivotCount",
@@ -142,6 +167,7 @@ const WORKBOOK_METHODS = new Set([
   "pivotCacheIdAt",
   "pivotCacheCreate",
   "pivotCacheRemove",
+  "pivotCacheSetWorksheetSource",
   "pivotCacheFieldCount",
   "pivotCacheFieldName",
   "pivotCacheFieldAdd",
@@ -189,6 +215,7 @@ const WORKBOOK_METHODS = new Set([
   "pivotDataFieldSet",
   "pivotFilterCount",
   "pivotFilterAdd",
+  "pivotFilterAt",
   "pivotFilterClear",
   "pivotFilterRemoveAt",
   "evaluateCfRange",
@@ -225,7 +252,9 @@ const WORKBOOK_METHODS = new Set([
   "cellStyleCount",
   "cellStyleXfCount",
   "getCellStyle",
+  "setCellStyle",
   "getCellStyleXf",
+  "addCellStyleXf",
   "getExternalLinks",
   "addMerge",
   "removeMerge",
@@ -233,9 +262,11 @@ const WORKBOOK_METHODS = new Set([
   "clearMerges",
   "getMerges",
   "getComment",
+  "getCommentResult",
   "getComments",
   "setComment",
   "addHyperlink",
+  "addHyperlinkRange",
   "removeHyperlink",
   "removeHyperlinkAt",
   "clearHyperlinks",
@@ -268,17 +299,23 @@ const READ_ONLY_METHODS = new Set([
   "sheetCount",
   "sheetName",
   "getValue",
+  "getCellPhonetic",
   "getLambdaText",
   "evaluateFormulaText",
+  "evaluateFormulaArray",
   "evaluateConditionalFormula",
   "calcMode",
+  "pinnedNow",
   "excelProfileId",
+  "readDiagnostics",
+  "paginate",
   "cellCount",
   "cellAt",
   "definedNameCount",
   "definedNameAt",
   "tableCount",
   "tableAt",
+  "getSheetAutoFilterXml",
   "passthroughCount",
   "passthroughAt",
   "pivotCount",
@@ -292,6 +329,7 @@ const READ_ONLY_METHODS = new Set([
   "pivotFieldCount",
   "pivotDataFieldCount",
   "pivotFilterCount",
+  "pivotFilterAt",
   "evaluateCfRange",
   "getSheetView",
   "getSheetProtection",
@@ -314,6 +352,7 @@ const READ_ONLY_METHODS = new Set([
   "getExternalLinks",
   "getMerges",
   "getComment",
+  "getCommentResult",
   "getComments",
   "getHyperlinks",
   "getValidations",
@@ -344,6 +383,7 @@ function publicInfo(session: WorkbookSession): SessionInfo {
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     dirty: session.dirty,
+    loadLosses: session.loadLosses,
   };
 }
 
@@ -379,8 +419,8 @@ function formulaMap(session: WorkbookSession, sheet: number): Map<string, string
   const map = new Map<string, string>();
   const count = session.workbook.cellCount(sheet);
   for (let idx = 0; idx < count; idx += 1) {
-    const cell = session.workbook.cellAt(sheet, idx);
-    if (cell.status.ok && cell.formula) {
+    const cell = readCell(session.workbook.cellAt(sheet, idx));
+    if (cell?.formula) {
       map.set(`${cell.row},${cell.col}`, cell.formula);
     }
   }
@@ -391,9 +431,9 @@ function formulaMap(session: WorkbookSession, sheet: number): Map<string, string
 function formulaAt(session: WorkbookSession, sheet: number, row: number, col: number): string {
   const count = session.workbook.cellCount(sheet);
   for (let idx = 0; idx < count; idx += 1) {
-    const cell = session.workbook.cellAt(sheet, idx);
-    if (cell.status.ok && cell.row === row && cell.col === col) {
-      return cell.formula ?? "";
+    const cell = readCell(session.workbook.cellAt(sheet, idx));
+    if (cell && cell.row === row && cell.col === col) {
+      return cell.formula;
     }
   }
   return "";
@@ -516,10 +556,12 @@ function stableCells(
   const limit = Math.max(0, Math.min(maxCells, count));
   const cells = [];
   for (let index = 0; index < limit; index += 1) {
-    const cell = session.workbook.cellAt(sheet, index);
-    assertStatus(cell.status, `read sheet ${sheet} cell ${index}`);
+    const cell = requireCell(
+      session.workbook.cellAt(sheet, index),
+      `read sheet ${sheet} cell ${index}`,
+    );
     const value = jsonCellValue(cell.value);
-    const formula = cell.formula ?? "";
+    const formula = cell.formula;
     const xfIndexResult = includeStyles
       ? (safeWorkbookCall(session, "getCellXfIndex", [sheet, cell.row, cell.col]) as {
           xfIndex?: number;
@@ -661,6 +703,9 @@ export async function openSession(
     createdAt,
     updatedAt: createdAt,
     dirty: false,
+    // Surface what the reader could not decode at open time: a workbook that
+    // lost parts or formulas on load would otherwise save back silently thinned.
+    loadLosses: inputPath ? readLosses(workbook) : undefined,
     workbook,
   };
   sessions.set(id, session);
@@ -713,8 +758,10 @@ export function findSessionCells(id: string, query: string, options: SearchOptio
     const name = sheetName(session, sheet);
     const count = session.workbook.cellCount(sheet);
     for (let index = 0; index < count; index += 1) {
-      const cell = session.workbook.cellAt(sheet, index);
-      assertStatus(cell.status, `read sheet ${sheet} cell ${index}`);
+      const cell = requireCell(
+        session.workbook.cellAt(sheet, index),
+        `read sheet ${sheet} cell ${index}`,
+      );
       const a1 = cellToA1(cell.row, cell.col);
       const addResult = (target: "text" | "formula", text: string) => {
         if (!matcher(text)) {
@@ -780,8 +827,10 @@ export function replaceSessionCells(id: string, query: string, options: ReplaceO
     const name = sheetName(session, sheet);
     const count = session.workbook.cellCount(sheet);
     for (let index = 0; index < count; index += 1) {
-      const cell = session.workbook.cellAt(sheet, index);
-      assertStatus(cell.status, `read sheet ${sheet} cell ${index}`);
+      const cell = requireCell(
+        session.workbook.cellAt(sheet, index),
+        `read sheet ${sheet} cell ${index}`,
+      );
       const a1 = cellToA1(cell.row, cell.col);
       const replaceOne = (target: "text" | "formula", text: string) => {
         if (!matcher(text)) {
@@ -1680,8 +1729,8 @@ function sheetUsedBounds(
   let maxRow = 0;
   let maxCol = 0;
   for (let idx = 0; idx < count; idx += 1) {
-    const cell = session.workbook.cellAt(sheet, idx);
-    if (!cell.status.ok) {
+    const cell = readCell(session.workbook.cellAt(sheet, idx));
+    if (!cell) {
       continue;
     }
     if (cell.row > maxRow) {
@@ -1866,11 +1915,17 @@ export async function saveSession(id: string, outputPath?: string) {
   if (!destination) {
     throw new Error("outputPath is required for a new workbook session");
   }
-  const bytes = await saveWorkbook(session.workbook, destination);
+  const saved = await saveWorkbook(session.workbook, destination);
   session.outputPath = destination;
   session.dirty = false;
   touch(session, false);
-  return { session: publicInfo(session), outputPath: destination, bytes };
+  return {
+    session: publicInfo(session),
+    outputPath: destination,
+    bytes: saved.bytes,
+    format: saved.format,
+    losses: saved.losses,
+  };
 }
 
 function requiredString(value: string | undefined, name: string): string {

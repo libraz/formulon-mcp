@@ -1,8 +1,8 @@
 # formulon-mcp
 
 MCP server for [Formulon](https://github.com/libraz/formulon). It uses the
-published npm package `@libraz/formulon@0.9.5` and exposes Excel-compatible
-formula and `.xlsx` workbook operations over stdio.
+published npm package `@libraz/formulon@0.10.0` and exposes Excel-compatible
+formula and `.xlsx` / `.xlsb` workbook operations over stdio.
 
 This is designed for agent use: open a workbook once, inspect it, mutate cells,
 recalculate, read ranges, save, and close the in-memory session.
@@ -104,7 +104,7 @@ npx -y github:libraz/formulon-mcp
 
 ## Development
 
-- Node.js 22 via Volta
+- Node.js 22 via mise
 - Yarn 4 with `nodeLinker: node-modules`
 - Biome 2 for format/lint
 - TypeScript 6
@@ -130,8 +130,9 @@ node ./dist/index.js
 - `formulon_eval_formula`: evaluates one Excel formula. With `sessionId`, it
   evaluates read-only against an open workbook, resolving references, defined
   names, and `ROW()`/`COLUMN()` anchored at the given cell.
-- `formulon_open_workbook`: creates a workbook session from an `.xlsx` path, or
-  creates a new default workbook.
+- `formulon_open_workbook`: creates a workbook session from an `.xlsx` / `.xlsb`
+  path, or creates a new default workbook. Anything the reader could not decode
+  is reported as `loadLosses` on the session.
 - `formulon_list_sessions`: lists open workbook sessions.
 - `formulon_close_workbook`: releases a session.
 - `formulon_inspect_session`: returns sheets, defined names, tables, and
@@ -170,11 +171,15 @@ node ./dist/index.js
 - `formulon_dimension_operation`: lists column-width / row-height overrides, or
   sets width/height, hidden, or outline level. Columns act on an inclusive
   `[first, last]` span; rows act on a single row index.
-- `formulon_save_session`: writes a session to `.xlsx`.
+- `formulon_save_session`: writes a session out. The container follows the
+  output extension — `.xlsb` writes XLSB, anything else XLSX — and whatever the
+  writer had to drop or downgrade is reported as `losses`.
 - `formulon_session_metadata`: reads function names or external links.
 - `formulon_merge_operation`: lists, adds, removes, or clears merged ranges.
 - `formulon_comment_operation`: lists, gets, sets, or removes cell comments.
-- `formulon_hyperlink_operation`: lists, adds, removes, or clears hyperlinks.
+- `formulon_hyperlink_operation`: lists, adds, removes, or clears hyperlinks. An
+  added link covers one cell, or the rectangle through `lastRow`/`lastCol`; pass
+  `location` (with an empty `target`) for an in-workbook destination.
 - `formulon_validation_operation`: lists, adds, removes, or clears data
   validations.
 - `formulon_conditional_format_operation`: lists, adds, removes, clears, or
@@ -185,8 +190,10 @@ node ./dist/index.js
   localized names.
 - `formulon_workbook_call`: allowlisted low-level access to the Formulon
   `Workbook` API for advanced features, including PivotTables, PivotCaches,
-  styles, merges, comments, hyperlinks, validations, conditional formatting,
-  dependency graph queries, function metadata, and spill info.
+  worksheet tables and their AutoFilter, styles, merges, comments, hyperlinks,
+  validations, conditional formatting, dependency graph queries, function
+  metadata, spill info, phonetic guides, print pagination, and the workbook
+  clock pin.
 - `formulon_inspect_workbook`: one-shot workbook summary from path.
 - `formulon_update_workbook`: one-shot load/create, mutate, recalc, save.
 
@@ -198,7 +205,9 @@ their `sheet` argument as well as a zero-based index.
 Cell values are returned as `{kind, value}` envelopes. Formula cells are
 recalculated when a session is opened, so the first read returns the computed
 value rather than a blank. Error cells include an `errorName` Excel literal
-(`#DIV/0!`, `#REF!`, `#NAME?`, …) beside the numeric `errorCode`. Cells whose
+(`#DIV/0!`, `#REF!`, `#NAME?`, `#SPILL!`, …) beside the numeric `errorCode`; the
+literal comes from the engine, so it covers every error kind the engine can
+produce. Cells whose
 number format is a date, currency, or percent carry a `numberFormat` code, a
 `formatKind`, and — for dates and percentages — a decoded `formatted` string
 (for example an ISO date), while `value` keeps the raw Excel serial / number.
@@ -279,6 +288,16 @@ Low-level API access:
 
 The low-level tool only dispatches methods explicitly allowlisted in
 `src/sessions.ts`. It does not evaluate arbitrary code.
+
+Two low-level calls are worth knowing about:
+
+- `setPinnedNow` (`[year, month, day, hour, minute, second]`) pins the workbook
+  clock, so `NOW()`, `TODAY()` and the pivot relative-period filters all agree
+  on one instant instead of each reading the host clock. The pin is model state:
+  it is not saved, and `clearPinnedNow` returns to the host clock.
+- `pivotCacheSetWorksheetSource` must be called on a PivotCache built through the
+  API before saving. A cache with no declared worksheet source produces a file
+  Excel offers to repair, so the writer rejects it.
 
 ## License
 

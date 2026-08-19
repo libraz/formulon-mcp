@@ -1,6 +1,6 @@
 {
   "name": "@libraz/formulon-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "MCP server for Formulon Excel-compatible formula and workbook evaluation",
   "license": "Apache-2.0",
   "author": "libraz",
@@ -13,7 +13,7 @@
     "url": "https://github.com/libraz/formulon-mcp/issues"
   },
   "type": "module",
-  "packageManager": "yarn@4.12.0",
+  "packageManager": "yarn@4.18.0",
   "bin": "./dist/index.js",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -38,23 +38,19 @@
     "prepare": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@libraz/formulon": "^0.9.5",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@libraz/formulon": "^0.10.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.2",
-    "@types/node": "^26.1.0",
-    "@vitest/coverage-v8": "^4.1.6",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.6"
+    "@biomejs/biome": "^2.5.9",
+    "@types/node": "^26.2.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   },
   "engines": {
     "node": ">=22"
-  },
-  "volta": {
-    "node": "22.15.0",
-    "yarn": "4.12.0"
   },
   "keywords": [
     "mcp",

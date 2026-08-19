@@ -31,6 +31,7 @@ import {
   setSessionRange,
   setSessionSheetView,
   traceSession,
+  WORKBOOK_METHODS,
 } from "../dist/sessions.js";
 
 const FORMULON_VERSION = createRequire(import.meta.url)("@libraz/formulon/package.json").version;
@@ -283,6 +284,152 @@ test("saves and reloads a workbook", async () => {
   }
 });
 
+test("names error codes outside the classic seven", async () => {
+  await openSession(undefined, "error-names");
+  try {
+    assert.equal(
+      callWorkbookMethod("error-names", "addMerge", [
+        0,
+        { firstRow: 0, firstCol: 0, lastRow: 0, lastCol: 1 },
+      ]).result.ok,
+      true,
+    );
+    const written = applySessionMutations(
+      "error-names",
+      [{ type: "formula", a1: "Sheet1!A1", formula: "=SEQUENCE(2)" }],
+      true,
+    );
+    assert.deepEqual(
+      written.errorCells.map((cell) => cell.errorName),
+      ["#SPILL!"],
+    );
+  } finally {
+    closeSession("error-names");
+  }
+});
+
+test("keeps the workbook method allowlist callable on the engine", async () => {
+  const module = await formulonModule();
+  const wb = module.Workbook.createDefault();
+  try {
+    const missing = Array.from(WORKBOOK_METHODS).filter((name) => typeof wb[name] !== "function");
+    assert.deepEqual(missing, []);
+  } finally {
+    wb.delete();
+  }
+});
+
+test("reports the written container and its loss counters", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-save-"));
+  await openSession(undefined, "save-diagnostics");
+  try {
+    applySessionMutations(
+      "save-diagnostics",
+      [{ type: "formula", a1: "Sheet1!A1", formula: "=SUM(1,2)" }],
+      true,
+    );
+    const xlsx = await saveSession("save-diagnostics", path.join(dir, "book.xlsx"));
+    assert.equal(xlsx.format, "xlsx");
+    assert.equal(xlsx.bytes > 0, true);
+    assert.equal(xlsx.losses, undefined);
+
+    const xlsb = await saveSession("save-diagnostics", path.join(dir, "book.xlsb"));
+    assert.equal(xlsb.format, "xlsb");
+    assert.equal(xlsb.bytes > 0, true);
+  } finally {
+    closeSession("save-diagnostics");
+  }
+
+  const reopened = await openSession(path.join(dir, "book.xlsb"), "save-diagnostics-reload");
+  try {
+    assert.equal(reopened.loadLosses, undefined);
+    const a1 = getSessionCell("save-diagnostics-reload", 0, 0, 0);
+    assert.equal(a1.value.value, 3);
+  } finally {
+    closeSession("save-diagnostics-reload");
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("pins the workbook clock so NOW and TODAY are reproducible", async () => {
+  await openSession(undefined, "clock");
+  try {
+    assert.equal(
+      callWorkbookMethod("clock", "setPinnedNow", [2026, 8, 18, 9, 30, 0]).result.ok,
+      true,
+    );
+    assert.deepEqual(callWorkbookMethod("clock", "pinnedNow", []).result, {
+      year: 2026,
+      month: 8,
+      day: 18,
+      hour: 9,
+      minute: 30,
+      second: 0,
+    });
+    applySessionMutations(
+      "clock",
+      [{ type: "formula", a1: "Sheet1!A1", formula: "=TODAY()" }],
+      true,
+    );
+    // Excel serial 25569 is 1970-01-01, the anchor the engine and Date share.
+    const expected = (Date.UTC(2026, 7, 18) - Date.UTC(1970, 0, 1)) / 86_400_000 + 25569;
+    assert.equal(getSessionCell("clock", 0, 0, 0).value.value, expected);
+
+    assert.equal(callWorkbookMethod("clock", "clearPinnedNow", []).result.ok, true);
+    assert.equal(callWorkbookMethod("clock", "pinnedNow", []).result, null);
+  } finally {
+    closeSession("clock");
+  }
+});
+
+test("creates, updates, and removes a worksheet table", async () => {
+  await openSession(undefined, "tables");
+  try {
+    setSessionRange(
+      "tables",
+      "Sheet1!A1",
+      [
+        ["item", "qty"],
+        ["pen", 2],
+      ],
+      0,
+      false,
+    );
+    const created = callWorkbookMethod("tables", "createTable", [
+      { sheetIndex: 0, ref: "A1:B2", name: "Items", columns: ["item", "qty"] },
+    ]);
+    assert.equal(created.result.status.ok, true);
+    assert.equal(callWorkbookMethod("tables", "tableCount", []).result, 1);
+    assert.equal(callWorkbookMethod("tables", "tableAt", [0]).result.ref, "A1:B2");
+
+    assert.equal(
+      callWorkbookMethod("tables", "updateTable", [0, { ref: "A1:B3" }]).result.ok,
+      true,
+    );
+    assert.equal(callWorkbookMethod("tables", "tableAt", [0]).result.ref, "A1:B3");
+    assert.equal(callWorkbookMethod("tables", "removeTable", [0]).result.ok, true);
+    assert.equal(callWorkbookMethod("tables", "tableCount", []).result, 0);
+  } finally {
+    closeSession("tables");
+  }
+});
+
+test("round-trips a cell phonetic guide", async () => {
+  await openSession(undefined, "phonetic");
+  try {
+    applySessionMutations("phonetic", [{ type: "text", a1: "Sheet1!A1", value: "山田" }], false);
+    assert.equal(
+      callWorkbookMethod("phonetic", "setCellPhonetic", [0, 0, 0, "ヤマダ"]).result.ok,
+      true,
+    );
+    const read = callWorkbookMethod("phonetic", "getCellPhonetic", [0, 0, 0]).result;
+    assert.equal(read.status.ok, true);
+    assert.equal(read.value, "ヤマダ");
+  } finally {
+    closeSession("phonetic");
+  }
+});
+
 test("supports workbook structure and metadata helpers", async () => {
   await openSession(undefined, "helpers");
   try {
@@ -391,10 +538,33 @@ test("supports layout, comments, hyperlinks, validations, and conditional format
         "https://example.com",
         "Example",
         "Example tooltip",
+        "",
       ]).result.ok,
       true,
     );
-    assert.equal(callWorkbookMethod("objects", "getHyperlinks", [0]).result.length, 1);
+    assert.equal(
+      callWorkbookMethod("objects", "addHyperlinkRange", [
+        0,
+        2,
+        0,
+        2,
+        3,
+        "",
+        "Jump",
+        "In-workbook",
+        "Sheet1!A1",
+      ]).result.ok,
+      true,
+    );
+    const hyperlinks = callWorkbookMethod("objects", "getHyperlinks", [0]).result;
+    assert.equal(hyperlinks.length, 2);
+    assert.deepEqual(
+      hyperlinks.map((link) => [link.row, link.col, link.lastRow, link.lastCol, link.location]),
+      [
+        [0, 1, 0, 1, ""],
+        [2, 0, 2, 3, "Sheet1!A1"],
+      ],
+    );
 
     assert.equal(
       callWorkbookMethod("objects", "addValidation", [
@@ -425,6 +595,8 @@ test("supports layout, comments, hyperlinks, validations, and conditional format
     assert.equal(callWorkbookMethod("objects", "getConditionalFormats", [0]).result.length, 1);
 
     assert.equal(callWorkbookMethod("objects", "removeHyperlink", [0, 0, 1]).result.ok, true);
+    assert.equal(callWorkbookMethod("objects", "getHyperlinks", [0]).result.length, 1);
+    assert.equal(callWorkbookMethod("objects", "clearHyperlinks", [0]).result.ok, true);
     assert.equal(callWorkbookMethod("objects", "getHyperlinks", [0]).result.length, 0);
     assert.equal(callWorkbookMethod("objects", "removeValidationAt", [0, 0]).result.ok, true);
     assert.equal(callWorkbookMethod("objects", "getValidations", [0]).result.length, 0);
@@ -457,6 +629,7 @@ test("round-trips comments, hyperlinks, validations, and conditional formats thr
         "https://example.com",
         "Example",
         "Example tooltip",
+        "",
       ]).result.ok,
       true,
     );
@@ -777,19 +950,11 @@ test("round-trips style, layout, and protection metadata through xlsx", async ()
   try {
     assert.equal(wb.getCellXfIndex(0, 0, 0).status.ok, true);
     const columns = wb.getSheetColumns(0);
-    try {
-      assert.equal(columns.status.ok, true);
-      assert.equal(columns.columns.get(0).width, 18);
-    } finally {
-      columns.columns.delete();
-    }
+    assert.equal(columns.status.ok, true);
+    assert.equal(columns.columns[0].width, 18);
     const rows = wb.getSheetRowOverrides(0);
-    try {
-      assert.equal(rows.status.ok, true);
-      assert.equal(rows.rows.get(0).height, 24);
-    } finally {
-      rows.rows.delete();
-    }
+    assert.equal(rows.status.ok, true);
+    assert.equal(rows.rows[0].height, 24);
     assert.equal(wb.getSheetProtection(0).protection.enabled, 1);
   } finally {
     wb.delete();

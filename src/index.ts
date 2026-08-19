@@ -260,12 +260,12 @@ server.registerTool(
   {
     title: "Open workbook session",
     description:
-      "Create an in-memory workbook session from an existing xlsx file or a new default workbook.",
+      "Create an in-memory workbook session from an existing .xlsx/.xlsb file or a new default workbook. Anything the reader could not decode is reported in the session's `loadLosses`.",
     inputSchema: {
       path: z
         .string()
         .optional()
-        .describe("Optional .xlsx path. Omit to create a new default workbook."),
+        .describe("Optional .xlsx or .xlsb path. Omit to create a new default workbook."),
       sessionId: z.string().optional().describe("Optional stable session id; defaults to a UUID."),
     },
   },
@@ -726,7 +726,8 @@ server.registerTool(
   "formulon_save_session",
   {
     title: "Save session workbook",
-    description: "Save an open workbook session to xlsx.",
+    description:
+      "Save an open workbook session. The container follows the output extension (.xlsb writes XLSB, anything else XLSX), and anything the writer had to drop or downgrade is reported in `losses`.",
     inputSchema: {
       sessionId: z.string(),
       outputPath: z.string().optional(),
@@ -843,19 +844,49 @@ server.registerTool(
   "formulon_hyperlink_operation",
   {
     title: "Hyperlink operation",
-    description: "List, add, remove, remove by index, or clear hyperlinks on a sheet.",
+    description:
+      "List, add, remove, remove by index, or clear hyperlinks on a sheet. An added link covers one cell, or the rectangle through lastRow/lastCol.",
     inputSchema: {
       ...sheetInputSchema,
       operation: z.enum(["list", "add", "remove", "removeAt", "clear"]),
       row: z.number().int().nonnegative().optional(),
       col: z.number().int().nonnegative().optional(),
+      lastRow: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("Inclusive last row of a multi-cell hyperlink; defaults to row."),
+      lastCol: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("Inclusive last column of a multi-cell hyperlink; defaults to col."),
       index: z.number().int().nonnegative().optional(),
-      target: z.string().optional(),
+      target: z.string().optional().describe("External URL; leave empty for an in-workbook link."),
       display: z.string().optional(),
       tooltip: z.string().optional(),
+      location: z
+        .string()
+        .optional()
+        .describe("In-workbook destination such as Sheet2!A1, used when target is empty."),
     },
   },
-  ({ sessionId, sheet, operation, row, col, index, target, display, tooltip }) => {
+  ({
+    sessionId,
+    sheet,
+    operation,
+    row,
+    col,
+    lastRow,
+    lastCol,
+    index,
+    target,
+    display,
+    tooltip,
+    location,
+  }) => {
     try {
       const sheetIndex = resolveSessionSheet(sessionId, sheet);
       if (operation === "list") {
@@ -876,6 +907,19 @@ server.registerTool(
       if (operation === "remove") {
         return methodOk(sessionId, "removeHyperlink", [sheetIndex, row, col]);
       }
+      if (lastRow !== undefined || lastCol !== undefined) {
+        return methodOk(sessionId, "addHyperlinkRange", [
+          sheetIndex,
+          row,
+          col,
+          lastRow ?? row,
+          lastCol ?? col,
+          target ?? "",
+          display ?? "",
+          tooltip ?? "",
+          location ?? "",
+        ]);
+      }
       return methodOk(sessionId, "addHyperlink", [
         sheetIndex,
         row,
@@ -883,6 +927,7 @@ server.registerTool(
         target ?? "",
         display ?? "",
         tooltip ?? "",
+        location ?? "",
       ]);
     } catch (error) {
       return fail(error);
@@ -1183,10 +1228,12 @@ server.registerTool(
       if (recalc) {
         assertStatus(workbook.recalc(), "recalc workbook");
       }
-      const bytes = await saveWorkbook(workbook, outputPath);
+      const saved = await saveWorkbook(workbook, outputPath);
       return ok({
         outputPath,
-        bytes,
+        bytes: saved.bytes,
+        format: saved.format,
+        losses: saved.losses,
         summary: workbookSummary(workbook, false, 0),
       });
     } catch (error) {

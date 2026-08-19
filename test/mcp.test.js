@@ -258,13 +258,37 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
       );
       assert.equal(hyperlinkAdd.result.ok, true);
 
+      const hyperlinkRangeAdd = textPayload(
+        await client.callTool({
+          name: "formulon_hyperlink_operation",
+          arguments: {
+            sessionId: "advanced-session",
+            operation: "add",
+            row: 3,
+            col: 0,
+            lastRow: 3,
+            lastCol: 2,
+            display: "Jump",
+            location: "Sheet1!A1",
+          },
+        }),
+      );
+      assert.equal(hyperlinkRangeAdd.result.ok, true);
+
       const hyperlinks = textPayload(
         await client.callTool({
           name: "formulon_hyperlink_operation",
           arguments: { sessionId: "advanced-session", operation: "list" },
         }),
       );
-      assert.equal(hyperlinks.result.length, 1);
+      assert.equal(hyperlinks.result.length, 2);
+      assert.deepEqual(
+        hyperlinks.result.map((link) => [link.row, link.lastRow, link.lastCol, link.location]),
+        [
+          [2, 2, 0, ""],
+          [3, 3, 2, "Sheet1!A1"],
+        ],
+      );
 
       const validationAdd = textPayload(
         await client.callTool({
