@@ -9,6 +9,7 @@ import { test } from "vitest";
 
 const require = createRequire(import.meta.url);
 const FORMULON_VERSION = require("@libraz/formulon/package.json").version;
+const SERVER_VERSION = require("../package.json").version;
 
 function textPayload(result) {
   assert.equal(result.content[0].type, "text");
@@ -541,5 +542,8 @@ test("MCP stdio reports tool errors without crashing the server", async () => {
 
     const version = textPayload(await client.callTool({ name: "formulon_version", arguments: {} }));
     assert.equal(version.version, FORMULON_VERSION);
+    // The server version is read from package.json at runtime and falls back to
+    // "0.0.0" on any failure, so a broken path would otherwise ship silently.
+    assert.equal(version.serverVersion, SERVER_VERSION);
   });
 });
