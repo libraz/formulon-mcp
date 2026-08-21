@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { cellToA1, normalizeRange, parseCellRef, parseRangeRef } from "./a1.js";
+import { buildDocument, type DocumentSpec } from "./document.js";
 import {
   applyMutation,
   assertStatus,
@@ -12,6 +13,7 @@ import {
   readLosses,
   requireCell,
   resultToJson,
+  SheetVisibility,
   type Status,
   saveWorkbook,
   statusToJson,
@@ -21,6 +23,8 @@ import {
   workbookSummary,
 } from "./formulon.js";
 import { describeNumberFormat, type NumberFormatInfo } from "./numfmt.js";
+import { type PrintSettingsInput, readPrintSettings, writePrintSettings } from "./print.js";
+import { applyRangeStyle, type StyleBase, type StyleInput } from "./styles.js";
 
 /** Excel's maximum zero-based row index (1,048,576 rows). */
 const MAX_ROW = 1_048_575;
@@ -142,6 +146,7 @@ export const WORKBOOK_METHODS = new Set([
   "recalcParallel",
   "partialRecalc",
   "setIterative",
+  "getIterative",
   "calcMode",
   "setCalcMode",
   "pinnedNow",
@@ -151,6 +156,34 @@ export const WORKBOOK_METHODS = new Set([
   "setExcelProfileId",
   "readDiagnostics",
   "paginate",
+  "getSheetPageSetup",
+  "setSheetPageSetup",
+  "getSheetPageSetupXml",
+  "setSheetPageSetupXml",
+  "getSheetPageMargins",
+  "setSheetPageMargins",
+  "getSheetPageMarginsXml",
+  "setSheetPageMarginsXml",
+  "getSheetPrintOptionsXml",
+  "setSheetPrintOptions",
+  "setSheetPrintOptionsXml",
+  "getSheetHeaderFooterXml",
+  "setSheetHeaderFooter",
+  "setSheetHeaderFooterXml",
+  "getSheetSheetPrXml",
+  "setSheetSheetPrXml",
+  "setSheetFitToPage",
+  "getSheetPrintArea",
+  "setSheetPrintArea",
+  "getSheetPrintTitles",
+  "setSheetPrintTitles",
+  "getSheetRowBreaks",
+  "getSheetColBreaks",
+  "addSheetRowBreak",
+  "addSheetColBreak",
+  "removeSheetRowBreak",
+  "removeSheetColBreak",
+  "clearSheetBreaks",
   "insertRows",
   "deleteRows",
   "insertCols",
@@ -213,6 +246,7 @@ export const WORKBOOK_METHODS = new Set([
   "pivotFieldAddAggregation",
   "pivotFieldClearAggregations",
   "pivotFieldAddItem",
+  "pivotFieldAddItemAt",
   "pivotFieldClearItems",
   "pivotFieldSetItemVisible",
   "pivotFieldAddSubtotalFn",
@@ -236,6 +270,7 @@ export const WORKBOOK_METHODS = new Set([
   "setSheetZoom",
   "setSheetFreeze",
   "setSheetTabHidden",
+  "setSheetVisibility",
   "setSheetTabSelected",
   "setSheetShowGridLines",
   "setSheetShowRowColHeaders",
@@ -254,6 +289,7 @@ export const WORKBOOK_METHODS = new Set([
   "setRowOutline",
   "getCellXfIndex",
   "setCellXfIndex",
+  "setRangeXfIndex",
   "getCellXf",
   "getFont",
   "getFill",
@@ -327,10 +363,22 @@ const READ_ONLY_METHODS = new Set([
   "evaluateFormulaArray",
   "evaluateConditionalFormula",
   "calcMode",
+  "getIterative",
   "pinnedNow",
   "excelProfileId",
   "readDiagnostics",
   "paginate",
+  "getSheetPageSetup",
+  "getSheetPageSetupXml",
+  "getSheetPageMargins",
+  "getSheetPageMarginsXml",
+  "getSheetPrintOptionsXml",
+  "getSheetHeaderFooterXml",
+  "getSheetSheetPrXml",
+  "getSheetPrintArea",
+  "getSheetPrintTitles",
+  "getSheetRowBreaks",
+  "getSheetColBreaks",
   "cellCount",
   "cellAt",
   "definedNameCount",
@@ -1440,11 +1488,32 @@ export function editSessionStructure(
   return { session: publicInfo(session), sheet: sheetIndex, status: statusToJson(status) };
 }
 
-/** Updates sheet view settings such as zoom, frozen panes, and tab hidden state. */
+export type SheetVisibilityName = "visible" | "hidden" | "veryHidden";
+
+const VISIBILITY_CODES: Record<SheetVisibilityName, SheetVisibility> = {
+  visible: SheetVisibility.Visible,
+  hidden: SheetVisibility.Hidden,
+  veryHidden: SheetVisibility.VeryHidden,
+};
+
+/**
+ * Updates sheet view settings such as zoom, frozen panes, and tab visibility.
+ *
+ * `hidden` is the two-state view of `visibility`: it cannot state very-hidden,
+ * and `false` on a very-hidden sheet shows it. Pass `visibility` to reach the
+ * third state, which is how a workbook keeps a lookup or settings sheet out of
+ * Excel's "Unhide" dialog.
+ */
 export function setSessionSheetView(
   id: string,
   sheet: number | string | undefined,
-  options: { zoom?: number; freezeRows?: number; freezeCols?: number; hidden?: boolean },
+  options: {
+    zoom?: number;
+    freezeRows?: number;
+    freezeCols?: number;
+    hidden?: boolean;
+    visibility?: SheetVisibilityName;
+  },
 ) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
@@ -1466,6 +1535,14 @@ export function setSessionSheetView(
   if (options.hidden !== undefined) {
     const status = session.workbook.setSheetTabHidden(sheetIndex, options.hidden);
     assertStatus(status, "set sheet tab hidden");
+    statuses.push(statusToJson(status));
+  }
+  if (options.visibility !== undefined) {
+    const status = session.workbook.setSheetVisibility(
+      sheetIndex,
+      VISIBILITY_CODES[options.visibility],
+    );
+    assertStatus(status, "set sheet visibility");
     statuses.push(statusToJson(status));
   }
   touch(session, statuses.length > 0);
@@ -1947,6 +2024,112 @@ export function sessionDimension(
     operation,
     sheet: sheetIndex,
     status: statusToJson(status),
+  };
+}
+
+/**
+ * Lays out and writes a block-composed document, then reports where every block
+ * and named cell landed so the caller can refine it with the primitive tools.
+ */
+export function buildSessionDocument(
+  id: string,
+  spec: DocumentSpec,
+  sheet: number | string | undefined,
+) {
+  const session = getSession(id);
+  const anchor = parseCellRef(spec.start ?? "B2");
+  const sheetIndex = findSheetIndex(session.workbook, anchor.sheetName ?? sheet);
+  assertInGrid(anchor.row, anchor.col);
+  const document = buildDocument(
+    session.workbook,
+    sheetIndex,
+    { row: anchor.row, col: anchor.col },
+    spec,
+  );
+  touch(session, true);
+  return {
+    session: publicInfo(session),
+    sheet: sheetIndex,
+    sheetName: sheetName(session, sheetIndex),
+    ...document,
+  };
+}
+
+/**
+ * Reads or writes a sheet's print settings.
+ *
+ * A read also reports the page count the settings produce, so the effect of a
+ * write can be checked without saving and opening the file.
+ */
+export function sessionPrintSettings(
+  id: string,
+  sheet: number | string | undefined,
+  input?: PrintSettingsInput,
+) {
+  const session = getSession(id);
+  const sheetIndex = findSheetIndex(session.workbook, sheet);
+  const applied = input ? writePrintSettings(session.workbook, sheetIndex, input) : undefined;
+  touch(session, applied !== undefined);
+  return {
+    session: publicInfo(session),
+    sheet: sheetIndex,
+    sheetName: sheetName(session, sheetIndex),
+    applied,
+    settings: readPrintSettings(session.workbook, sheetIndex),
+  };
+}
+
+/**
+ * Applies a declarative style across an A1 range, materializing blank cells so
+ * an empty ruled box renders. Cells keep whatever the style did not state, so
+ * ruling a table does not undo the number format already on its amount column.
+ */
+export function styleSessionRange(
+  id: string,
+  ref: string,
+  style: StyleInput,
+  fallbackSheet: number | string | undefined,
+  base: StyleBase,
+) {
+  const session = getSession(id);
+  const range = normalizeRange(parseRangeRef(ref));
+  const sheetIndex = findSheetIndex(session.workbook, range.sheetName ?? fallbackSheet);
+  assertInGrid(range.end.row, range.end.col);
+  // Styling materializes every cell in the rectangle, so an over-wide range is
+  // refused rather than turned into a sheet of millions of styled blanks.
+  const cells = (range.end.row - range.start.row + 1) * (range.end.col - range.start.col + 1);
+  if (cells > MAX_RANGE_CELLS) {
+    throw new Error(
+      `range ${ref} spans ${cells} cells (limit ${MAX_RANGE_CELLS}); style a smaller range`,
+    );
+  }
+  const applied = applyRangeStyle(
+    session.workbook,
+    sheetIndex,
+    {
+      firstRow: range.start.row,
+      firstCol: range.start.col,
+      lastRow: range.end.row,
+      lastCol: range.end.col,
+    },
+    style,
+    base,
+  );
+  touch(session, true);
+  return {
+    session: publicInfo(session),
+    range: {
+      sheet: sheetIndex,
+      sheetName: sheetName(session, sheetIndex),
+      start: cellToA1(range.start.row, range.start.col),
+      end: cellToA1(range.end.row, range.end.col),
+    },
+    regions: applied.regions.map((region) => ({
+      range: rangeA1(region.firstRow, region.firstCol, region.lastRow, region.lastCol),
+      cellCount: region.cellCount,
+      baseXfIndex: region.baseXfIndex,
+      xfIndex: region.xfIndex,
+    })),
   };
 }
 

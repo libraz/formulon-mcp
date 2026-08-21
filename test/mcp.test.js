@@ -52,6 +52,9 @@ test("MCP stdio lists and calls core tools", async () => {
     assert.equal(names.includes("formulon_detect_regions"), true);
     assert.equal(names.includes("formulon_analyze_workbook"), true);
     assert.equal(names.includes("formulon_dimension_operation"), true);
+    assert.equal(names.includes("formulon_style_range"), true);
+    assert.equal(names.includes("formulon_print_settings"), true);
+    assert.equal(names.includes("formulon_build_document"), true);
     assert.equal(
       tools.tools.every((tool) => tool.inputSchema && typeof tool.inputSchema === "object"),
       true,
@@ -183,6 +186,233 @@ test("MCP stdio edits, reads, saves, and closes a workbook session", async () =>
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("MCP stdio builds a document from blocks in one call", async () => {
+  await withClient(async (client) => {
+    await client.callTool({
+      name: "formulon_open_workbook",
+      arguments: { sessionId: "blocks-session" },
+    });
+
+    try {
+      const built = textPayload(
+        await client.callTool({
+          name: "formulon_build_document",
+          arguments: {
+            sessionId: "blocks-session",
+            print: "a4-portrait-fit",
+            theme: { accent: "#1F4E79" },
+            blocks: [
+              { type: "title", text: "Invoice" },
+              { type: "spacer" },
+              { type: "text", name: "to", text: "Sample Co.", span: 2 },
+              {
+                type: "fields",
+                name: "meta",
+                align: "right",
+                sameRow: true,
+                items: [
+                  { label: "No.", value: "INV-1" },
+                  { label: "Date", value: "2026-08-22", format: "date" },
+                ],
+              },
+              { type: "spacer" },
+              {
+                type: "table",
+                columns: [
+                  { header: "Item", key: "name", width: 30 },
+                  { header: "Qty", key: "qty", format: "number", align: "right" },
+                  { header: "Unit", key: "unit", format: "number", align: "right" },
+                  { header: "Amount", formula: "={qty}*{unit}", format: "number", align: "right" },
+                ],
+                rows: [
+                  { name: "Design", qty: 3, unit: 120000 },
+                  { name: "Build", qty: 5, unit: 98000 },
+                ],
+              },
+              { type: "spacer" },
+              {
+                type: "summary",
+                items: [
+                  { label: "Subtotal", formula: "=SUM({table.Amount})", format: "number" },
+                  { label: "Tax", formula: "=ROUND({Subtotal}*0.1,0)", format: "number" },
+                  {
+                    label: "Total",
+                    formula: "={Subtotal}+{Tax}",
+                    format: "number",
+                    emphasis: true,
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      );
+
+      assert.equal(built.width, 4);
+      assert.equal(built.pageCount, 1);
+      assert.equal(built.names["table.Amount"], "E8:E9");
+      // A sameRow pair sits side by side rather than stacking.
+      assert.equal(built.names.to, "B4:C4");
+      assert.equal(built.names.meta, "D4:E5");
+
+      const total = textPayload(
+        await client.callTool({
+          name: "formulon_get_cell",
+          arguments: { sessionId: "blocks-session", a1: built.names.Total },
+        }),
+      );
+      assert.deepEqual(total.value, { kind: "number", value: 935000 });
+      assert.equal(total.formula, "=E11+E12");
+
+      // The returned name map is what makes the result refinable: styling a
+      // block afterwards needs no knowledge of where it landed.
+      const restyled = textPayload(
+        await client.callTool({
+          name: "formulon_style_range",
+          arguments: {
+            sessionId: "blocks-session",
+            range: built.names.Total,
+            style: { font: { size: 14 } },
+          },
+        }),
+      );
+      assert.equal(restyled.range.start, restyled.range.end);
+
+      const unknown = errorPayload(
+        await client.callTool({
+          name: "formulon_build_document",
+          arguments: {
+            sessionId: "blocks-session",
+            start: "H2",
+            blocks: [{ type: "summary", items: [{ label: "Total", formula: "=SUM({nowhere})" }] }],
+          },
+        }),
+      );
+      assert.match(unknown, /unknown reference \{nowhere\}/);
+    } finally {
+      await client.callTool({
+        name: "formulon_close_workbook",
+        arguments: { sessionId: "blocks-session" },
+      });
+    }
+  });
+});
+
+test("MCP stdio authors a styled, printable document", async () => {
+  await withClient(async (client) => {
+    await client.callTool({
+      name: "formulon_open_workbook",
+      arguments: { sessionId: "document-session" },
+    });
+
+    try {
+      await client.callTool({
+        name: "formulon_set_range",
+        arguments: {
+          sessionId: "document-session",
+          start: "B2",
+          values: [
+            ["Item", "Qty", "Unit", "Amount"],
+            ["Design", 3, 120000, { f: "=C3*D3" }],
+            ["Build", 5, 98000, { f: "=C4*D4" }],
+            ["Total", null, null, { f: "=SUM(E3:E4)" }],
+          ],
+        },
+      });
+
+      const ruled = textPayload(
+        await client.callTool({
+          name: "formulon_style_range",
+          arguments: {
+            sessionId: "document-session",
+            range: "B2:E5",
+            style: { border: { all: "thin", outline: { style: "medium", color: "#1F4E79" } } },
+          },
+        }),
+      );
+      // An outline splits the block into corners, edges, and interior.
+      assert.equal(ruled.regions.length, 9);
+
+      const header = textPayload(
+        await client.callTool({
+          name: "formulon_style_range",
+          arguments: {
+            sessionId: "document-session",
+            range: "B2:E2",
+            style: {
+              font: { bold: true, color: "#FFFFFF" },
+              fill: { color: "#1F4E79" },
+              align: { horizontal: "center" },
+            },
+          },
+        }),
+      );
+      assert.equal(header.range.start, "B2");
+      assert.equal(header.range.end, "E2");
+
+      const amounts = textPayload(
+        await client.callTool({
+          name: "formulon_style_range",
+          arguments: {
+            sessionId: "document-session",
+            range: "E3:E5",
+            style: { numberFormat: '"¥"#,##0' },
+          },
+        }),
+      );
+      assert.ok(amounts.regions.length >= 1);
+
+      const printed = textPayload(
+        await client.callTool({
+          name: "formulon_print_settings",
+          arguments: {
+            sessionId: "document-session",
+            pageSetup: { orientation: "portrait", paperSize: 9, fitToPage: true, fitToWidth: 1 },
+            margins: { left: 0.6, right: 0.6 },
+            printArea: "B2:E20",
+            printTitles: { repeatRows: "2:2" },
+            headerFooter: { oddFooter: "&C&P / &N" },
+          },
+        }),
+      );
+      assert.equal(printed.settings.pageSetup.orientation, "portrait");
+      assert.equal(printed.settings.printArea, "B2:E20");
+      assert.equal(printed.settings.printTitles.repeatRows, "2:2");
+      assert.match(
+        printed.settings.headerFooterXml,
+        /<oddFooter>&amp;C&amp;P \/ &amp;N<\/oddFooter>/,
+      );
+
+      const read = textPayload(
+        await client.callTool({
+          name: "formulon_print_settings",
+          arguments: { sessionId: "document-session" },
+        }),
+      );
+      assert.equal(read.applied, undefined);
+      assert.equal(read.settings.printArea, "B2:E20");
+      assert.ok(read.settings.pageCount >= 1);
+
+      const badStyle = errorPayload(
+        await client.callTool({
+          name: "formulon_style_range",
+          arguments: {
+            sessionId: "document-session",
+            range: "B2",
+            style: { border: { all: "hairline" } },
+          },
+        }),
+      );
+      assert.match(badStyle, /unknown border style: hairline/);
+    } finally {
+      await client.callTool({
+        name: "formulon_close_workbook",
+        arguments: { sessionId: "document-session" },
+      });
+    }
+  });
 });
 
 test("MCP stdio exposes advanced dedicated workbook tools", async () => {

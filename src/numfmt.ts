@@ -97,6 +97,33 @@ export function excelSerialToDate(serial: number): Date {
   return new Date(Math.round((serial - 25569) * 86400 * 1000));
 }
 
+/**
+ * Converts an ISO-8601 date or date-time to an Excel serial, the inverse of
+ * {@link excelSerialToDate}. Returns `undefined` for anything that is not a
+ * date literal, so a caller can fall back to writing the value as text.
+ */
+export function isoToExcelSerial(value: string): number | undefined {
+  const match = value
+    .trim()
+    .match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (!match) {
+    return undefined;
+  }
+  const [, year, month, day, hour, minute, second] = match;
+  const utc = Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour ?? 0),
+    Number(minute ?? 0),
+    Number(second ?? 0),
+  );
+  if (Number.isNaN(utc)) {
+    return undefined;
+  }
+  return utc / 86400 / 1000 + 25569;
+}
+
 function pad2(value: number): string {
   return String(value).padStart(2, "0");
 }

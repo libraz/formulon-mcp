@@ -2,17 +2,40 @@ import { randomUUID } from "node:crypto";
 import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import createFormulon, {
+  type BorderRecord,
+  type BorderSide,
   type CellEntry,
+  type CellXf,
+  type FillRecord,
+  type FontRecord,
   type FormulonModule,
+  type HeaderFooterInput,
+  type PageMarginsInput,
+  type PageSetupInput,
+  type PrintOptionsInput,
   type ReadDiagnosticsResult,
   type SaveDiagnosticsResult,
+  SheetVisibility,
   type Status,
   type Value,
   type Workbook,
   WorkbookFormat,
 } from "@libraz/formulon";
 
-export type { Status, Workbook };
+export type {
+  BorderRecord,
+  BorderSide,
+  CellXf,
+  FillRecord,
+  FontRecord,
+  HeaderFooterInput,
+  PageMarginsInput,
+  PageSetupInput,
+  PrintOptionsInput,
+  Status,
+  Workbook,
+};
+export { SheetVisibility };
 
 export type CellMutation =
   | { type: "number"; sheet: number; row: number; col: number; value: number }

@@ -18,10 +18,12 @@ import {
   workbookSummary,
 } from "./formulon.js";
 import { runInit, runUninstall } from "./init.js";
+import { PRINT_PRESET_NAMES } from "./print.js";
 import {
   analyzeSessionWorkbook,
   applySessionMutations,
   applySheetOperation,
+  buildSessionDocument,
   callWorkbookMethod,
   closeSession,
   detectSessionRegions,
@@ -41,11 +43,14 @@ import {
   resolveSessionSheet,
   saveSession,
   sessionDimension,
+  sessionPrintSettings,
   setSessionDefinedName,
   setSessionRange,
   setSessionSheetView,
+  styleSessionRange,
   traceSession,
 } from "./sessions.js";
+import { STYLE_VOCABULARY } from "./styles.js";
 
 /** Single source of truth for the server version: package.json at runtime. */
 const PACKAGE_VERSION = ((): string => {
@@ -613,19 +618,33 @@ server.registerTool(
   "formulon_set_sheet_view",
   {
     title: "Set sheet view",
-    description: "Set sheet zoom, frozen panes, or tab hidden flag.",
+    description: "Set sheet zoom, frozen panes, or tab visibility.",
     inputSchema: {
       sessionId: z.string(),
       sheet: sheetRefSchema.optional().default(0),
       zoom: z.number().int().min(10).max(400).optional(),
       freezeRows: z.number().int().nonnegative().optional(),
       freezeCols: z.number().int().nonnegative().optional(),
-      hidden: z.boolean().optional(),
+      hidden: z.boolean().optional().describe("Two-state tab visibility; cannot state veryHidden."),
+      visibility: z
+        .enum(["visible", "hidden", "veryHidden"])
+        .optional()
+        .describe(
+          "Three-state tab visibility. Excel leaves a veryHidden sheet out of its Unhide dialog.",
+        ),
     },
   },
-  ({ sessionId, sheet, zoom, freezeRows, freezeCols, hidden }) => {
+  ({ sessionId, sheet, zoom, freezeRows, freezeCols, hidden, visibility }) => {
     try {
-      return ok(setSessionSheetView(sessionId, sheet, { zoom, freezeRows, freezeCols, hidden }));
+      return ok(
+        setSessionSheetView(sessionId, sheet, {
+          zoom,
+          freezeRows,
+          freezeCols,
+          hidden,
+          visibility,
+        }),
+      );
     } catch (error) {
       return fail(error);
     }
@@ -942,7 +961,8 @@ server.registerTool(
   "formulon_validation_operation",
   {
     title: "Validation operation",
-    description: "List, add, remove by index, or clear data validations on a sheet.",
+    description:
+      "List, add, remove by index, or clear data validations on a sheet. An omitted boolean field defaults to false, so a rule that should accept empty cells has to spell allowBlank: true; showDropDown is the only field that defaults to true.",
     inputSchema: {
       ...sheetInputSchema,
       operation: z.enum(["list", "add", "removeAt", "clear"]),
@@ -1121,6 +1141,375 @@ server.registerTool(
   },
 );
 
+const borderSideSchema = z
+  .union([
+    z.string(),
+    z.object({
+      style: z.string().optional(),
+      color: z.string().optional(),
+    }),
+  ])
+  .describe(
+    `Border style name (${STYLE_VOCABULARY.borderStyle.join(", ")}), or {style, color} with a #RRGGBB color.`,
+  );
+
+const styleSchema = z.object({
+  font: z
+    .object({
+      name: z.string().optional(),
+      size: z.number().positive().optional(),
+      bold: z.boolean().optional(),
+      italic: z.boolean().optional(),
+      strike: z.boolean().optional(),
+      underline: z.enum(STYLE_VOCABULARY.underline).optional(),
+      vertAlign: z.enum(STYLE_VOCABULARY.vertAlign).optional(),
+      color: z.string().optional().describe("#RRGGBB or #AARRGGBB."),
+    })
+    .optional(),
+  fill: z
+    .object({
+      color: z.string().optional().describe("Fill color as #RRGGBB; implies a solid pattern."),
+      bgColor: z.string().optional(),
+      pattern: z.enum(STYLE_VOCABULARY.fillPattern).optional(),
+    })
+    .optional(),
+  border: z
+    .object({
+      all: borderSideSchema.optional().describe("Rules every cell in the range on all four sides."),
+      outline: borderSideSchema.optional().describe("Draws a box around the range only."),
+      left: borderSideSchema.optional(),
+      right: borderSideSchema.optional(),
+      top: borderSideSchema.optional(),
+      bottom: borderSideSchema.optional(),
+    })
+    .optional(),
+  numberFormat: z
+    .string()
+    .optional()
+    .describe('Excel format code such as "#,##0" or "yyyy/mm/dd". Empty string means General.'),
+  align: z
+    .object({
+      horizontal: z.enum(STYLE_VOCABULARY.horizontalAlign).optional(),
+      vertical: z.enum(STYLE_VOCABULARY.verticalAlign).optional(),
+      wrapText: z.boolean().optional(),
+      indent: z.number().int().min(0).max(255).optional(),
+      textRotation: z.number().int().min(0).max(255).optional(),
+      shrinkToFit: z.boolean().optional(),
+    })
+    .optional(),
+});
+
+const cellLiteralSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+
+const formatFieldSchema = z
+  .string()
+  .describe(
+    "Excel format code, or one of the aliases date, datetime, time, number, decimal, percent. An ISO date string under a date format is stored as a real date, not text.",
+  );
+
+const documentBlockSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("title"),
+    text: z.string(),
+    name: z.string().optional(),
+    sameRow: z.boolean().optional(),
+    align: z.enum(["left", "center", "right"]).optional(),
+    size: z.number().positive().optional(),
+    bold: z.boolean().optional(),
+  }),
+  z.object({
+    type: z.literal("text"),
+    text: z.string(),
+    name: z.string().optional(),
+    sameRow: z.boolean().optional(),
+    align: z.enum(["left", "center", "right"]).optional(),
+    size: z.number().positive().optional(),
+    bold: z.boolean().optional(),
+    span: z.number().int().positive().optional(),
+    wrap: z.boolean().optional(),
+    rows: z.number().int().positive().optional(),
+  }),
+  z.object({
+    type: z.literal("fields"),
+    name: z.string().optional(),
+    sameRow: z.boolean().optional(),
+    align: z.enum(["left", "right"]).optional(),
+    labelSpan: z.number().int().positive().optional(),
+    valueSpan: z.number().int().positive().optional(),
+    rule: z.boolean().optional().describe("Rule each value cell underneath, like a paper form."),
+    items: z
+      .array(
+        z.object({
+          label: z.string(),
+          value: cellLiteralSchema.optional(),
+          formula: z.string().optional(),
+          format: formatFieldSchema.optional(),
+          name: z.string().optional(),
+        }),
+      )
+      .min(1),
+  }),
+  z.object({
+    type: z.literal("table"),
+    name: z.string().optional(),
+    sameRow: z.boolean().optional(),
+    bandColor: z.string().optional().describe("Fill applied to every other body row."),
+    rowCount: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe("Blank ruled rows when `rows` is omitted — a form to fill in."),
+    columns: z
+      .array(
+        z.object({
+          header: z.string(),
+          key: z.string().optional().describe("Name used in formulas; defaults to the header."),
+          formula: z
+            .string()
+            .optional()
+            .describe("Per-row formula; {key} binds to that column's cell in the same row."),
+          width: z.number().positive().optional(),
+          format: formatFieldSchema.optional(),
+          align: z.enum(["left", "center", "right"]).optional(),
+        }),
+      )
+      .min(1),
+    rows: z
+      .array(z.union([z.array(cellLiteralSchema), z.record(z.string(), cellLiteralSchema)]))
+      .optional()
+      .describe("Row objects keyed by column key/header, or positional arrays."),
+  }),
+  z.object({
+    type: z.literal("summary"),
+    name: z.string().optional(),
+    sameRow: z.boolean().optional(),
+    align: z.enum(["left", "right"]).optional(),
+    labelSpan: z.number().int().positive().optional(),
+    valueSpan: z.number().int().positive().optional(),
+    border: z.boolean().optional(),
+    items: z
+      .array(
+        z.object({
+          label: z.string(),
+          value: cellLiteralSchema.optional(),
+          formula: z.string().optional(),
+          format: formatFieldSchema.optional(),
+          emphasis: z.boolean().optional(),
+          name: z.string().optional(),
+        }),
+      )
+      .min(1),
+  }),
+  z.object({
+    type: z.literal("spacer"),
+    name: z.string().optional(),
+    sameRow: z.boolean().optional(),
+    rows: z.number().int().nonnegative().optional(),
+  }),
+]);
+
+server.registerTool(
+  "formulon_build_document",
+  {
+    title: "Build a document from blocks",
+    description:
+      'Lay out a document as a vertical stack of blocks — title, text, fields, table, summary, spacer — and write it in one call. Positions, ruling, number formats, column widths, merges and the print area are all resolved from the layout, so no row arithmetic is needed. Blocks reference each other by name: a table column registers as {table.<header>} over its body range, and a fields or summary item registers under its label, so "=SUM({table.Amount})" and "={Subtotal}+{Tax}" bind to the right cells once the layout is known. The response maps every block and name to A1 so the result can be refined with set_cells / style_range / print_settings. This tool carries no document semantics: labels, tax rules and totals are the caller\'s formulas.',
+    inputSchema: {
+      sessionId: z.string(),
+      sheet: sheetRefSchema
+        .optional()
+        .describe("Sheet used when `start` has no Sheet!-prefix; defaults to the first sheet."),
+      start: z
+        .string()
+        .default("B2")
+        .describe("Top-left anchor, for example Sheet1!B2. Defaults to B2, leaving a margin."),
+      width: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Document width in columns; defaults to the widest table's column count."),
+      blocks: z.array(documentBlockSchema).min(1),
+      theme: z
+        .object({
+          font: z.string().optional(),
+          size: z.number().positive().optional(),
+          accent: z
+            .string()
+            .optional()
+            .describe("Header-band fill as #RRGGBB. Omit for a plain ruled header."),
+          headerText: z.string().optional(),
+          border: z.string().optional().describe("Grid border style; defaults to thin."),
+          outline: z.string().optional().describe("Outer border style; defaults to medium."),
+        })
+        .optional(),
+      print: z
+        .enum(PRINT_PRESET_NAMES)
+        .optional()
+        .describe("Named page setup; also sets the print area to the document's extent."),
+      repeatTableHeader: z
+        .boolean()
+        .optional()
+        .describe("Repeat the first table's header row on every printed page. Defaults to true."),
+    },
+  },
+  ({ sessionId, sheet, ...spec }) => {
+    try {
+      return ok(
+        buildSessionDocument(sessionId, spec as Parameters<typeof buildSessionDocument>[1], sheet),
+      );
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.registerTool(
+  "formulon_style_range",
+  {
+    title: "Style a range",
+    description:
+      "Apply fonts, fills, borders, number formats, and alignment across an A1 range, materializing blank cells so an empty ruled box renders. Each property is a delta: cells keep whatever the style does not state, so ruling a table does not undo the number format already on its amount column. Style in passes — the grid over the whole table, then the header row, then a total cell.",
+    inputSchema: {
+      sessionId: z.string(),
+      range: z.string().describe("A1 range or single cell, for example Sheet1!B2:F20 or B2."),
+      sheet: sheetRefSchema
+        .optional()
+        .describe("Sheet used when range has no Sheet!-prefix; defaults to the first sheet."),
+      style: styleSchema,
+      baseOn: z
+        .enum(["existing", "default"])
+        .default("existing")
+        .describe(
+          "Start from the style already on the range's top-left cell, or from the workbook default.",
+        ),
+    },
+  },
+  ({ sessionId, range, sheet, style, baseOn }) => {
+    try {
+      return ok(styleSessionRange(sessionId, range, style, sheet, baseOn));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.registerTool(
+  "formulon_print_settings",
+  {
+    title: "Print settings",
+    description:
+      "Read or set a sheet's print settings: page setup, margins, print options, header/footer, print area, print titles, and manual page breaks. Omit every setting to read. Reads report the resulting pageCount, so a page layout can be checked without saving the file.",
+    inputSchema: {
+      ...sheetInputSchema,
+      pageSetup: z
+        .object({
+          orientation: z.enum(["default", "portrait", "landscape"]).optional(),
+          paperSize: z
+            .number()
+            .int()
+            .nonnegative()
+            .optional()
+            .describe("OOXML paper-size code: 9 = A4, 8 = A3, 11 = A5, 1 = Letter."),
+          scale: z.number().int().min(10).max(400).optional(),
+          fitToWidth: z.number().int().nonnegative().optional(),
+          fitToHeight: z.number().int().nonnegative().optional(),
+          fitToPage: z
+            .boolean()
+            .optional()
+            .describe(
+              "Selects fit-to-page mode; fitToWidth/fitToHeight state the target, so all three are needed to fit onto one page.",
+            ),
+        })
+        .optional(),
+      margins: z
+        .object({
+          left: z.number().nonnegative().optional(),
+          right: z.number().nonnegative().optional(),
+          top: z.number().nonnegative().optional(),
+          bottom: z.number().nonnegative().optional(),
+          header: z.number().nonnegative().optional(),
+          footer: z.number().nonnegative().optional(),
+        })
+        .optional()
+        .describe("Page margins in inches."),
+      printOptions: z
+        .object({
+          gridLines: z.boolean().optional(),
+          headings: z.boolean().optional(),
+          horizontalCentered: z.boolean().optional(),
+          verticalCentered: z.boolean().optional(),
+        })
+        .optional(),
+      headerFooter: z
+        .object({
+          oddHeader: z.string().optional(),
+          oddFooter: z.string().optional(),
+          evenHeader: z.string().optional(),
+          evenFooter: z.string().optional(),
+          firstHeader: z.string().optional(),
+          firstFooter: z.string().optional(),
+          differentOddEven: z.boolean().optional(),
+          differentFirst: z.boolean().optional(),
+          scaleWithDoc: z.boolean().optional(),
+          alignWithMargins: z.boolean().optional(),
+        })
+        .optional()
+        .describe(
+          'Section text uses Excel\'s own codes — &L/&C/&R pick the section, &P the page number, &N the page count, &D the date, and && a literal ampersand (for example \'&C&"MS Gothic"Invoice &P/&N\'). Each section is tri-state: omit to leave it, "" to clear it.',
+        ),
+      printArea: z
+        .string()
+        .optional()
+        .describe(
+          'Comma-separated A1 ranges, for example "A1:F40" or "A1:B10,D5:E20". Empty string removes the print area.',
+        ),
+      printTitles: z
+        .object({
+          repeatRows: z.string().optional().describe('Whole-row span such as "1:2".'),
+          repeatCols: z.string().optional().describe('Whole-column span such as "A:A".'),
+        })
+        .optional()
+        .describe("Rows and columns repeated on every printed page. Both empty removes them."),
+      rowBreaks: z
+        .array(z.number().int().nonnegative())
+        .optional()
+        .describe("Zero-based rows each manual break precedes. Replaces the sheet's breaks."),
+      colBreaks: z
+        .array(z.number().int().nonnegative())
+        .optional()
+        .describe("Zero-based columns each manual break precedes. Replaces the sheet's breaks."),
+      pageSetupXml: z.string().optional().describe("Raw <pageSetup> fragment; empty removes it."),
+      pageMarginsXml: z
+        .string()
+        .optional()
+        .describe("Raw <pageMargins> fragment; empty removes it."),
+      printOptionsXml: z
+        .string()
+        .optional()
+        .describe("Raw <printOptions> fragment; empty removes it."),
+      headerFooterXml: z
+        .string()
+        .optional()
+        .describe("Raw <headerFooter> fragment; empty removes it."),
+      sheetPrXml: z.string().optional().describe("Raw <sheetPr> fragment; empty removes it."),
+    },
+  },
+  ({ sessionId, sheet, ...settings }) => {
+    try {
+      const stated = Object.fromEntries(
+        Object.entries(settings).filter(([, value]) => value !== undefined),
+      );
+      return ok(
+        sessionPrintSettings(sessionId, sheet, Object.keys(stated).length > 0 ? stated : undefined),
+      );
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
 server.registerTool(
   "formulon_function_lookup",
   {
@@ -1160,7 +1549,7 @@ server.registerTool(
   {
     title: "Call Formulon Workbook method",
     description:
-      "Low-level allowlisted access to the Formulon Workbook API for advanced features: pivot tables, styles, merges, comments, hyperlinks, validations, conditional formats, dependency graph, spill info, and more.",
+      "Low-level allowlisted access to the Formulon Workbook API for advanced features: pivot tables, style tables, merges, comments, hyperlinks, validations, conditional formats, raw print-settings XML, dependency graph, spill info, and more.",
     inputSchema: {
       sessionId: z.string(),
       method: z
