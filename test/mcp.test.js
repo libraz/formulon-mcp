@@ -55,6 +55,7 @@ test("MCP stdio lists and calls core tools", async () => {
     assert.equal(names.includes("formulon_style_range"), true);
     assert.equal(names.includes("formulon_print_settings"), true);
     assert.equal(names.includes("formulon_build_document"), true);
+    assert.equal(names.includes("formulon_default_font"), true);
     assert.equal(
       tools.tools.every((tool) => tool.inputSchema && typeof tool.inputSchema === "object"),
       true,
@@ -308,6 +309,15 @@ test("MCP stdio authors a styled, printable document", async () => {
     });
 
     try {
+      const defaultFont = textPayload(
+        await client.callTool({
+          name: "formulon_default_font",
+          arguments: { sessionId: "document-session", font: { name: "Meiryo", size: 10 } },
+        }),
+      );
+      assert.equal(defaultFont.font.name, "Meiryo");
+      assert.equal(defaultFont.font.size, 10);
+
       await client.callTool({
         name: "formulon_set_range",
         arguments: {

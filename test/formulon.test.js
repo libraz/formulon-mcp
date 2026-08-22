@@ -490,6 +490,57 @@ test("round-trips a cell phonetic guide", async () => {
   }
 });
 
+test("round-trips phonetic guides span by span", async () => {
+  await openSession(undefined, "phonetic-runs");
+  try {
+    applySessionMutations(
+      "phonetic-runs",
+      [{ type: "text", a1: "Sheet1!A1", value: "山田太郎" }],
+      false,
+    );
+    const runs = [
+      { sb: 0, eb: 2, text: "ヤマダ" },
+      { sb: 2, eb: 4, text: "タロウ" },
+    ];
+    assert.equal(
+      callWorkbookMethod("phonetic-runs", "setCellPhoneticRuns", [0, 0, 0, runs]).result.ok,
+      true,
+    );
+    const read = callWorkbookMethod("phonetic-runs", "getCellPhoneticRuns", [0, 0, 0]).result;
+    assert.equal(read.status.ok, true);
+    assert.deepEqual(read.runs, runs);
+    // The flattening read concatenates the readings rather than reporting spans.
+    assert.equal(
+      callWorkbookMethod("phonetic-runs", "getCellPhonetic", [0, 0, 0]).result.value,
+      "ヤマダタロウ",
+    );
+
+    // Rendering is set apart from the readings, and setting it leaves them be.
+    assert.equal(
+      callWorkbookMethod("phonetic-runs", "setCellPhoneticProperties", [
+        0,
+        0,
+        0,
+        { fontId: 0, type: 2, alignment: 1 },
+      ]).result.ok,
+      true,
+    );
+    const properties = callWorkbookMethod(
+      "phonetic-runs",
+      "getCellPhoneticProperties",
+      [0, 0, 0],
+    ).result;
+    assert.equal(properties.type, 2);
+    assert.equal(properties.alignment, 1);
+    assert.deepEqual(
+      callWorkbookMethod("phonetic-runs", "getCellPhoneticRuns", [0, 0, 0]).result.runs,
+      runs,
+    );
+  } finally {
+    closeSession("phonetic-runs");
+  }
+});
+
 test("supports workbook structure and metadata helpers", async () => {
   await openSession(undefined, "helpers");
   try {

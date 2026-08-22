@@ -1,7 +1,7 @@
 # formulon-mcp
 
 MCP server for [Formulon](https://github.com/libraz/formulon). It uses the
-published npm package `@libraz/formulon@0.11.0` and exposes Excel-compatible
+published npm package `@libraz/formulon@0.11.1` and exposes Excel-compatible
 formula and `.xlsx` / `.xlsb` workbook operations over stdio.
 
 This is designed for agent use: open a workbook once, inspect it, mutate cells,
@@ -201,6 +201,10 @@ node ./dist/index.js
   OOXML ordinals. `border.all` rules every cell, `border.outline` boxes the
   range, and both together give a gridded table with a heavier frame. Blank
   cells are materialized so an empty ruled box renders.
+- `formulon_default_font`: reads or redeclares the workbook default font — the
+  one every cell that was never styled resolves to. A new workbook is seeded
+  with Excel's Calibri 11, so a Japanese document declares its own default once
+  here instead of styling every cell.
 - `formulon_print_settings`: reads or sets page setup, margins, print options,
   header/footer, print area, print titles, and manual page breaks. A read also
   reports the resulting `pageCount`, so a layout can be checked without saving
@@ -228,7 +232,8 @@ node ./dist/index.js
   worksheet tables and their AutoFilter, styles and differential formats,
   merges, comments, hyperlinks, validations, conditional formatting, sheet
   display flags such as gridlines and the page-layout view, dependency graph
-  queries, function metadata, spill info, phonetic guides, print pagination,
+  queries, function metadata, spill info, phonetic guides — whole-cell or span
+  by span, with the kana form and alignment they render in — print pagination,
   the raw print-settings XML fragments, and the workbook clock pin.
 - `formulon_inspect_workbook`: one-shot workbook summary from path.
 - `formulon_update_workbook`: one-shot load/create, mutate, recalc, save.
@@ -241,7 +246,10 @@ accept a sheet name in their `sheet` argument as well as a zero-based index.
 `style_range` treats each property as a delta: a cell keeps whatever the call
 does not state, so ruling a table does not undo the number format already on
 its amount column. Style a document in passes — the grid over the whole table
-first, then the header row, then a total cell.
+first, then the header row, then a total cell. Naming a typeface also cuts the
+font's theme link, because a theme-linked font is re-resolved from the theme
+rather than keeping the name it was given; `default_font` is the workbook-wide
+counterpart, reaching the cells no style names at all.
 
 `build_document` is the same idea one level up: reach for it first when writing
 a document from scratch, and use the primitives on the ranges it names when the

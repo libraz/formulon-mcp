@@ -42,6 +42,7 @@ import {
   replaceSessionCells,
   resolveSessionSheet,
   saveSession,
+  sessionDefaultFont,
   sessionDimension,
   sessionPrintSettings,
   setSessionDefinedName,
@@ -1153,19 +1154,19 @@ const borderSideSchema = z
     `Border style name (${STYLE_VOCABULARY.borderStyle.join(", ")}), or {style, color} with a #RRGGBB color.`,
   );
 
+const fontStyleSchema = z.object({
+  name: z.string().optional(),
+  size: z.number().positive().optional(),
+  bold: z.boolean().optional(),
+  italic: z.boolean().optional(),
+  strike: z.boolean().optional(),
+  underline: z.enum(STYLE_VOCABULARY.underline).optional(),
+  vertAlign: z.enum(STYLE_VOCABULARY.vertAlign).optional(),
+  color: z.string().optional().describe("#RRGGBB or #AARRGGBB."),
+});
+
 const styleSchema = z.object({
-  font: z
-    .object({
-      name: z.string().optional(),
-      size: z.number().positive().optional(),
-      bold: z.boolean().optional(),
-      italic: z.boolean().optional(),
-      strike: z.boolean().optional(),
-      underline: z.enum(STYLE_VOCABULARY.underline).optional(),
-      vertAlign: z.enum(STYLE_VOCABULARY.vertAlign).optional(),
-      color: z.string().optional().describe("#RRGGBB or #AARRGGBB."),
-    })
-    .optional(),
+  font: fontStyleSchema.optional(),
   fill: z
     .object({
       color: z.string().optional().describe("Fill color as #RRGGBB; implies a solid pattern."),
@@ -1389,6 +1390,28 @@ server.registerTool(
   ({ sessionId, range, sheet, style, baseOn }) => {
     try {
       return ok(styleSessionRange(sessionId, range, style, sheet, baseOn));
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.registerTool(
+  "formulon_default_font",
+  {
+    title: "Workbook default font",
+    description:
+      "Read or redeclare the workbook default font — the one every cell that was never styled resolves to. A new workbook is seeded with Excel's Calibri 11, which renders Japanese text in a fallback face, so a Japanese document should declare its own default once instead of styling every cell. Omit `font` to read. Stating a `name` also cuts the theme link a loaded workbook's base font carries, since a theme-linked font is re-resolved from the theme rather than keeping the name.",
+    inputSchema: {
+      sessionId: z.string(),
+      font: fontStyleSchema
+        .optional()
+        .describe("Properties to change; anything omitted keeps its current value. Omit to read."),
+    },
+  },
+  ({ sessionId, font }) => {
+    try {
+      return ok(sessionDefaultFont(sessionId, font));
     } catch (error) {
       return fail(error);
     }

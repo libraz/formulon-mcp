@@ -4,6 +4,7 @@ import {
   callWorkbookMethod,
   closeSession,
   openSession,
+  sessionDefaultFont,
   setSessionRange,
   styleSessionRange,
 } from "../dist/sessions.js";
@@ -207,6 +208,52 @@ test("names the accepted values when a style word is unknown", async () => {
     );
   } finally {
     closeSession("style-vocab");
+  }
+});
+
+test("redeclares the workbook default font in place", async () => {
+  await openSession(undefined, "default-font");
+  try {
+    const seeded = sessionDefaultFont("default-font");
+    assert.equal(seeded.font.name, "Calibri");
+    assert.equal(seeded.font.size, 11);
+    const seededCount = callWorkbookMethod("default-font", "fontCount", []).result.value;
+
+    const applied = sessionDefaultFont("default-font", { name: "Meiryo", size: 10 });
+    assert.equal(applied.font.name, "Meiryo");
+    assert.equal(applied.font.size, 10);
+    assert.equal(sessionDefaultFont("default-font").font.name, "Meiryo");
+    // The default occupies font 0, so redeclaring it overwrites the slot rather
+    // than appending a font every unstyled cell would still not resolve to.
+    assert.equal(callWorkbookMethod("default-font", "fontCount", []).result.value, seededCount);
+  } finally {
+    closeSession("default-font");
+  }
+});
+
+test("cuts a font's theme link when a typeface is named", async () => {
+  await openSession(undefined, "font-scheme");
+  try {
+    // A ja-JP workbook's base font is theme-linked, which makes Excel resolve
+    // the typeface from the theme and discard whatever name was written.
+    callWorkbookMethod("font-scheme", "setDefaultFont", [
+      { ...callWorkbookMethod("font-scheme", "getFont", [0]).result, scheme: 2 },
+    ]);
+    assert.equal(sessionDefaultFont("font-scheme").font.themeLink, "minor");
+
+    // Size alone leaves the link alone: only the typeface comes from the theme.
+    assert.equal(sessionDefaultFont("font-scheme", { size: 12 }).font.themeLink, "minor");
+    assert.equal(sessionDefaultFont("font-scheme", { name: "Meiryo" }).font.themeLink, "none");
+
+    setSessionRange("font-scheme", "A1", [["見出し"]], undefined, false);
+    styleSessionRange("font-scheme", "A1", { font: { bold: true } }, undefined, "existing");
+    const bolded = callWorkbookMethod("font-scheme", "getFont", [
+      cellXf("font-scheme", 0, 0, 0).fontIndex,
+    ]).result;
+    assert.equal(bolded.name, "Meiryo");
+    assert.equal(bolded.scheme, 0);
+  } finally {
+    closeSession("font-scheme");
   }
 });
 

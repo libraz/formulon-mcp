@@ -24,7 +24,14 @@ import {
 } from "./formulon.js";
 import { describeNumberFormat, type NumberFormatInfo } from "./numfmt.js";
 import { type PrintSettingsInput, readPrintSettings, writePrintSettings } from "./print.js";
-import { applyRangeStyle, type StyleBase, type StyleInput } from "./styles.js";
+import {
+  applyDefaultFont,
+  applyRangeStyle,
+  type FontStyleInput,
+  readDefaultFont,
+  type StyleBase,
+  type StyleInput,
+} from "./styles.js";
 
 /** Excel's maximum zero-based row index (1,048,576 rows). */
 const MAX_ROW = 1_048_575;
@@ -138,6 +145,10 @@ export const WORKBOOK_METHODS = new Set([
   "getValue",
   "getCellPhonetic",
   "setCellPhonetic",
+  "getCellPhoneticRuns",
+  "setCellPhoneticRuns",
+  "getCellPhoneticProperties",
+  "setCellPhoneticProperties",
   "getLambdaText",
   "evaluateFormulaText",
   "evaluateFormulaArray",
@@ -297,6 +308,8 @@ export const WORKBOOK_METHODS = new Set([
   "getNumFmt",
   "getDxf",
   "addFont",
+  "setFont",
+  "setDefaultFont",
   "addFill",
   "addBorder",
   "addNumFmt",
@@ -358,6 +371,8 @@ const READ_ONLY_METHODS = new Set([
   "sheetName",
   "getValue",
   "getCellPhonetic",
+  "getCellPhoneticRuns",
+  "getCellPhoneticProperties",
   "getLambdaText",
   "evaluateFormulaText",
   "evaluateFormulaArray",
@@ -2077,6 +2092,24 @@ export function sessionPrintSettings(
     applied,
     settings: readPrintSettings(session.workbook, sheetIndex),
   };
+}
+
+/**
+ * Reads the workbook default font, or redeclares it from the stated deltas.
+ *
+ * The default is font 0, which every cell that was never styled resolves to,
+ * so this is workbook-wide rather than a range operation: a new workbook is
+ * seeded with Excel's Calibri, and nothing else can say what a plain cell of
+ * Japanese text should be saved as.
+ */
+export function sessionDefaultFont(id: string, font?: FontStyleInput) {
+  const session = getSession(id);
+  if (font === undefined) {
+    return { session: publicInfo(session), font: readDefaultFont(session.workbook) };
+  }
+  const applied = applyDefaultFont(session.workbook, font);
+  touch(session, true);
+  return { session: publicInfo(session), font: applied };
 }
 
 /**

@@ -81,6 +81,9 @@ const HORIZONTAL_ALIGN = [
 /** OOXML `ST_VerticalAlignment`. */
 const VERTICAL_ALIGN = ["top", "center", "bottom", "justify", "distributed"] as const;
 
+/** OOXML `<scheme>` theme link, in the order the engine's ordinals follow. */
+const FONT_SCHEME = ["none", "major", "minor"] as const;
+
 export const STYLE_VOCABULARY = Object.freeze({
   underline: UNDERLINE,
   vertAlign: VERT_ALIGN_RUN,
@@ -110,6 +113,16 @@ export function parseColor(spec: string): number {
   }
   const value = Number.parseInt(hex, 16);
   return hex.length === 6 ? (value + 0xff000000) >>> 0 : value >>> 0;
+}
+
+/**
+ * Formats an AARRGGBB integer the way `parseColor` accepts it back: `#RRGGBB`
+ * for a fully opaque colour, `#AARRGGBB` when the alpha channel carries
+ * anything else.
+ */
+export function formatColor(argb: number): string {
+  const hex = (argb >>> 0).toString(16).padStart(8, "0").toUpperCase();
+  return hex.startsWith("FF") ? `#${hex.slice(2)}` : `#${hex}`;
 }
 
 /**
@@ -185,6 +198,12 @@ function applyFont(base: FontRecord, input: FontStyleInput): FontRecord {
   const font: FontRecord = { ...base, color: { ...base.color } };
   if (input.name !== undefined) {
     font.name = input.name;
+    // A `<scheme>` link tells Excel to take the typeface from the theme, which
+    // would re-resolve the name just stated as soon as the theme changes. The
+    // base font of a ja-JP workbook carries `minor`, so the link has to be cut
+    // rather than inherited — Excel drops the element the same way when a font
+    // is picked by name.
+    font.scheme = 0;
   }
   if (input.size !== undefined) {
     if (!(input.size > 0)) {
@@ -218,6 +237,51 @@ function applyFont(base: FontRecord, input: FontStyleInput): FontRecord {
     font.color = rgbColorSpec(argb);
   }
   return font;
+}
+
+/** Reports a font record in the vocabulary `FontStyleInput` accepts back. */
+export function describeFont(font: FontRecord) {
+  return {
+    name: font.name,
+    size: font.size,
+    bold: font.bold,
+    italic: font.italic,
+    strike: font.strike,
+    underline: UNDERLINE[font.underline] ?? font.underline,
+    vertAlign: VERT_ALIGN_RUN[font.vertAlign] ?? font.vertAlign,
+    color: formatColor(font.colorArgb),
+    // Reported because it decides whether `name` survives a theme change: a
+    // font linked to the theme is re-resolved from it rather than kept.
+    themeLink: FONT_SCHEME[font.scheme] ?? font.scheme,
+  };
+}
+
+/**
+ * The workbook default font: font 0, the record every unstyled cell resolves
+ * to. The style table always owns the slot, so it is set in place rather than
+ * appended — `addFont` can only add a font beside it.
+ */
+const DEFAULT_FONT_INDEX = 0;
+
+/** Reads the workbook default font. */
+export function readDefaultFont(wb: Workbook) {
+  const font = wb.getFont(DEFAULT_FONT_INDEX);
+  assertStatus(font.status, "read default font");
+  return describeFont(record(font));
+}
+
+/**
+ * Redeclares the workbook default font from the deltas in `input`, leaving
+ * every property the call does not state as it was. Every cell that was never
+ * styled follows, which is what a workbook needs when its text is Japanese and
+ * the seeded default is Excel's Calibri.
+ */
+export function applyDefaultFont(wb: Workbook, input: FontStyleInput) {
+  const base = wb.getFont(DEFAULT_FONT_INDEX);
+  assertStatus(base.status, "read default font");
+  const font = applyFont(record(base), input);
+  assertStatus(wb.setDefaultFont(font), "set default font");
+  return describeFont(font);
 }
 
 function applyFill(base: FillRecord, input: FillStyleInput): FillRecord {
