@@ -1,7 +1,7 @@
 # formulon-mcp
 
 MCP server for [Formulon](https://github.com/libraz/formulon). It uses the
-published npm package `@libraz/formulon@0.11.1` and exposes Excel-compatible
+published npm package `@libraz/formulon@0.12.0` and exposes Excel-compatible
 formula and `.xlsx` / `.xlsb` workbook operations over stdio.
 
 This is designed for agent use: open a workbook once, inspect it, mutate cells,
@@ -132,6 +132,13 @@ Run the server directly for local debugging:
 node ./dist/index.js
 ```
 
+`src/index.ts` starts the CLI and stdio server; tool registrations live in
+`src/server/`. Workbook session state and operations live in `src/session/`,
+with `src/sessions.ts` re-exporting their public API.
+Document layout, style resolution, and configuration setup live in
+`src/document/`, `src/styles/`, and `src/init/`; their original module paths
+remain public facades.
+
 ## Tools
 
 - `formulon_version`: returns the loaded Formulon engine version and the MCP
@@ -152,7 +159,8 @@ node ./dist/index.js
   error are reported back in `errorCells`.
 - `formulon_set_range`: writes a 2D block of values from an anchor cell; each
   element's JSON type picks the cell type, `{"f":"=…"}` writes a formula, and
-  `null` skips a cell. Much more compact than `set_cells` for tables.
+  `{blank: true}` clears a cell; `null` skips a cell. Much more compact than
+  `set_cells` for tables.
 - `formulon_sheet_operation`: adds, removes, renames, or moves sheets.
 - `formulon_set_defined_name`: adds, replaces, or removes defined names, either
   workbook-scoped or local to one sheet. Print settings such as
@@ -175,7 +183,9 @@ node ./dist/index.js
 - `formulon_analyze_workbook`: classifies workbook shape such as invoice, list,
   report, schedule, or form using deterministic features and evidence.
 - `formulon_get_cell`: reads one cell from a session or directly from a path,
-  including its formula text (empty for constants). Date/currency/percent cells
+  using A1 references or row/column indices and a sheet name or index. Provide
+  exactly one of `sessionId` and `path`. Results include formula text (empty
+  for constants). Date/currency/percent cells
   carry a decoded `formatted` string alongside the raw value.
 - `formulon_get_range`: reads an A1 rectangular range from a session as a sparse
   cell list — blanks omitted, clipped to the sheet's used range, and capped at
@@ -210,8 +220,10 @@ node ./dist/index.js
   reports the resulting `pageCount`, so a layout can be checked without saving
   the file.
 - `formulon_save_session`: writes a session out. The container follows the
-  output extension — `.xlsb` writes XLSB, anything else XLSX — and whatever the
-  writer had to drop or downgrade is reported as `losses`.
+  output extension, `.xlsx` or `.xlsb`; other extensions are rejected. Whatever
+  the writer had to drop or downgrade is reported as `losses`. A save with data
+  loss keeps the session dirty. Use XLSX for authored tables, pivots, print
+  settings and comments; XLSB can defer these features.
 - `formulon_session_metadata`: reads function names or external links.
 - `formulon_merge_operation`: lists, adds, removes, or clears merged ranges.
 - `formulon_comment_operation`: lists, gets, sets, or removes cell comments.
@@ -222,11 +234,33 @@ node ./dist/index.js
   validations. An omitted boolean field on a rule defaults to false, so a rule
   that should accept empty cells has to spell `allowBlank: true`.
 - `formulon_conditional_format_operation`: lists, adds, removes, clears, or
-  evaluates conditional formats.
+  evaluates conditional formats. Its input schema describes rule types,
+  thresholds, colors, icon floors and data-bar directions. Supply `todaySerial`
+  to evaluate time-period rules.
 - `formulon_trace`: reads precedents, dependents, or spill info. Results carry
   A1 references with sheet names, not raw indices.
-- `formulon_function_lookup`: lists functions and resolves function metadata or
-  localized names.
+- `formulon_function_lookup`: lists functions with their arity and availability,
+  and resolves localized names.
+- `formulon_workbook_api`: searches callable workbook methods and describes
+  their signatures and referenced input types from the installed engine.
+  Use this before constructing arguments for `formulon_workbook_call`.
+- `formulon_table_operation`: lists, creates, updates, or removes Excel
+  Structured Tables. Creation can infer column names from the header row;
+  listing returns the global index needed for updates and removal.
+- `formulon_create_pivot`: builds a PivotCache and PivotTable from a worksheet
+  range in one call, with named row, column, page, and value fields. Assign
+  every source column to a role; multiple aggregations of one value field
+  are supported. Save authored tables and pivots as XLSX.
+- `formulon_preview_range`: returns a PNG image of a worksheet range, plus
+  cell positions, font names, page breaks, and approximation warnings. Use it
+  after edits to compare the layout with a reference image.
+- `formulon_apply_layout`: applies ordered column sizes, row sizes, merges,
+  styles, and print settings in one batch. Sizes accept explicit physical
+  units, so a screenshot's dimensions can guide an editable worksheet layout.
+- `formulon_audit_formulas`: finds constants, missing formulas, and formula
+  patterns that differ from neighboring rows or columns. It also reports
+  formula error values. Results include nearby formulas and reasons for review;
+  the tool does not repair cells automatically.
 - `formulon_workbook_call`: allowlisted low-level access to the Formulon
   `Workbook` API for advanced features, including PivotTables, PivotCaches,
   worksheet tables and their AutoFilter, styles and differential formats,
@@ -269,6 +303,70 @@ The full cell style is available through `inspect_layout` with `includeStyles`.
 
 ## Agent Workflow
 
+For a screenshot of a form, choose a cell grid and reproduce its labels,
+values, formulas, merges, fonts, borders, and spacing. Use `apply_layout` for
+absolute placement, or `build_document` for stacked document blocks. Preview
+the range, compare it with the reference, and adjust sizes and styles before
+saving as XLSX.
+
+For example, pass this batch to `formulon_apply_layout`, then call
+`formulon_preview_range` with `{"sessionId":"work","range":"A1:D12"}`:
+
+```json
+{
+  "sessionId": "work",
+  "operations": [
+    {"type": "column", "first": 0, "last": 3, "size": 100, "unit": "px"},
+    {"type": "row", "first": 0, "size": 36, "unit": "px"},
+    {"type": "merge", "operation": "add", "range": "A1:D1"},
+    {"type": "style", "range": "A1:D1", "style": {"font": {"name": "Calibri", "size": 16, "bold": true}}},
+    {"type": "print", "settings": {"printArea": "A1:D12"}}
+  ]
+}
+```
+
+The preview is an approximation rendered by this MCP server. It uses installed
+system fonts; Excel may substitute a different font on another machine.
+Some number formats, theme colors, and text layout can differ. Page-break
+lines come from the engine's paginator, but the preview is a cell range rather
+than a printed page with margins, headers, and footers. Conditional formatting,
+embedded images, and charts are not rendered. Existing drawing parts can be
+preserved when reading and saving a workbook; Formulon 0.12 has no public API
+for inserting a new logo.
+
+Preview ranges are limited to 10,000 cells and 4,096 pixels per image edge.
+Formula audits accept up to 50,000 cells. Both tools enumerate the sheet's
+stored cells to obtain formula text and reject inventories over 1,000,000
+cells; choosing a smaller range does not bypass that inventory limit.
+
+For a calculation sheet, audit a table's body range, including its input columns.
+Completely blank rows and columns separate runs; including the inputs lets a
+missing formula be distinguished from a blank separator. The audit compares formulas
+relative to each cell, so `=B2*C2` and `=B3*C3` share a pattern. A constant or
+blank inside that run becomes a review candidate. Header and total rows,
+intentional overrides, and business rules still need judgment. A consistent
+formula can be wrong in every row; neighboring agreement does not prove its
+calculation is correct.
+Set `recalc: true` when current error values are needed; recalculation updates
+cached results and marks the session dirty. Without it, the audit reads the
+current cached values and formula text.
+
+Pass the following to `formulon_audit_formulas`:
+
+```json
+{
+  "sessionId": "work",
+  "range": "Data!B2:D200",
+  "direction": "vertical",
+  "window": 5,
+  "minPeers": 3
+}
+```
+
+For an API beyond the dedicated tools, call `formulon_workbook_api` with
+`{"operation":"describe","method":"createTable"}` to retrieve the installed
+signature and its input declarations before calling `formulon_workbook_call`.
+
 Open a new workbook:
 
 ```json
@@ -299,6 +397,38 @@ Read a range:
   "range": "Sheet1!A1:B1"
 }
 ```
+
+For a data list with headers in `Data!A1:C20`, create a Structured Table with
+`formulon_table_operation`:
+
+```json
+{
+  "sessionId": "work",
+  "operation": "create",
+  "range": "Data!A1:C20",
+  "name": "Sales",
+  "style": "TableStyleMedium2"
+}
+```
+
+For headers `Region`, `Product`, and `Amount`, summarize the list with
+`formulon_create_pivot`:
+
+```json
+{
+  "sessionId": "work",
+  "sourceRange": "Data!A1:C20",
+  "target": "Data!E1",
+  "name": "SalesByRegion",
+  "rows": ["Region"],
+  "columns": ["Product"],
+  "values": [{ "field": "Amount", "aggregation": "sum", "numberFormat": "#,##0" }]
+}
+```
+
+These operations author Excel metadata. The `table` block in `build_document`
+lays out cells and borders for a document. Save Structured Tables and pivots as
+`.xlsx`; `.xlsb` reports deferred features and retains the session's dirty flag.
 
 Search and replace:
 
@@ -456,9 +586,29 @@ Low-level API access:
 ```
 
 The low-level tool only dispatches methods explicitly allowlisted in
-`src/sessions.ts`. It does not evaluate arbitrary code.
+`src/session/workbook-call.ts`. It does not evaluate arbitrary code.
 
-Two low-level calls are worth knowing about:
+Successful accessor results retain the engine's status: numeric and string
+accessors return `{status, value}`, `pinnedNow` returns `{status, now}`, and
+list accessors return `{status, items}`. For example, `sheetCount` returns
+`result.value`, and `getMerges` returns `result.items`. The operation tools
+that dispatch workbook methods use the same result shapes, including function
+lookup and comment lookup (`{status, comment}`). An absent comment returns a
+`no comment at cell` error. Rejected engine calls return an MCP error instead
+of a successful response containing an empty/default value. High-level cell, range, metadata
+and dependency tools retain their domain-specific response shapes.
+
+`session.dirty` means the workbook may differ from its last save. An invoked
+low-level mutation marks it dirty even if the engine returns an error, because
+calculation can fail after partially changing cached values. Cell batches
+validate addresses and finite numeric values before writing; if an engine
+operation later fails, completed writes remain in the session and it stays
+dirty.
+
+The server uses Formulon's default single-threaded WASM build. Low-level
+`recalcParallel` evaluates serially and reports `workerThreadsStarted: 0`.
+
+Low-level calls are worth knowing about:
 
 - `setPinnedNow` (`[year, month, day, hour, minute, second]`) pins the workbook
   clock, so `NOW()`, `TODAY()` and the pivot relative-period filters all agree
@@ -467,6 +617,23 @@ Two low-level calls are worth knowing about:
 - `pivotCacheSetWorksheetSource` must be called on a PivotCache built through the
   API before saving. A cache with no declared worksheet source produces a file
   Excel offers to repair, so the writer rejects it.
+- `pivotSetRowFieldOrder` and `pivotSetColFieldOrder` set the grouped field
+  order. Assigning a field's axis alone does not populate that order; the
+  one-call `formulon_create_pivot` tool sets it automatically.
+- `pivotFieldSetDateGroup` takes
+  `[sheet, pivotIndex, fieldIndex, grouping, calendar, startYear, endYear, intervalDays, startSerial, endSerial]`.
+  Grouping `4` is Excel's Days grouping; use an interval of `7` for weekly
+  buckets, with `-1` for automatic start/end serial bounds. `startYear` and
+  `endYear` are ignored by Days grouping. The default interval is `1`. The
+  former Week grouping is removed.
+- Pivot field and data-field `numberFormat` values are decimal `numFmtId`
+  strings. Register custom format codes with `addNumFmt`, then pass
+  `String(result.numFmtId)`, or use a built-in id such as `"4"`. Format codes
+  passed directly are rejected.
+
+XLSB saves preserve conditional formatting, data validation and protection.
+Conditional-format icon floors and data-bar directions are available through
+the conditional-format operation tool and low-level workbook calls.
 
 ## License
 

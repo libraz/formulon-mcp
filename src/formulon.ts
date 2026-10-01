@@ -10,6 +10,8 @@ import createFormulon, {
   type FontRecord,
   type FormulonModule,
   type HeaderFooterInput,
+  type ListResult,
+  type NumberResult,
   type PageMarginsInput,
   type PageSetupInput,
   type PrintOptionsInput,
@@ -193,6 +195,19 @@ function isStatusLike(value: unknown): value is Status {
   );
 }
 
+function isStatusResult(value: unknown): value is { status: Status } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "status" in value &&
+    isStatusLike((value as { status: unknown }).status)
+  );
+}
+
+function isListResult(value: unknown): value is ListResult<unknown> {
+  return Array.isArray(value) && isStatusResult(value);
+}
+
 function isValueLike(value: unknown): value is Value {
   return (
     typeof value === "object" &&
@@ -207,6 +222,12 @@ function isValueLike(value: unknown): value is Value {
 
 /** Converts arbitrary Formulon return values into JSON-friendly data. */
 export function resultToJson(value: unknown): unknown {
+  if (isListResult(value)) {
+    return {
+      status: statusToJson(value.status),
+      items: value.map((item) => resultToJson(item)),
+    };
+  }
   if (isStatusLike(value)) {
     return statusToJson(value);
   }
@@ -225,6 +246,18 @@ export function resultToJson(value: unknown): unknown {
     );
   }
   return value;
+}
+
+/** Asserts a status-bearing numeric result and returns its plain number. */
+export function requireNumberResult(result: NumberResult<number>, action: string): number {
+  assertStatus(result.status, action);
+  return result.value;
+}
+
+/** Asserts a status-bearing list result and returns a plain mutable array. */
+export function requireListResult<T>(result: ListResult<T>, action: string): T[] {
+  assertStatus(result.status, action);
+  return Array.from(result);
 }
 
 /** Throws when a Formulon status is not ok. */
@@ -273,16 +306,20 @@ export async function createOrLoadWorkbook(filePath?: string): Promise<Workbook>
 
 /** Resolves either a zero-based sheet index or a sheet name to a zero-based sheet index. */
 export function findSheetIndex(wb: Workbook, sheet: number | string | undefined): number {
+  const sheetCount = requireNumberResult(wb.sheetCount(), "read sheet count");
   if (sheet === undefined) {
+    if (sheetCount === 0) {
+      throw new Error("workbook has no sheets");
+    }
     return 0;
   }
   if (typeof sheet === "number") {
-    if (!Number.isInteger(sheet) || sheet < 0 || sheet >= wb.sheetCount()) {
+    if (!Number.isInteger(sheet) || sheet < 0 || sheet >= sheetCount) {
       throw new Error(`sheet index out of bounds: ${sheet}`);
     }
     return sheet;
   }
-  for (let idx = 0; idx < wb.sheetCount(); idx += 1) {
+  for (let idx = 0; idx < sheetCount; idx += 1) {
     const name = wb.sheetName(idx);
     assertStatus(name.status, `read sheet ${idx} name`);
     if (name.value === sheet) {
@@ -301,10 +338,11 @@ export const WORKBOOK_SCOPE = -1;
 /** Builds a summary of workbook sheets, defined names, tables, and optionally sparse cells. */
 export function workbookSummary(wb: Workbook, includeCells: boolean, maxCells: number) {
   const sheets: SheetJson[] = [];
-  for (let sheet = 0; sheet < wb.sheetCount(); sheet += 1) {
+  const sheetCount = requireNumberResult(wb.sheetCount(), "read sheet count");
+  for (let sheet = 0; sheet < sheetCount; sheet += 1) {
     const name = wb.sheetName(sheet);
     assertStatus(name.status, `read sheet ${sheet} name`);
-    const cellCount = wb.cellCount(sheet);
+    const cellCount = requireNumberResult(wb.cellCount(sheet), `read sheet ${sheet} cell count`);
     const sheetJson: {
       index: number;
       name: string;
@@ -334,7 +372,8 @@ export function workbookSummary(wb: Workbook, includeCells: boolean, maxCells: n
   }
 
   const definedNames = [];
-  for (let idx = 0; idx < wb.definedNameCount(); idx += 1) {
+  const definedNameCount = requireNumberResult(wb.definedNameCount(), "read defined name count");
+  for (let idx = 0; idx < definedNameCount; idx += 1) {
     const entry = wb.definedNameAt(idx);
     assertStatus(entry.status, `read defined name ${idx}`);
     // Scope is reported because a sheet-local name such as `_xlnm.Print_Area`
@@ -348,10 +387,12 @@ export function workbookSummary(wb: Workbook, includeCells: boolean, maxCells: n
   }
 
   const tables = [];
-  for (let idx = 0; idx < wb.tableCount(); idx += 1) {
+  const tableCount = requireNumberResult(wb.tableCount(), "read table count");
+  for (let idx = 0; idx < tableCount; idx += 1) {
     const entry = wb.tableAt(idx);
     assertStatus(entry.status, `read table ${idx}`);
     tables.push({
+      index: idx,
       name: entry.name,
       displayName: entry.displayName,
       ref: entry.ref,
@@ -412,9 +453,14 @@ export function readLosses(wb: Workbook): LossCounters | undefined {
 
 /** Selects the container format Formulon writes from the output extension. */
 export function workbookFormatFor(outputPath: string): WorkbookFormat {
-  return path.extname(outputPath).toLowerCase() === ".xlsb"
-    ? WorkbookFormat.Xlsb
-    : WorkbookFormat.Xlsx;
+  const extension = path.extname(outputPath).toLowerCase();
+  if (extension === ".xlsx") {
+    return WorkbookFormat.Xlsx;
+  }
+  if (extension === ".xlsb") {
+    return WorkbookFormat.Xlsb;
+  }
+  throw new Error("outputPath must end with .xlsx or .xlsb");
 }
 
 export type SavedWorkbook = {

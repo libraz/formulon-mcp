@@ -3,40 +3,98 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { test } from "vitest";
+import { errorPayload, textPayload, withClient } from "./helpers/mcp.js";
 
 const require = createRequire(import.meta.url);
 const FORMULON_VERSION = require("@libraz/formulon/package.json").version;
 const SERVER_VERSION = require("../package.json").version;
 
-function textPayload(result) {
-  assert.equal(result.content[0].type, "text");
-  return JSON.parse(result.content[0].text);
-}
+test("MCP stdio preserves accessor results and surfaces engine failures", async () => {
+  await withClient(async (client) => {
+    await client.callTool({
+      name: "formulon_open_workbook",
+      arguments: { sessionId: "status-results" },
+    });
+    try {
+      const call = (method, args = []) =>
+        client.callTool({
+          name: "formulon_workbook_call",
+          arguments: { sessionId: "status-results", method, args },
+        });
 
-function errorPayload(result) {
-  assert.equal(result.isError, true);
-  assert.equal(result.content[0].type, "text");
-  return result.content[0].text;
-}
+      const count = textPayload(await call("cellCount", [0]));
+      assert.equal(count.result.status.ok, true);
+      assert.equal(count.result.value, 0);
+      const empty = textPayload(await call("getMerges", [0]));
+      assert.equal(empty.result.status.ok, true);
+      assert.deepEqual(empty.result.items, []);
+      const clock = textPayload(await call("pinnedNow"));
+      assert.equal(clock.result.status.ok, true);
+      assert.equal(clock.result.now, null);
 
-async function withClient(fn) {
-  const client = new Client({ name: "formulon-mcp-test", version: "0.1.0" });
-  const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: ["./dist/index.js"],
-    cwd: process.cwd(),
-    stderr: "pipe",
+      for (const [method, args] of [
+        ["cellCount", [9]],
+        ["getMerges", [9]],
+        ["getValue", [0, 1_048_576, 0]],
+        ["setNumber", [9, 0, 0, 1]],
+      ]) {
+        assert.match(errorPayload(await call(method, args)), /failed/i);
+      }
+
+      for (const operation of ["precedents", "dependents", "spillInfo"]) {
+        const invalidTrace = await client.callTool({
+          name: "formulon_trace",
+          arguments: {
+            sessionId: "status-results",
+            operation,
+            row: 1_048_576,
+            col: 0,
+          },
+        });
+        assert.match(errorPayload(invalidTrace), /failed|limits/i);
+      }
+
+      const names = textPayload(
+        await client.callTool({
+          name: "formulon_function_lookup",
+          arguments: { sessionId: "status-results", operation: "names" },
+        }),
+      );
+      assert.equal(names.result.status.ok, true);
+      assert.equal(names.result.items.includes("USDOLLAR"), true);
+      const localized = textPayload(
+        await client.callTool({
+          name: "formulon_function_lookup",
+          arguments: { sessionId: "status-results", operation: "localize", name: "SUM" },
+        }),
+      );
+      assert.equal(localized.result.status.ok, true);
+      assert.equal(localized.result.value, "SUM");
+
+      const absent = errorPayload(
+        await client.callTool({
+          name: "formulon_comment_operation",
+          arguments: { sessionId: "status-results", operation: "get", row: 0, col: 0 },
+        }),
+      );
+      assert.match(absent, /no comment at cell/);
+
+      const currency = textPayload(
+        await client.callTool({
+          name: "formulon_eval_formula",
+          arguments: { formula: "=USDOLLAR(-1234.5)" },
+        }),
+      );
+      assert.deepEqual(currency.value, { kind: "text", value: "($1,234.50)" });
+    } finally {
+      await client.callTool({
+        name: "formulon_close_workbook",
+        arguments: { sessionId: "status-results" },
+      });
+    }
   });
-  await client.connect(transport);
-  try {
-    return await fn(client);
-  } finally {
-    await client.close();
-  }
-}
+});
 
 test("MCP stdio lists and calls core tools", async () => {
   await withClient(async (client) => {
@@ -166,7 +224,8 @@ test("MCP stdio edits, reads, saves, and closes a workbook session", async () =>
           arguments: { sessionId: "mcp-session", method: "sheetCount", args: [] },
         }),
       );
-      assert.equal(sheetCall.result, 1);
+      assert.equal(sheetCall.result.status.ok, true);
+      assert.equal(sheetCall.result.value, 1);
 
       const saved = textPayload(
         await client.callTool({
@@ -415,7 +474,7 @@ test("MCP stdio authors a styled, printable document", async () => {
           },
         }),
       );
-      assert.match(badStyle, /unknown border style: hairline/);
+      assert.match(badStyle, /Input validation error.*style\.border\.all/);
     } finally {
       await client.callTool({
         name: "formulon_close_workbook",
@@ -451,7 +510,8 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "list" },
         }),
       );
-      assert.deepEqual(merges.result, [{ firstRow: 0, firstCol: 0, lastRow: 0, lastCol: 1 }]);
+      assert.equal(merges.result.status.ok, true);
+      assert.deepEqual(merges.result.items, [{ firstRow: 0, firstCol: 0, lastRow: 0, lastCol: 1 }]);
 
       const commentSet = textPayload(
         await client.callTool({
@@ -474,7 +534,8 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "get", row: 1, col: 0 },
         }),
       );
-      assert.deepEqual(comment.result, { author: "tester", text: "note" });
+      assert.equal(comment.result.status.ok, true);
+      assert.deepEqual(comment.result.comment, { author: "tester", text: "note" });
 
       const commentList = textPayload(
         await client.callTool({
@@ -482,7 +543,10 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "list" },
         }),
       );
-      assert.deepEqual(commentList.result, [{ row: 1, col: 0, author: "tester", text: "note" }]);
+      assert.equal(commentList.result.status.ok, true);
+      assert.deepEqual(commentList.result.items, [
+        { row: 1, col: 0, author: "tester", text: "note" },
+      ]);
 
       const hyperlinkAdd = textPayload(
         await client.callTool({
@@ -522,9 +586,15 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "list" },
         }),
       );
-      assert.equal(hyperlinks.result.length, 2);
+      assert.equal(hyperlinks.result.status.ok, true);
+      assert.equal(hyperlinks.result.items.length, 2);
       assert.deepEqual(
-        hyperlinks.result.map((link) => [link.row, link.lastRow, link.lastCol, link.location]),
+        hyperlinks.result.items.map((link) => [
+          link.row,
+          link.lastRow,
+          link.lastCol,
+          link.location,
+        ]),
         [
           [2, 2, 0, ""],
           [3, 3, 2, "Sheet1!A1"],
@@ -555,7 +625,8 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "list" },
         }),
       );
-      assert.equal(validations.result.length, 1);
+      assert.equal(validations.result.status.ok, true);
+      assert.equal(validations.result.items.length, 1);
 
       const cfAdd = textPayload(
         await client.callTool({
@@ -580,7 +651,8 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "list" },
         }),
       );
-      assert.equal(cfs.result.length, 1);
+      assert.equal(cfs.result.status.ok, true);
+      assert.equal(cfs.result.items.length, 1);
 
       await client.callTool({
         name: "formulon_set_cells",
@@ -736,7 +808,8 @@ test("MCP stdio supports dimensions and sheet-name references", async () => {
           arguments: { sessionId: "dim-session", sheet: "Data", operation: "list" },
         }),
       );
-      assert.equal(Array.isArray(merges.result), true);
+      assert.equal(merges.result.status.ok, true);
+      assert.equal(Array.isArray(merges.result.items), true);
 
       const badSheet = await client.callTool({
         name: "formulon_merge_operation",
