@@ -14,7 +14,9 @@
   },
   "type": "module",
   "packageManager": "yarn@4.18.0",
-  "bin": "./dist/index.js",
+  "bin": {
+    "formulon-mcp": "dist/index.js"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
