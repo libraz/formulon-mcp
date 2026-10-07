@@ -18,6 +18,7 @@ import {
   replaceSessionCells,
   saveSession,
   setSessionRange,
+  styleSessionRange,
 } from "../../dist/sessions.js";
 
 test("mutates cells, recalculates, and reads cells and ranges", async () => {
@@ -376,5 +377,83 @@ test("prevalidates non-finite numbers before writing any mutation", async () => 
     assert.equal(listSessions().find((session) => session.id === "finite-mutations")?.dirty, false);
   } finally {
     closeSession("finite-mutations");
+  }
+});
+
+test("reads a subrange of a large sheet with exact formulas", async () => {
+  await openSession(undefined, "range-large");
+  try {
+    const mutations = [];
+    for (let row = 1; row <= 2000; row += 1) {
+      mutations.push(
+        { type: "number", a1: `A${row}`, value: row },
+        { type: "formula", a1: `B${row}`, formula: `=A${row}*2` },
+      );
+    }
+    applySessionMutations("range-large", mutations, true);
+
+    const range = getSessionRange("range-large", "A1000:B1001", {
+      maxCells: 100,
+      recalc: false,
+      includeFormulas: true,
+    });
+    assert.deepEqual(
+      range.cells.map((cell) => [cell.a1, cell.formula]),
+      [
+        ["A1000", ""],
+        ["B1000", "=A1000*2"],
+        ["A1001", ""],
+        ["B1001", "=A1001*2"],
+      ],
+    );
+    assert.equal(getSessionCellByA1("range-large", "B1500").formula, "=A1500*2");
+
+    const capped = getSessionRange("range-large", "A1:B2000", {
+      maxCells: 3,
+      recalc: false,
+      includeFormulas: false,
+    });
+    assert.equal(capped.cellCount, 3);
+    assert.equal(capped.truncated, true);
+    const whole = getSessionRange("range-large", "A1:B2", {
+      maxCells: 4,
+      recalc: false,
+      includeFormulas: false,
+    });
+    assert.equal(whole.truncated, false);
+  } finally {
+    closeSession("range-large");
+  }
+});
+
+test("formatted numbers carry the engine display text", async () => {
+  await openSession(undefined, "range-text");
+  try {
+    setSessionRange("range-text", "A1", [[1234.5], [0.75], [45000], [7]], undefined, false);
+    styleSessionRange(
+      "range-text",
+      "A1:A1",
+      { numberFormat: '"¥"#,##0.00' },
+      undefined,
+      "existing",
+    );
+    styleSessionRange("range-text", "A2:A2", { numberFormat: "# ?/?" }, undefined, "existing");
+    styleSessionRange("range-text", "A3:A3", { numberFormat: "yyyy/mm/dd" }, undefined, "existing");
+
+    const range = getSessionRange("range-text", "A1:A4", {
+      maxCells: 10,
+      recalc: false,
+      includeFormulas: false,
+    });
+    assert.deepEqual(
+      range.cells.map((cell) => cell.text),
+      ["¥1,234.50", " 3/4", "2023/03/15", undefined],
+    );
+    assert.equal(range.cells[1].formatKind, undefined);
+    assert.equal(range.cells[2].formatted, "2023-03-15");
+    assert.equal(getSessionCellByA1("range-text", "A1").text, "¥1,234.50");
+    assert.equal(getSessionCellByA1("range-text", "A4").text, undefined);
+  } finally {
+    closeSession("range-text");
   }
 });

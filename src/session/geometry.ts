@@ -1,74 +1,44 @@
-import type { Workbook } from "../formulon.js";
-import { type ColumnMetrics, getColumnMetrics } from "../preview/geometry.js";
+import { assertStatus, GeometryMode, requireNumberResult, type Workbook } from "../formulon.js";
+import type { ColumnMetrics } from "../preview/geometry.js";
 
-const FALLBACK_FONT_NAME = "Calibri";
-const FALLBACK_FONT_SIZE = 11;
+/** Reads the engine's display width model (Normal font calibration) for one sheet. */
+export function resolveColumnMetrics(workbook: Workbook, sheet: number): ColumnMetrics {
+  const model = workbook.getWidthModel(sheet, GeometryMode.Display);
+  assertStatus(model.status, "read column width model");
+  return {
+    fontName: model.normalFontName,
+    fontSize: model.normalFontSize,
+    pointsPerChar: model.pointsPerChar,
+    paddingPt: model.paddingPt,
+    approximate: !model.calibrated,
+  };
+}
 
-function usableFont(value: unknown): value is { name: string; size: number } {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const font = value as { name?: unknown; size?: unknown };
-  return (
-    typeof font.name === "string" &&
-    font.name.length > 0 &&
-    typeof font.size === "number" &&
-    Number.isFinite(font.size) &&
-    font.size > 0
+/** Converts a stored Excel column width (character units) to display points. */
+export function columnCharsToPoints(workbook: Workbook, sheet: number, chars: number): number {
+  return requireNumberResult(
+    workbook.columnCharsToPt(sheet, GeometryMode.Display, chars),
+    "convert column width to points",
   );
 }
 
-function resultFont(workbook: Workbook, index: number): { name: string; size: number } | undefined {
-  try {
-    const result = workbook.getFont(index);
-    return result.status.ok && usableFont(result) ? result : undefined;
-  } catch {
-    return undefined;
+/** Converts display points to character units; widths at or below the cell padding are rejected. */
+export function columnPointsToChars(workbook: Workbook, sheet: number, points: number): number {
+  const chars = requireNumberResult(
+    workbook.columnPtToChars(sheet, GeometryMode.Display, points),
+    "convert column width to characters",
+  );
+  if (chars === 0 && points > 0) {
+    const padding = resolveColumnMetrics(workbook, sheet).paddingPt;
+    throw new Error(
+      `column width in points must exceed the ${padding}pt visible-column padding, or be exactly zero: ${points}`,
+    );
   }
-}
-
-/**
- * Resolves the font Excel uses for column character units.
- *
- * The named Normal style points to a cell-style XF, which in turn points to a
- * font.  A malformed or incomplete style table follows Formulon's pagination
- * behavior and falls back to font slot zero, then to Calibri 11's seeded
- * default.
- */
-export function resolveColumnMetrics(workbook: Workbook): ColumnMetrics {
-  let font: { name: string; size: number } | undefined;
-  try {
-    const count = workbook.cellStyleCount();
-    if (count.status.ok && Number.isInteger(count.value) && count.value >= 0) {
-      for (let index = 0; index < count.value; index += 1) {
-        const style = workbook.getCellStyle(index);
-        if (!style.status.ok || style.name !== "Normal") {
-          continue;
-        }
-        const xf = workbook.getCellStyleXf(style.xfId);
-        if (xf.status.ok && Number.isInteger(xf.fontIndex) && xf.fontIndex >= 0) {
-          font = resultFont(workbook, xf.fontIndex);
-        }
-        break;
-      }
-    }
-  } catch {
-    // The font-zero fallback below also handles an absent style table.
-  }
-  font ??= resultFont(workbook, 0);
-  if (!font) {
-    return {
-      ...getColumnMetrics(FALLBACK_FONT_NAME, FALLBACK_FONT_SIZE),
-      approximate: true,
-    };
-  }
-  return getColumnMetrics(font.name, font.size);
+  return chars;
 }
 
 export type { ColumnMetrics } from "../preview/geometry.js";
 export {
-  columnCharsToPoints,
-  columnPointsToChars,
   mmToPoints,
   pixelsToPoints,
   pointsToMm,

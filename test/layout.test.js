@@ -3,29 +3,41 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "vitest";
+import { GeometryMode } from "../dist/formulon.js";
+import { mmToPoints, pointsToMm, pointsToPixels } from "../dist/preview/geometry.js";
 import {
   columnCharsToPoints,
-  getColumnMetrics,
-  mmToPoints,
-  pointsToMm,
-  pointsToPixels,
-} from "../dist/preview/geometry.js";
+  columnPointsToChars,
+  resolveColumnMetrics,
+} from "../dist/session/geometry.js";
 import { applySessionLayout } from "../dist/session/layout.js";
 import {
   applySessionMutations,
   callWorkbookMethod,
   closeSession,
+  getSession,
   inspectSession,
   openSession,
   saveSession,
 } from "../dist/sessions.js";
 
-test("column geometry follows the sibling engine calibration", () => {
-  const metrics = getColumnMetrics("Calibri", 11);
-  assert.equal(metrics.approximate, false);
-  assert.equal(columnCharsToPoints(30, metrics), 161.25);
-  assert.equal(pointsToPixels(columnCharsToPoints(30, metrics)), 215);
-  assert.equal(pointsToMm(mmToPoints(25.4)), 25.4);
+test("column geometry follows the engine width model", async () => {
+  await openSession(undefined, "layout-geometry");
+  try {
+    const { workbook } = getSession("layout-geometry");
+    const metrics = resolveColumnMetrics(workbook, 0);
+    const model = workbook.getWidthModel(0, GeometryMode.Display);
+    assert.equal(metrics.approximate, !model.calibrated);
+    assert.equal(metrics.pointsPerChar, model.pointsPerChar);
+    const expected = workbook.columnCharsToPt(0, GeometryMode.Display, 30).value;
+    assert.equal(columnCharsToPoints(workbook, 0, 30), expected);
+    assert.ok(Math.abs(columnPointsToChars(workbook, 0, expected) - 30) < 1e-9);
+    assert.equal(columnPointsToChars(workbook, 0, 0), 0);
+    assert.throws(() => columnPointsToChars(workbook, 0, 1), /must exceed.*padding/);
+    assert.equal(pointsToMm(mmToPoints(25.4)), 25.4);
+  } finally {
+    closeSession("layout-geometry");
+  }
 });
 
 test("layout batches preserve operation order and report physical geometry", async () => {
@@ -48,7 +60,11 @@ test("layout batches preserve operation order and report physical geometry", asy
       { type: "merge", operation: "add", range: "A2:B2" },
     ]);
     assert.equal(result.operations.length, 6);
-    assert.equal(result.operations[0].displayGeometry.pixels, 215);
+    const { workbook } = getSession("layout-order");
+    assert.equal(
+      result.operations[0].displayGeometry.pixels,
+      pointsToPixels(workbook.columnCharsToPt(0, GeometryMode.Display, 30).value),
+    );
     assert.equal(result.operations[1].displayGeometry.pixels, 40);
     assert.equal(result.operations[5].range, "A2:B2");
 

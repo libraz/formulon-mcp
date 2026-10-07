@@ -1,12 +1,15 @@
 import {
   assertStatus,
   findSheetIndex,
+  GeometryMode,
   requireListResult,
+  requireNumberResult,
   resultToJson,
   SheetVisibility,
   type Status,
   statusToJson,
   WORKBOOK_SCOPE,
+  type Workbook,
 } from "../formulon.js";
 import { MAX_LAYOUT_COLUMN_WIDTH_CHARS, MAX_LAYOUT_ROW_HEIGHT_PT } from "../layout/types.js";
 import {
@@ -16,7 +19,6 @@ import {
   pixelsToPoints,
   pointsToMm,
   pointsToPixels,
-  resolveColumnMetrics,
 } from "./geometry.js";
 import {
   assertInGrid,
@@ -320,11 +322,7 @@ function displayGeometry(points: number): DisplayGeometry {
   };
 }
 
-function columnStoredSize(
-  size: number,
-  unit: DimensionUnit,
-  metrics: ReturnType<typeof resolveColumnMetrics>,
-) {
+function columnStoredSize(workbook: Workbook, sheet: number, size: number, unit: DimensionUnit) {
   if (!["chars", "pt", "px", "mm"].includes(unit)) {
     throw new Error("column size unit must be chars, pt, px, or mm");
   }
@@ -337,7 +335,7 @@ function columnStoredSize(
     return size;
   }
   const points = unit === "pt" ? size : unit === "px" ? pixelsToPoints(size) : mmToPoints(size);
-  const stored = columnPointsToChars(points, metrics);
+  const stored = columnPointsToChars(workbook, sheet, points);
   if (stored > MAX_LAYOUT_COLUMN_WIDTH_CHARS) {
     throw new Error(
       `column width exceeds the ${MAX_LAYOUT_COLUMN_WIDTH_CHARS}-character Excel limit: ${stored}`,
@@ -347,7 +345,7 @@ function columnStoredSize(
 }
 
 function dimensionList(
-  workbook: Parameters<typeof resolveColumnMetrics>[0],
+  workbook: Workbook,
   sheet: number,
   axis: DimensionAxis,
   includeGeometry: boolean,
@@ -355,13 +353,15 @@ function dimensionList(
   if (axis === "column") {
     const result = workbook.getSheetColumns(sheet);
     assertStatus(result.status, "list column dimensions");
-    const metrics = includeGeometry ? resolveColumnMetrics(workbook) : undefined;
     const columns = result.columns.map((column) => {
-      if (!(metrics && includeGeometry)) {
+      if (!includeGeometry) {
         return { ...column };
       }
-      const chars = column.hidden ? 0 : column.hasWidth ? column.width : 8.43;
-      return { ...column, displayGeometry: displayGeometry(columnCharsToPoints(chars, metrics)) };
+      const points = requireNumberResult(
+        workbook.getColumnWidthPt(sheet, column.first, GeometryMode.Display),
+        "read column width",
+      );
+      return { ...column, displayGeometry: displayGeometry(points) };
     });
     return { status: statusToJson(result.status), columns };
   }
@@ -371,7 +371,7 @@ function dimensionList(
     if (!includeGeometry) {
       return { ...row };
     }
-    const points = row.hidden ? 0 : row.height > 0 ? row.height : 102 / 7;
+    const points = requireNumberResult(workbook.getRowHeightPt(sheet, row.row), "read row height");
     return { ...row, displayGeometry: displayGeometry(points) };
   });
   return { status: statusToJson(result.status), rows };
@@ -418,7 +418,7 @@ export function sessionDimension(
     if (operation === "size") {
       const size = dimensionSize(params.size, "size");
       const unit = params.unit ?? "chars";
-      const storedSize = columnStoredSize(size, unit, resolveColumnMetrics(workbook));
+      const storedSize = columnStoredSize(workbook, sheetIndex, size, unit);
       touch(session, true);
       status = workbook.setColumnWidth(sheetIndex, first, last, storedSize);
       assertStatus(status, `${axis} ${operation}`);
@@ -431,9 +431,7 @@ export function sessionDimension(
         status: statusToJson(status),
         storedUnits: "chars",
         storedSize,
-        displayGeometry: displayGeometry(
-          columnCharsToPoints(storedSize, resolveColumnMetrics(workbook)),
-        ),
+        displayGeometry: displayGeometry(columnCharsToPoints(workbook, sheetIndex, storedSize)),
       };
     } else if (operation === "hidden") {
       const hidden = requiredBoolean(params.hidden);

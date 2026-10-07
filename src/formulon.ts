@@ -2,14 +2,22 @@ import { randomUUID } from "node:crypto";
 import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import createFormulon, {
+  AnchorEditAs,
+  AnchorKind,
   type BorderRecord,
   type BorderSide,
   type CellEntry,
   type CellXf,
+  ColorContext,
+  ColorResolution,
+  DisplayStatus,
+  DrawingObjectKind,
   type FillRecord,
   type FontRecord,
   type FormulonModule,
+  GeometryMode,
   type HeaderFooterInput,
+  ImageFormat,
   type ListResult,
   type NumberResult,
   type PageMarginsInput,
@@ -37,7 +45,17 @@ export type {
   Status,
   Workbook,
 };
-export { SheetVisibility };
+export {
+  AnchorEditAs,
+  AnchorKind,
+  ColorContext,
+  ColorResolution,
+  DisplayStatus,
+  DrawingObjectKind,
+  GeometryMode,
+  ImageFormat,
+  SheetVisibility,
+};
 
 export type CellMutation =
   | { type: "number"; sheet: number; row: number; col: number; value: number }

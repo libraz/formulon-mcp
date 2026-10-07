@@ -1,11 +1,12 @@
 import { writeFileSync } from "node:fs";
+import { ValueKind } from "@libraz/formulon";
 import { cellToA1, normalizeRange, parseRangeRef } from "../a1.js";
-import { assertStatus, findSheetIndex } from "../formulon.js";
+import { assertStatus, findSheetIndex, type Workbook } from "../formulon.js";
 import { pointsToPixels } from "../preview/geometry.js";
+import { readObjects } from "../preview/objects.js";
 import {
   BASE_WARNINGS,
   buildMetadataCells,
-  type CellAppearance,
   cellText,
   chooseRect,
   clipMerge,
@@ -14,7 +15,7 @@ import {
   intersects,
   type MergeRange,
   type Rect,
-  readMerges,
+  readMergesInRange,
   rectArea,
   styleFor,
   type WarningState,
@@ -25,7 +26,9 @@ import type {
   PreviewMetadata,
   PreviewModel,
   PreviewOptions,
+  PreviewPages,
   PreviewResult,
+  PreviewStyle,
 } from "../preview/types.js";
 import { resolveColumnMetrics } from "./geometry.js";
 import { assertInGrid } from "./shared.js";
@@ -35,6 +38,7 @@ const MAX_PREVIEW_CELLS = 10_000;
 const MAX_PREVIEW_DIMENSION = 4_096;
 const MAX_PREVIEW_PIXELS = 8_000_000;
 const MAX_SVG_BYTES = 4 * 1024 * 1024;
+const MAX_PAGE_RANGES = 50;
 
 function validateDimensions(
   logicalWidth: number,
@@ -80,6 +84,23 @@ function rangeCutsMerge(rect: Rect, merges: MergeRange[]): MergeRange | undefine
   return undefined;
 }
 
+function pageSummary(pagination: ReturnType<Workbook["paginate"]>): PreviewPages {
+  return {
+    count: pagination.pageCount,
+    scale: pagination.scale,
+    paperWidthPt: pagination.paper.widthPt,
+    paperHeightPt: pagination.paper.heightPt,
+    landscape: pagination.paper.landscape,
+    ranges: pagination.pages
+      .slice(0, MAX_PAGE_RANGES)
+      .map(
+        (page) =>
+          `${cellToA1(page.firstRow, page.firstCol)}:${cellToA1(page.lastRow, page.lastCol)}`,
+      ),
+    rangesTruncated: pagination.pages.length > MAX_PAGE_RANGES,
+  };
+}
+
 /** Reads one bounded range, builds SVG, and rasterizes it as a PNG. */
 export function previewSessionRange(id: string, options: PreviewOptions = {}): PreviewResult {
   const session = getSession(id);
@@ -110,10 +131,10 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
   assertStatus(sheetNameResult.status, "read preview sheet name");
 
   const warnings: WarningState = { values: new Set(BASE_WARNINGS), truncated: false };
-  const merges = readMerges(workbook, sheet);
-  const chosen = chooseRect(workbook, sheet, options.range, merges);
+  const chosen = chooseRect(workbook, sheet, options.range);
   assertInGrid(chosen.rect.firstRow, chosen.rect.firstCol);
   assertInGrid(chosen.rect.lastRow, chosen.rect.lastCol);
+  const merges = readMergesInRange(workbook, sheet, chosen.rect);
   if (options.range) {
     const cutMerge = rangeCutsMerge(chosen.rect, merges);
     if (cutMerge) {
@@ -127,8 +148,8 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
     throw new Error(`preview range spans ${area} cells (limit ${MAX_PREVIEW_CELLS})`);
   }
 
-  const metrics = resolveColumnMetrics(workbook);
-  const size = dimensions(workbook, sheet, chosen.rect, metrics, warnings);
+  const metrics = resolveColumnMetrics(workbook, sheet);
+  const size = dimensions(workbook, sheet, chosen.rect);
   const logicalWidth = size.columns.reduce((sum, value) => sum + value, 0);
   const logicalHeight = size.rows.reduce((sum, value) => sum + value, 0);
   if (logicalWidth <= 0 || logicalHeight <= 0) {
@@ -176,17 +197,18 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
     }
   }
 
-  const styleCache = new Map<number, CellAppearance>();
+  const styleCache = new Map<number, PreviewStyle>();
   const cells: PreviewCell[] = [];
   const fonts = new Set<string>();
   for (let row = chosen.rect.firstRow; row <= chosen.rect.lastRow; row += 1) {
     for (let col = chosen.rect.firstCol; col <= chosen.rect.lastCol; col += 1) {
-      const appearance = styleFor(workbook, sheet, row, col, metrics, warnings, styleCache);
+      const style = styleFor(workbook, sheet, row, col, metrics, warnings, styleCache);
       const value = workbook.getValue(sheet, row, col);
       assertStatus(value.status, `read preview cell ${cellToA1(row, col)}`);
-      const rendered = cellText(value.value, appearance, warnings);
+      const text =
+        value.value.kind === ValueKind.Blank ? "" : cellText(workbook, sheet, row, col, warnings);
       const formula = formulas.get(`${row},${col}`) ?? "";
-      fonts.add(appearance.style.fontFamily);
+      fonts.add(style.fontFamily);
       cells.push({
         row,
         col,
@@ -194,14 +216,15 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
         y: rowOffsets[row - chosen.rect.firstRow],
         width: size.columns[col - chosen.rect.firstCol],
         height: size.rows[row - chosen.rect.firstRow],
-        text: rendered.text,
+        text,
         formula,
-        numeric: rendered.numeric,
-        style: appearance.style,
+        numeric: value.value.kind === ValueKind.Number,
+        style,
         merge: mergeByCell.get(`${row},${col}`),
       });
     }
   }
+  const drawn = readObjects(workbook, sheet, chosen.rect, warnings);
   const model: PreviewModel = {
     firstRow: chosen.rect.firstRow,
     firstCol: chosen.rect.firstCol,
@@ -212,8 +235,8 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
     logicalUnit: "pt",
     columns: size.columns,
     rows: size.rows,
-    columnMetrics: metrics,
     cells,
+    objects: drawn.objects,
     rowBreaks: pagination.horizontalBreaks,
     colBreaks: pagination.verticalBreaks,
     showGridLines: options.showGridLines ?? false,
@@ -226,6 +249,7 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
   const png = renderPreviewPng(svg, scale);
   const renderedDimensions = pngDimensions(png);
   const metadataCells = buildMetadataCells(cells);
+  const pages = pageSummary(pagination);
   const warningList = Array.from(warnings.values);
   const metadata: PreviewMetadata = {
     sheet,
@@ -239,6 +263,8 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
     scale,
     fontList: Array.from(fonts),
     pageCount: pagination.pageCount,
+    pages,
+    objects: drawn.metadata,
     rowBreaks: pagination.horizontalBreaks,
     colBreaks: pagination.verticalBreaks,
     warnings: warningList,

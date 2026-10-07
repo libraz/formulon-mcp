@@ -12,12 +12,10 @@ import {
   assertInGrid,
   decodeNumberCell,
   formulaAt,
-  formulaMap,
   jsonCellValue,
-  MAX_RANGE_CELLS,
   type PrimitiveCellValue,
+  rectCells,
   sheetName,
-  sheetUsedBounds,
   type WorkbookOwner,
 } from "./shared.js";
 import { getSession, publicInfo, touch, type WorkbookSession } from "./state.js";
@@ -282,9 +280,9 @@ export type RangeReadOptions = {
 /**
  * Reads a rectangular A1 range from an open session as a sparse cell list.
  *
- * The requested rectangle is clipped to the sheet's used range, blank cells are
- * omitted, and materialization is capped at `maxCells` (with a `truncated`
- * flag) so an over-wide request cannot blow up the response or hang the server.
+ * Only populated cells are read, so a generous request costs in proportion to
+ * the data it covers; materialization is capped at `maxCells` (with a
+ * `truncated` flag) so an over-wide request cannot blow up the response.
  */
 export function getSessionRange(id: string, ref: string, options: RangeReadOptions) {
   const session = getSession(id);
@@ -298,47 +296,29 @@ export function getSessionRange(id: string, ref: string, options: RangeReadOptio
     assertStatus(session.workbook.recalc(), "recalc workbook");
   }
 
-  // Clip the requested rectangle to the sheet's used extent so a generous
-  // "A1:Z1000" request only scans cells that can actually hold data.
-  const used = sheetUsedBounds(session, sheetIndex);
-  const startRow = range.start.row;
-  const startCol = range.start.col;
-  const endRow = used ? Math.min(range.end.row, used.maxRow) : range.start.row - 1;
-  const endCol = used ? Math.min(range.end.col, used.maxCol) : range.start.col - 1;
-
-  const rectCells = (endRow - startRow + 1) * (endCol - startCol + 1);
-  if (rectCells > MAX_RANGE_CELLS) {
-    throw new Error(
-      `range ${ref} spans ${rectCells} cells (limit ${MAX_RANGE_CELLS}); read a smaller range or use inspect_layout for the used range`,
-    );
-  }
-
-  const formulas = options.includeFormulas ? formulaMap(session, sheetIndex) : undefined;
   const cells = [];
   let truncated = false;
-  for (let row = startRow; row <= endRow && !truncated; row += 1) {
-    for (let col = startCol; col <= endCol; col += 1) {
-      const result = session.workbook.getValue(sheetIndex, row, col);
-      assertStatus(result.status, `get cell ${cellToA1(row, col)}`);
-      const value = valueToJson(result.value) as PrimitiveCellValue;
-      const formula = formulas?.get(`${row},${col}`) ?? "";
-      // Skip cells that are both blank and formula-free to keep output sparse.
-      if (value.kind === "blank" && !formula) {
-        continue;
-      }
-      if (cells.length >= options.maxCells) {
-        truncated = true;
-        break;
-      }
-      cells.push({
-        a1: cellToA1(row, col),
-        row,
-        col,
-        value,
-        ...decodeNumberCell(session, sheetIndex, row, col, value),
-        ...(options.includeFormulas ? { formula } : {}),
-      });
+  const rect = {
+    firstRow: range.start.row,
+    lastRow: range.end.row,
+    firstCol: range.start.col,
+    lastCol: range.end.col,
+  };
+  // One extra cell is fetched so `truncated` is set only when more data exists.
+  for (const cell of rectCells(session, sheetIndex, rect, options.maxCells + 1)) {
+    if (cells.length >= options.maxCells) {
+      truncated = true;
+      break;
     }
+    const value = jsonCellValue(cell.value);
+    cells.push({
+      a1: cellToA1(cell.row, cell.col),
+      row: cell.row,
+      col: cell.col,
+      value,
+      ...decodeNumberCell(session, sheetIndex, cell.row, cell.col, value),
+      ...(options.includeFormulas ? { formula: cell.formula } : {}),
+    });
   }
   touch(session, false);
   return {

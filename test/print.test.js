@@ -119,3 +119,44 @@ test("sets the three-state sheet tab visibility", async () => {
     closeSession("print-visibility");
   }
 });
+
+test("reads the resolved page layout of a fit-to-width landscape sheet", async () => {
+  await openSession(undefined, "print-layout");
+  try {
+    const rows = [["Item", "Amount"]];
+    for (let row = 1; row <= 120; row += 1) {
+      rows.push([`Item ${row}`, row]);
+    }
+    setSessionRange("print-layout", "A1", rows, undefined, false);
+
+    const { settings } = sessionPrintSettings("print-layout", 0, {
+      pageSetup: {
+        orientation: "landscape",
+        paperSize: 9,
+        fitToPage: true,
+        fitToWidth: 1,
+        fitToHeight: 0,
+      },
+      printTitles: { repeatRows: "1:1" },
+      rowBreaks: [60],
+    });
+    const { layout } = settings;
+    assert.equal(layout.paper.landscape, true);
+    assert.equal(layout.paper.known, true);
+    assert.ok(layout.paper.widthPt > layout.paper.heightPt);
+    assert.equal(layout.pageOrder, "downThenOver");
+    assert.ok(layout.scale > 0 && layout.scale <= 1);
+    assert.ok(layout.marginsPt.left > 0);
+    assert.ok(layout.printable.width > 0);
+    assert.deepEqual(
+      layout.rowPageBreaks.filter((entry) => entry.manual).map((entry) => entry.index),
+      [60],
+    );
+    assert.ok(layout.pages.length >= 2);
+    assert.equal(layout.pages.length, settings.pageCount);
+    assert.equal(layout.pagesTruncated, false);
+    assert.match(layout.pages[0].ref, /^A1:B\d+$/);
+  } finally {
+    closeSession("print-layout");
+  }
+});

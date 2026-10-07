@@ -3,12 +3,7 @@ import { preflightLayout } from "../layout/preflight.js";
 import type { LayoutOperation, PreparedLayoutOperation } from "../layout/types.js";
 import { writePrintSettings } from "../print.js";
 import { applyRangeStyle } from "../styles.js";
-import {
-  columnCharsToPoints,
-  pointsToMm,
-  pointsToPixels,
-  resolveColumnMetrics,
-} from "./geometry.js";
+import { columnCharsToPoints, pointsToMm, pointsToPixels } from "./geometry.js";
 import { rangeA1, sheetName } from "./shared.js";
 import { getSession, publicInfo, touch } from "./state.js";
 
@@ -46,7 +41,6 @@ export function applySessionLayout(
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
   const prepared = preflightLayout(session.workbook, sheetIndex, operations);
-  const metrics = resolveColumnMetrics(session.workbook);
   const results: unknown[] = [];
 
   for (const operation of prepared) {
@@ -65,7 +59,9 @@ export function applySessionLayout(
         last: operation.last,
         storedUnits: "chars",
         storedSize: operation.storedSize,
-        displayGeometry: displayGeometry(columnCharsToPoints(operation.storedSize, metrics)),
+        displayGeometry: displayGeometry(
+          columnCharsToPoints(session.workbook, sheetIndex, operation.storedSize),
+        ),
       });
       continue;
     }

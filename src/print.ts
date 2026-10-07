@@ -9,6 +9,7 @@ import {
   statusToJson,
   type Workbook,
 } from "./formulon.js";
+import { rangeA1 } from "./session/shared.js";
 
 /**
  * Worksheet print settings: page setup, margins, print options, header/footer,
@@ -146,6 +147,13 @@ function orientationName(code: number): string {
   return ORIENTATION[code] ?? `unknown(${code})`;
 }
 
+/** Pages listed individually in a print-settings read; the count is always complete. */
+const MAX_REPORTED_PAGES = 50;
+
+function pageBreaks(indices: number[], manual: boolean[]) {
+  return indices.map((index, i) => ({ index, manual: manual[i] === true }));
+}
+
 /** Reads every print setting a sheet carries, plus the page count they produce. */
 export function readPrintSettings(wb: Workbook, sheet: number) {
   const pageSetup = wb.getSheetPageSetup(sheet);
@@ -178,6 +186,21 @@ export function readPrintSettings(wb: Workbook, sheet: number) {
     headerFooterXml: wb.getSheetHeaderFooterXml(sheet).xml,
     sheetPrXml: wb.getSheetSheetPrXml(sheet).xml,
     pageCount: pagination.pageCount,
+    // The layout the engine actually resolves: paper and margins in points.
+    layout: {
+      paper: pagination.paper,
+      marginsPt: pagination.margins,
+      printable: pagination.printable,
+      scale: pagination.scale,
+      pageOrder: pagination.pageOrder === 0 ? "downThenOver" : "overThenDown",
+      rowPageBreaks: pageBreaks(pagination.horizontalBreaks, pagination.horizontalBreakManual),
+      colPageBreaks: pageBreaks(pagination.verticalBreaks, pagination.verticalBreakManual),
+      pages: pagination.pages.slice(0, MAX_REPORTED_PAGES).map((page) => ({
+        ref: rangeA1(page.firstRow, page.firstCol, page.lastRow, page.lastCol),
+        ...(pagination.printArea.length > 1 ? { areaIndex: page.areaIndex } : {}),
+      })),
+      pagesTruncated: pagination.pages.length > MAX_REPORTED_PAGES,
+    },
   };
 }
 

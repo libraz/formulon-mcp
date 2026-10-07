@@ -1,8 +1,21 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { resolveSessionSheet, traceSession } from "../sessions.js";
+import { jsonText } from "../formulon.js";
+import {
+  getSessionImage,
+  insertSessionImage,
+  listSessionImages,
+  removeSessionImage,
+  resolveSessionSheet,
+  traceSession,
+} from "../sessions.js";
 import { conditionalFormatSchema, validationSchema } from "./object-schemas.js";
 import { fail, methodOk, ok, rangeSchema, sheetInputSchema } from "./shared.js";
+
+const imageLengthSchema = z.object({
+  size: z.number().finite().nonnegative(),
+  unit: z.enum(["pt", "px", "mm"]).optional().describe("Defaults to points."),
+});
 
 export function registerObjectTools(server: McpServer): void {
   server.registerTool(
@@ -290,6 +303,79 @@ export function registerObjectTools(server: McpServer): void {
           throw new Error("rule is required for add");
         }
         return methodOk(sessionId, "addConditionalFormat", [sheetIndex, rule]);
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "formulon_image_operation",
+    {
+      title: "Image operation",
+      description:
+        "List a sheet's drawing objects (pictures, shapes, charts) with A1 anchors and sizes, get a picture's bytes (returned as an image, optionally written to outputPath), insert a PNG/JPEG/GIF/BMP file anchored at a cell, or remove a picture. Insertion keeps existing drawings; an omitted width or height keeps the aspect ratio, and omitting both uses the pixel size at 96 DPI.",
+      inputSchema: {
+        ...sheetInputSchema,
+        operation: z.enum(["list", "get", "insert", "remove"]),
+        objectId: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Drawing object id from list; required for get and remove."),
+        path: z.string().optional().describe("Image file to insert; required for insert."),
+        anchor: z
+          .string()
+          .optional()
+          .describe("Top-left cell on the selected sheet, for example B2; required for insert."),
+        offsetX: imageLengthSchema.optional().describe("Offset from the anchor cell's left edge."),
+        offsetY: imageLengthSchema.optional().describe("Offset from the anchor cell's top edge."),
+        width: imageLengthSchema.optional(),
+        height: imageLengthSchema.optional(),
+        anchorKind: z
+          .enum(["oneCell", "twoCell"])
+          .default("oneCell")
+          .describe(
+            "oneCell keeps the size when rows/columns resize; twoCell stretches with them.",
+          ),
+        name: z.string().optional(),
+        description: z.string().optional().describe("Alternative text."),
+        outputPath: z.string().optional().describe("For get: write the image bytes to this path."),
+      },
+    },
+    ({ sessionId, sheet, operation, objectId, path, anchor, outputPath, ...placement }) => {
+      try {
+        if (operation === "list") {
+          return ok(listSessionImages(sessionId, sheet));
+        }
+        if (operation === "insert") {
+          if (path === undefined || anchor === undefined) {
+            throw new Error("path and anchor are required for insert");
+          }
+          return ok(insertSessionImage(sessionId, sheet, { path, anchor, ...placement }));
+        }
+        if (objectId === undefined) {
+          throw new Error(`objectId is required for ${operation}`);
+        }
+        if (operation === "remove") {
+          return ok(removeSessionImage(sessionId, sheet, objectId));
+        }
+        const image = getSessionImage(sessionId, sheet, objectId, outputPath);
+        return {
+          content: [
+            ...(image.mimeType
+              ? [
+                  {
+                    type: "image" as const,
+                    data: image.bytes.toString("base64"),
+                    mimeType: image.mimeType,
+                  },
+                ]
+              : []),
+            { type: "text" as const, text: jsonText(image.metadata) },
+          ],
+        };
       } catch (error) {
         return fail(error);
       }

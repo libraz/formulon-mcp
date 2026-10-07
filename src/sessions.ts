@@ -28,6 +28,13 @@ export {
   getSessionRange,
   setSessionRange,
 } from "./session/cells.js";
+export type { ImageInsertInput } from "./session/images.js";
+export {
+  getSessionImage,
+  insertSessionImage,
+  listSessionImages,
+  removeSessionImage,
+} from "./session/images.js";
 export type { LayoutOperation } from "./session/layout.js";
 export { applySessionLayout } from "./session/layout.js";
 export type {

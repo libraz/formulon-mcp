@@ -18,7 +18,7 @@ export function registerReadTools(server: McpServer): void {
     {
       title: "Get cell",
       description:
-        "Get one cell from either an open session or a workbook path. Pass exactly one of `sessionId` or `path`; A1 refs and sheet names work for both. Date/currency/percent cells carry a decoded `formatted` string alongside the raw value.",
+        "Get one cell from either an open session or a workbook path. Pass exactly one of `sessionId` or `path`; A1 refs and sheet names work for both. Date/currency/percent cells carry a decoded `formatted` string alongside the raw value; formatted numbers also carry `text`, exactly what Excel displays (`textStatus` flags overflow or an invalid format).",
       inputSchema: {
         sessionId: z.string().optional(),
         path: z.string().optional(),
@@ -94,7 +94,7 @@ export function registerReadTools(server: McpServer): void {
     {
       title: "Get range",
       description:
-        "Get a rectangular A1 range from an open workbook session. Output is sparse (blank cells omitted), clipped to the sheet's used range, and capped at maxCells. Cells with a date/currency/percent number format carry a decoded `formatted` string (for example an ISO date) alongside the raw value.",
+        "Get a rectangular A1 range from an open workbook session. Output is sparse (blank cells omitted) and capped at maxCells. Cells with a date/currency/percent number format carry a decoded `formatted` string (for example an ISO date) alongside the raw value; formatted numbers also carry `text`, exactly what Excel displays.",
       inputSchema: {
         sessionId: z.string(),
         range: z.string().describe("A1 range, for example Sheet1!A1:C10 or A1:C10."),

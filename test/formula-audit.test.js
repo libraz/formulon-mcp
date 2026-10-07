@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { formulaFingerprint, formulaFingerprintDetails } from "../dist/formula-pattern.js";
 import {
   applySessionMutations,
   auditSessionFormulas,
@@ -22,24 +21,42 @@ function tableMutations(firstRow, lastRow) {
   return mutations;
 }
 
-test("formula fingerprints normalize copied references without rewriting literals or names", () => {
-  const first = formulaFingerprintDetails(
-    "=LOG10 (B2)+Table1[@A1]+'Quoted A1'!B2+$B$2+\"A1\"",
-    1,
-    3,
-  );
-  const copied = formulaFingerprintDetails(
-    "=LOG10 (B3)+Table1[@A1]+'Quoted A1'!B3+$B$2+\"A1\"",
-    2,
-    3,
-  );
-  assert.equal(first.supported, true);
-  assert.equal(copied.supported, true);
-  assert.equal(copied.fingerprint, first.fingerprint);
-  assert.equal(formulaFingerprint("=売上A1+B2", 1, 3).includes("R[0]C[-2]"), true);
-  assert.equal(formulaFingerprint("=売上A1+B2", 1, 3).includes("売上A1"), true);
-  assert.equal(formulaFingerprint("=B2&S1:S2!A1", 1, 3).includes("R[0]C[-2]"), true);
-  assert.equal(formulaFingerprintDetails("=Table1[[#Data],[A1]]", 1, 3).supported, true);
+test("formula patterns compare copied formulas by their relative R1C1 text", async () => {
+  await openSession(undefined, "formula-audit-patterns");
+  try {
+    const mutations = [];
+    for (let row = 2; row <= 8; row += 1) {
+      // Literals, names, absolute refs and casing must not split a copied run.
+      const call = row % 2 === 0 ? "LOG10" : "log10";
+      mutations.push(
+        { type: "number", a1: `Sheet1!B${row}`, value: row },
+        {
+          type: "formula",
+          a1: `Sheet1!D${row}`,
+          formula: `=${call}(B${row})+$B$2+LEN("A1")+SUM(A:A)`,
+        },
+      );
+    }
+    mutations.push({
+      type: "formula",
+      a1: "Sheet1!D6",
+      formula: '=LOG10(B5)+$B$2+LEN("A1")+SUM(A:A)',
+    });
+    applySessionMutations("formula-audit-patterns", mutations, true);
+    const result = auditSessionFormulas("formula-audit-patterns", {
+      range: "B2:D8",
+      direction: "vertical",
+      window: 5,
+      minPeers: 3,
+    });
+    assert.equal(result.unsupportedFormulaCells, 0);
+    assert.deepEqual(
+      result.findings.map((finding) => [finding.a1, finding.type, finding.expectedPattern]),
+      [["D6", "formula_pattern_outlier", 'LOG10(RC[-2])+R2C2+LEN("A1")+SUM(C[-3])']],
+    );
+  } finally {
+    closeSession("formula-audit-patterns");
+  }
 });
 
 test("formula audit reports constants, blanks, and outlier formulas in one run", async () => {
@@ -218,4 +235,17 @@ test("MCP registers and returns the bounded formula audit", async () => {
       assert.equal(textPayload(closed).session.id, sessionId);
     }
   });
+});
+
+test("formula audit with an explicit range reads only that range", async () => {
+  await openSession(undefined, "formula-audit-range");
+  try {
+    applySessionMutations("formula-audit-range", tableMutations(2, 12), true);
+    const result = auditSessionFormulas("formula-audit-range", { range: "Sheet1!B2:D12" });
+    assert.equal(result.range, "B2:D12");
+    assert.equal(result.formulaCells, 11);
+    assert.equal(result.findingCount, 0);
+  } finally {
+    closeSession("formula-audit-range");
+  }
 });

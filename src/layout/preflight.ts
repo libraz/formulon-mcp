@@ -1,13 +1,8 @@
 import { colToIndex, normalizeRange, parseRangeRef } from "../a1.js";
 import { findSheetIndex, type Workbook } from "../formulon.js";
-import {
-  type ColumnMetrics,
-  columnPointsToChars,
-  mmToPoints,
-  pixelsToPoints,
-} from "../preview/geometry.js";
+import { mmToPoints, pixelsToPoints } from "../preview/geometry.js";
 import type { PrintSettingsInput } from "../print.js";
-import { resolveColumnMetrics } from "../session/geometry.js";
+import { columnPointsToChars } from "../session/geometry.js";
 import { assertInGrid, MAX_COL, MAX_ROW } from "../session/shared.js";
 import type { StyleInput } from "../styles.js";
 import { nonEmptyPrintSettingsSchema, styleSchema } from "./schemas.js";
@@ -67,9 +62,10 @@ function resolvedRange(
 }
 
 function columnStoredSize(
+  workbook: Workbook,
+  selectedSheet: number,
   size: number,
   unit: "chars" | "pt" | "px" | "mm" | undefined,
-  metrics: ColumnMetrics,
 ): number {
   const resolvedUnit = unit ?? "chars";
   const points =
@@ -82,7 +78,7 @@ function columnStoredSize(
           : resolvedUnit === "mm"
             ? mmToPoints(size)
             : undefined;
-  const stored = points === undefined ? size : columnPointsToChars(points, metrics);
+  const stored = points === undefined ? size : columnPointsToChars(workbook, selectedSheet, points);
   if (stored > MAX_LAYOUT_COLUMN_WIDTH_CHARS) {
     throw new Error(
       `column width exceeds the ${MAX_LAYOUT_COLUMN_WIDTH_CHARS}-character Excel limit: ${stored}`,
@@ -185,7 +181,6 @@ export function preflightLayout(
   if (operations.length > MAX_LAYOUT_OPERATIONS) {
     throw new Error(`operations exceeds the ${MAX_LAYOUT_OPERATIONS}-operation limit`);
   }
-  const metrics = resolveColumnMetrics(workbook);
   let expandedRows = 0;
   let styledCells = 0;
   return operations.map((operation, index) => {
@@ -203,7 +198,7 @@ export function preflightLayout(
         throw new Error(`operations[${index}] column span must be ordered`);
       }
       finiteNonnegative(operation.size, `operations[${index}].size`);
-      const storedSize = columnStoredSize(operation.size, operation.unit, metrics);
+      const storedSize = columnStoredSize(workbook, selectedSheet, operation.size, operation.unit);
       return { ...operation, last, storedSize };
     }
     if (operation.type === "row") {

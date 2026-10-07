@@ -1,15 +1,16 @@
+import type { CellsInRangeResult, MergeRange, Value } from "@libraz/formulon";
 import { cellToA1 } from "../a1.js";
 import {
   assertStatus,
+  DisplayStatus,
   findSheetIndex,
-  readCell,
   requireCell,
   requireNumberResult,
   resultToJson,
   type Status,
   valueToJson,
 } from "../formulon.js";
-import { describeNumberFormat, type NumberFormatInfo } from "../numfmt.js";
+import { classifyNumberFormat, describeNumberFormat, type NumberFormatInfo } from "../numfmt.js";
 import type { WorkbookSession } from "./state.js";
 
 /** Excel's maximum zero-based row index (1,048,576 rows). */
@@ -57,39 +58,40 @@ export function assertInGrid(row: number, col: number): void {
   }
 }
 
+/** One populated cell of a rectangle read, with its formula text ("" for a constant). */
+export type RectCell = { row: number; col: number; formula: string; value: Value };
+
 /**
- * Builds a `"row,col" -> formula` map for a sheet by scanning its non-empty
- * cells once, so a range read can annotate which cells are computed without a
- * per-cell scan.
+ * Pages the engine's populated cells inside a rectangle in row-major order.
+ * `pageSize` caps each engine call; stopping the iteration early stops the paging.
  */
-export function formulaMap(session: WorkbookOwner, sheet: number): Map<string, string> {
-  const map = new Map<string, string>();
-  const count = requireNumberResult(
-    session.workbook.cellCount(sheet),
-    `read sheet ${sheet} cell count`,
-  );
-  for (let idx = 0; idx < count; idx += 1) {
-    const cell = readCell(session.workbook.cellAt(sheet, idx));
-    if (cell?.formula) {
-      map.set(`${cell.row},${cell.col}`, cell.formula);
+export function* rectCells(
+  session: WorkbookOwner,
+  sheet: number,
+  rect: MergeRange,
+  pageSize?: number,
+): Generator<RectCell> {
+  let cursor: number | null = null;
+  do {
+    const page: CellsInRangeResult = session.workbook.getCellsInRange(
+      sheet,
+      rect,
+      cursor,
+      pageSize,
+    );
+    assertStatus(page.status, `read sheet ${sheet} cells`);
+    for (const cell of page.cells) {
+      yield { row: cell.row, col: cell.col, formula: cell.formula ?? "", value: cell.value };
     }
-  }
-  return map;
+    cursor = page.nextCursor;
+  } while (cursor !== null);
 }
 
-/** Reads the formula text at one cell, or an empty string for a constant. */
+/** Reads the formula text at one cell (leading `=` included), or "" for a constant. */
 export function formulaAt(session: WorkbookOwner, sheet: number, row: number, col: number): string {
-  const count = requireNumberResult(
-    session.workbook.cellCount(sheet),
-    `read sheet ${sheet} cell count`,
-  );
-  for (let idx = 0; idx < count; idx += 1) {
-    const cell = readCell(session.workbook.cellAt(sheet, idx));
-    if (cell && cell.row === row && cell.col === col) {
-      return cell.formula;
-    }
-  }
-  return "";
+  const result = session.workbook.getFormula(sheet, row, col);
+  assertStatus(result.status, `read formula ${cellToA1(row, col)}`);
+  return result.formula ?? "";
 }
 
 /**
@@ -121,10 +123,16 @@ export function cellNumberFormat(
   return { numFmtId: xf.numFmtId, formatCode: numFmt?.formatCode ?? "" };
 }
 
+/** Format annotation of a numeric cell plus the engine's display text. */
+export type CellFormatAnnotation = Partial<NumberFormatInfo> & {
+  text?: string;
+  textStatus?: "overflow" | "invalidFormat";
+};
+
 /**
  * Decodes a numeric cell's applied format into a readable annotation (ISO date,
- * currency/percent label). Returns undefined for non-numeric cells and plain
- * unformatted numbers so the output stays sparse.
+ * currency/percent label) and the text Excel displays for it. Returns undefined
+ * for non-numeric cells and General-format numbers so the output stays sparse.
  */
 export function decodeNumberCell(
   session: WorkbookOwner,
@@ -132,15 +140,27 @@ export function decodeNumberCell(
   row: number,
   col: number,
   value: PrimitiveCellValue,
-): NumberFormatInfo | undefined {
+): CellFormatAnnotation | undefined {
   if (value.kind !== "number" || typeof value.value !== "number") {
     return undefined;
   }
   const format = cellNumberFormat(session, sheet, row, col);
-  if (!format) {
+  if (!format || classifyNumberFormat(format.numFmtId, format.formatCode) === "general") {
     return undefined;
   }
-  return describeNumberFormat(format.numFmtId, format.formatCode, value.value);
+  const display = session.workbook.getDisplayText(sheet, row, col);
+  const annotation: CellFormatAnnotation = {
+    ...describeNumberFormat(format.numFmtId, format.formatCode, value.value),
+  };
+  if (display.status.ok) {
+    annotation.text = display.text;
+    if (display.displayStatus === DisplayStatus.Overflow) {
+      annotation.textStatus = "overflow";
+    } else if (display.displayStatus === DisplayStatus.InvalidFormat) {
+      annotation.textStatus = "invalidFormat";
+    }
+  }
+  return annotation;
 }
 
 export function safeWorkbookCall(session: WorkbookOwner, method: string, args: unknown[]): unknown {
@@ -326,34 +346,6 @@ export function cellDisplayText(value: unknown): string | undefined {
     default:
       return undefined;
   }
-}
-/** Returns the max non-empty (row, col) extent of a sheet, or null when empty. */
-export function sheetUsedBounds(
-  session: WorkbookOwner,
-  sheet: number,
-): { maxRow: number; maxCol: number } | null {
-  const count = requireNumberResult(
-    session.workbook.cellCount(sheet),
-    `read sheet ${sheet} cell count`,
-  );
-  if (count === 0) {
-    return null;
-  }
-  let maxRow = 0;
-  let maxCol = 0;
-  for (let idx = 0; idx < count; idx += 1) {
-    const cell = readCell(session.workbook.cellAt(sheet, idx));
-    if (!cell) {
-      continue;
-    }
-    if (cell.row > maxRow) {
-      maxRow = cell.row;
-    }
-    if (cell.col > maxCol) {
-      maxCol = cell.col;
-    }
-  }
-  return { maxRow, maxCol };
 }
 export function requiredString(value: string | undefined, name: string): string {
   if (value === undefined || value.length === 0) {

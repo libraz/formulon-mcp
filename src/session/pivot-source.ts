@@ -1,13 +1,7 @@
 import { PivotAggregation, PivotAxis, PivotReportLayout, type Value } from "@libraz/formulon";
 import { normalizeRange, parseCellRef, parseRangeRef } from "../a1.js";
-import {
-  assertStatus,
-  findSheetIndex,
-  readCell,
-  requireNumberResult,
-  type Workbook,
-} from "../formulon.js";
-import { assertInGrid, rangeA1, sheetName } from "./shared.js";
+import { assertStatus, findSheetIndex, type Workbook } from "../formulon.js";
+import { assertInGrid, rangeA1, rectCells, sheetName } from "./shared.js";
 import type { WorkbookSession } from "./state.js";
 
 export type PivotAggregationName =
@@ -207,20 +201,8 @@ export function sourceValue(value: Value, ref: string): SourceValue {
 }
 
 export function formulaInRange(session: WorkbookSession, range: PivotRange): boolean {
-  const count = requireNumberResult(
-    session.workbook.cellCount(range.sheet),
-    `read source sheet ${range.sheet} cell count`,
-  );
-  for (let index = 0; index < count; index += 1) {
-    const cell = readCell(session.workbook.cellAt(range.sheet, index));
-    if (
-      cell &&
-      cell.row >= range.firstRow &&
-      cell.row <= range.lastRow &&
-      cell.col >= range.firstCol &&
-      cell.col <= range.lastCol &&
-      cell.formula
-    ) {
+  for (const cell of rectCells(session, range.sheet, range)) {
+    if (cell.formula) {
       return true;
     }
   }

@@ -1,3 +1,4 @@
+import type { Value } from "@libraz/formulon";
 import { cellToA1, normalizeRange, parseRangeRef } from "../a1.js";
 import {
   blankValue,
@@ -16,7 +17,6 @@ import type {
   FormulaAuditResult,
   RawIssue,
 } from "../audit/types.js";
-import { formulaFingerprintDetails } from "../formula-pattern.js";
 import {
   assertStatus,
   findSheetIndex,
@@ -24,7 +24,7 @@ import {
   requireNumberResult,
   valueToJson,
 } from "../formulon.js";
-import { assertInGrid, type PrimitiveCellValue, sheetName } from "./shared.js";
+import { assertInGrid, type PrimitiveCellValue, rectCells, sheetName } from "./shared.js";
 import { getSession, publicInfo, touch } from "./state.js";
 
 const MAX_AUDIT_INVENTORY_CELLS = 1_000_000;
@@ -103,36 +103,37 @@ function readStoredCells(
   sheet: number,
   range?: AuditRange,
 ): AuditCell[] {
+  const toCell = (cell: { row: number; col: number; formula: string; value: Value }) => ({
+    row: cell.row,
+    col: cell.col,
+    formula: cell.formula,
+    value: valueToJson(cell.value) as PrimitiveCellValue,
+  });
+  if (range) {
+    const rect = {
+      firstRow: range.startRow,
+      lastRow: range.endRow,
+      firstCol: range.startCol,
+      lastCol: range.endCol,
+    };
+    return Array.from(rectCells(session, sheet, rect), toCell);
+  }
   const count = requireNumberResult(
     session.workbook.cellCount(sheet),
     `read sheet ${sheet} cell count`,
   );
   if (count > MAX_AUDIT_INVENTORY_CELLS) {
     throw new Error(
-      `formula audit cannot inspect sheet ${sheet}: ${count} stored cells exceeds the inventory limit of ${MAX_AUDIT_INVENTORY_CELLS}; an explicit range does not avoid native cell enumeration`,
+      `formula audit cannot inspect sheet ${sheet}: ${count} stored cells exceeds the inventory limit of ${MAX_AUDIT_INVENTORY_CELLS}; pass an explicit range`,
     );
   }
   const cells: AuditCell[] = [];
   for (let index = 0; index < count; index += 1) {
-    const cell = requireCell(
-      session.workbook.cellAt(sheet, index),
-      `read sheet ${sheet} cell ${index}`,
+    cells.push(
+      toCell(
+        requireCell(session.workbook.cellAt(sheet, index), `read sheet ${sheet} cell ${index}`),
+      ),
     );
-    if (
-      range &&
-      (cell.row < range.startRow ||
-        cell.row > range.endRow ||
-        cell.col < range.startCol ||
-        cell.col > range.endCol)
-    ) {
-      continue;
-    }
-    cells.push({
-      row: cell.row,
-      col: cell.col,
-      formula: cell.formula,
-      value: valueToJson(cell.value) as PrimitiveCellValue,
-    });
   }
   return cells;
 }
@@ -196,14 +197,32 @@ function refreshValues(
   return byKey;
 }
 
-function formulaPatterns(cells: Map<string, AuditCell>) {
+/** Upper-cases a formula outside its double-quoted string literals, which stay case-significant. */
+function foldCase(formula: string): string {
+  return formula
+    .split(/("(?:[^"]|"")*")/)
+    .map((part, index) => (index % 2 === 1 ? part : part.toUpperCase()))
+    .join("");
+}
+
+/**
+ * Keys each formula by the engine's R1C1 text relative to its own cell, so
+ * copied formulas compare equal. A formula the engine cannot render in R1C1 is
+ * kept out of pattern comparisons.
+ */
+function formulaPatterns(
+  session: ReturnType<typeof getSession>,
+  sheet: number,
+  cells: Map<string, AuditCell>,
+) {
   for (const cell of cells.values()) {
     if (!cell.formula) {
       continue;
     }
-    const result = formulaFingerprintDetails(cell.formula, cell.row, cell.col);
-    cell.pattern = result.fingerprint;
-    cell.patternSupported = result.supported;
+    const result = session.workbook.getFormulaR1C1(sheet, cell.row, cell.col);
+    const supported = result.status.ok && result.formula !== null;
+    cell.pattern = supported ? foldCase(result.formula as string) : cell.formula;
+    cell.patternSupported = supported;
   }
 }
 
@@ -258,7 +277,7 @@ export function auditSessionFormulas(
   }
 
   const cells = refreshValues(session, target.sheet, stored, range, Boolean(options.recalc));
-  formulaPatterns(cells);
+  formulaPatterns(session, target.sheet, cells);
 
   const populatedRows = new Set<number>();
   const populatedCols = new Set<number>();
@@ -329,7 +348,7 @@ export function auditSessionFormulas(
     warnings:
       unsupportedFormulaCells > 0
         ? [
-            `${unsupportedFormulaCells} formula(s) used syntax preserved without pattern normalization; those formulas were excluded from pattern comparisons`,
+            `${unsupportedFormulaCells} formula(s) could not be rendered in R1C1 and were excluded from pattern comparisons`,
           ]
         : [],
   };

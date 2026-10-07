@@ -334,7 +334,7 @@ export function registerPresentationTools(server: McpServer): void {
     {
       title: "Print settings",
       description:
-        "Read or set a sheet's print settings: page setup, margins, print options, header/footer, print area, print titles, and manual page breaks. Omit every setting to read. Reads report the resulting pageCount, so a page layout can be checked without saving the file.",
+        "Read or set a sheet's print settings: page setup, margins, print options, header/footer, print area, print titles, and manual page breaks. Omit every setting to read. Reads report the resulting pageCount and a `layout` (paper, margins in points, scale, page order, break flags, per-page A1 ranges), so a page layout can be checked without saving the file.",
       inputSchema: {
         ...sheetInputSchema,
         ...printSettingsSchema.shape,

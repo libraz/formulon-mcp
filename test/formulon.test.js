@@ -327,13 +327,17 @@ test("supports allowlisted low-level workbook calls and rejects unknown methods"
 /**
  * Engine methods deliberately kept out of `WORKBOOK_METHODS`. Saving is routed
  * through `formulon_save_session` so a session keeps its bookkeeping, the
- * iterative-progress hook takes a JS callback no JSON argument can express, and
+ * iterative-progress hook takes a JS callback no JSON argument can express,
+ * image insertion and probing take raw bytes and go through the image tool, and
  * the rest are handle lifecycle rather than workbook operations.
  */
 const UNEXPOSED_WORKBOOK_METHODS = new Set([
   "constructor",
   "delete",
+  "deleteLater",
+  "insertImage",
   "isValid",
+  "probeImage",
   "save",
   "saveAs",
   "saveWithDiagnostics",

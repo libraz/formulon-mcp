@@ -1,9 +1,10 @@
 import { Resvg } from "@resvg/resvg-js";
 import { pointsToPixels } from "./geometry.js";
-import type { PreviewCell, PreviewModel, PreviewStyle } from "./types.js";
+import type { PreviewCell, PreviewModel, PreviewObject, PreviewStyle } from "./types.js";
 
 const GRID_COLOR = "#D9E0E7";
 const PAGE_BREAK_COLOR = "#6B7280";
+const PLACEHOLDER_COLOR = "#6B7280";
 
 function xml(value: string): string {
   return value
@@ -236,6 +237,23 @@ function mergeBoundarySets(model: PreviewModel): {
   return { vertical, horizontal };
 }
 
+function drawObject(output: string[], object: PreviewObject): void {
+  const x = n(px(object.x));
+  const y = n(px(object.y));
+  const width = n(px(object.width));
+  const height = n(px(object.height));
+  if (object.image) {
+    output.push(
+      `<image x="${x}" y="${y}" width="${width}" height="${height}" preserveAspectRatio="none" href="data:${object.image.mime};base64,${object.image.base64}" />`,
+    );
+    return;
+  }
+  output.push(
+    `<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="none" stroke="${PLACEHOLDER_COLOR}" stroke-width="1" stroke-dasharray="4 3" />`,
+    `<text x="${n(px(object.x) + 4)}" y="${n(px(object.y) + 14)}" font-family="sans-serif" font-size="11" fill="${PLACEHOLDER_COLOR}">${xml(`${object.kind}: ${object.name}`)}</text>`,
+  );
+}
+
 /** Builds a deterministic SVG workbook snapshot from the prepared model. */
 export function renderPreviewSvg(model: PreviewModel): string {
   // Keep the root viewport integral. Resvg rounds its raster dimensions from
@@ -332,6 +350,9 @@ export function renderPreviewSvg(model: PreviewModel): string {
         );
       }
     }
+  }
+  for (const object of model.objects) {
+    drawObject(output, object);
   }
   output.push("</svg>");
   return output.join("");

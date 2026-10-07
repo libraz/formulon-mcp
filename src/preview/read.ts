@@ -1,40 +1,34 @@
-import type { Value } from "@libraz/formulon";
+import type { ResolvedColor } from "@libraz/formulon";
 import { cellToA1, normalizeRange, parseRangeRef } from "../a1.js";
 import {
   assertStatus,
-  errorName,
+  ColorResolution,
+  DisplayStatus,
+  GeometryMode,
   requireCell,
+  requireListResult,
   requireNumberResult,
   type Workbook,
 } from "../formulon.js";
-import { formatPreviewNumber, formatPreviewText } from "./format.js";
-import { type ColumnMetrics, columnCharsToPoints } from "./geometry.js";
+import type { ColumnMetrics } from "./geometry.js";
 import type { PreviewCell, PreviewCellMetadata, PreviewStyle } from "./types.js";
 
 export const MAX_METADATA_CELLS = 500;
 export const MAX_METADATA_TEXT = 256;
-const MAX_FORMULA_SCAN_CELLS = 1_000_000;
 const MAX_CELL_SCAN_CELLS = 1_000_000;
 const MAX_PREVIEW_MERGES = 10_000;
-export const DEFAULT_COLUMN_CHARS = 8.43;
-export const DEFAULT_ROW_POINTS = 102 / 7;
+const FORMULA_PAGE_SIZE = 4_096;
 
 export const BASE_WARNINGS = [
   "Preview rendering is approximate and may differ from Excel.",
   "Font substitution is possible when the requested workbook font is unavailable.",
   "Conditional formatting is not applied.",
-  "Drawings, images, headers, and footers are not rendered.",
+  "Headers and footers are not rendered.",
 ];
 
 export type Rect = { firstRow: number; firstCol: number; lastRow: number; lastCol: number };
 export type MergeRange = Rect;
-type ColorSpec = { kind?: number; rgb?: number; theme?: number; indexed?: number };
 export type WarningState = { values: Set<string>; truncated: boolean };
-export type CellAppearance = {
-  style: PreviewStyle;
-  numFmtId: number;
-  formatCode: string;
-};
 
 export function warning(state: WarningState, message: string): void {
   if (state.values.has(message)) {
@@ -59,22 +53,17 @@ function argbColor(value: number): string {
   return `rgba(${red},${green},${blue},${alpha.toFixed(3)})`;
 }
 
-function color(spec: ColorSpec | undefined, fallback: number, warnings: WarningState): string {
-  if (spec?.kind !== undefined && spec.kind !== 0 && spec.kind !== 1) {
-    warning(warnings, "Theme, indexed, and automatic colors use an ARGB fallback in preview.");
+function color(resolved: ResolvedColor, warnings: WarningState): string {
+  if (
+    resolved.resolution === ColorResolution.DefaultTheme ||
+    resolved.resolution === ColorResolution.ThemeUnparseable
+  ) {
+    warning(
+      warnings,
+      "The workbook theme is missing or unreadable; theme colors use the default Office theme in preview.",
+    );
   }
-  return argbColor(spec?.kind === 1 && typeof spec.rgb === "number" ? spec.rgb : fallback);
-}
-
-function borderColor(
-  spec: ColorSpec | undefined,
-  fallback: number,
-  warnings: WarningState,
-): string {
-  // A newly enabled Excel border commonly carries the engine's zero-valued
-  // automatic colour selector. Zero ARGB means transparent when interpreted
-  // literally, while Excel's automatic border colour is opaque black.
-  return color(spec, fallback === 0 ? 0xff000000 : fallback, warnings);
+  return argbColor(resolved.argb);
 }
 
 export function rectArea(rect: Rect): number {
@@ -110,15 +99,14 @@ export function clipMerge(
   return clipped;
 }
 
-export function readMerges(workbook: Workbook, sheet: number): MergeRange[] {
-  const result = workbook.getMerges(sheet);
-  assertStatus(result.status, "read merged ranges");
-  if (result.length > MAX_PREVIEW_MERGES) {
+export function readMergesInRange(workbook: Workbook, sheet: number, rect: Rect): MergeRange[] {
+  const merges = requireListResult(workbook.getMergesInRange(sheet, rect), "read merged ranges");
+  if (merges.length > MAX_PREVIEW_MERGES) {
     throw new Error(
-      `preview sheet has ${result.length} merged cells (limit ${MAX_PREVIEW_MERGES})`,
+      `preview range has ${merges.length} merged cells (limit ${MAX_PREVIEW_MERGES})`,
     );
   }
-  return Array.from(result).map((merge) => ({
+  return merges.map((merge) => ({
     firstRow: merge.firstRow,
     firstCol: merge.firstCol,
     lastRow: merge.lastRow,
@@ -154,7 +142,6 @@ export function chooseRect(
   workbook: Workbook,
   sheet: number,
   range: string | undefined,
-  merges: MergeRange[],
 ): { rect: Rect; rangeLabel: string } {
   if (range) {
     const parsed = normalizeRange(parseRangeRef(range));
@@ -188,7 +175,8 @@ export function chooseRect(
     };
   }
   const used = usedBounds(workbook, sheet);
-  const merged = merges.reduce<Rect | undefined>((bounds, merge) => {
+  const sheetMerges = requireListResult(workbook.getMerges(sheet), "read merged ranges");
+  const merged = sheetMerges.reduce<Rect | undefined>((bounds, merge) => {
     if (!bounds) {
       return { ...merge };
     }
@@ -225,44 +213,20 @@ export function dimensions(
   workbook: Workbook,
   sheet: number,
   rect: Rect,
-  metrics: ColumnMetrics,
-  warnings: WarningState,
 ): { columns: number[]; rows: number[] } {
-  const columnResult = workbook.getSheetColumns(sheet);
-  assertStatus(columnResult.status, "read sheet columns");
-  const rowResult = workbook.getSheetRowOverrides(sheet);
-  assertStatus(rowResult.status, "read sheet rows");
-  const columns = Array.from({ length: rect.lastCol - rect.firstCol + 1 }, (_, offset) => {
-    const index = rect.firstCol + offset;
-    const override = columnResult.columns.find(
-      (entry) => entry.first <= index && index <= entry.last,
-    );
-    if (override?.hidden) {
-      return 0;
-    }
-    const width =
-      override && (override.hasWidth !== 0 || override.width !== 0)
-        ? override.width
-        : DEFAULT_COLUMN_CHARS;
-    return columnCharsToPoints(width, metrics);
-  });
-  const rows = Array.from({ length: rect.lastRow - rect.firstRow + 1 }, (_, offset) => {
-    const index = rect.firstRow + offset;
-    const override = rowResult.rows.find((entry) => entry.row === index);
-    if (override?.hidden) {
-      return 0;
-    }
-    if (override && override.height === 0) {
-      warning(
-        warnings,
-        "A row override has no explicit height; preview uses the default row height.",
-      );
-    }
-    return override?.height || DEFAULT_ROW_POINTS;
-  });
+  const columns = Array.from({ length: rect.lastCol - rect.firstCol + 1 }, (_, offset) =>
+    requireNumberResult(
+      workbook.getColumnWidthPt(sheet, rect.firstCol + offset, GeometryMode.Display),
+      "read column width",
+    ),
+  );
+  const rows = Array.from({ length: rect.lastRow - rect.firstRow + 1 }, (_, offset) =>
+    requireNumberResult(workbook.getRowHeightPt(sheet, rect.firstRow + offset), "read row height"),
+  );
   return { columns, rows };
 }
 
+/** Reads the effective style of a cell; xf-derived results are cached by the xf the engine chose. */
 export function styleFor(
   workbook: Workbook,
   sheet: number,
@@ -270,24 +234,22 @@ export function styleFor(
   col: number,
   metrics: ColumnMetrics,
   warnings: WarningState,
-  cache: Map<number, CellAppearance>,
-): CellAppearance {
-  const indexResult = workbook.getCellXfIndex(sheet, row, col);
-  assertStatus(indexResult.status, `read cell style at ${cellToA1(row, col)}`);
-  const cached = cache.get(indexResult.xfIndex);
+  cache: Map<number, PreviewStyle>,
+): PreviewStyle {
+  const effective = workbook.getEffectiveStyle(sheet, row, col);
+  assertStatus(effective.status, `read cell style at ${cellToA1(row, col)}`);
+  const cached = cache.get(effective.xfIndex);
   if (cached) {
     return cached;
   }
-  const xf = workbook.getCellXf(indexResult.xfIndex);
-  assertStatus(xf.status, `read cell format ${indexResult.xfIndex}`);
-  const font = workbook.getFont(xf.fontIndex);
-  assertStatus(font.status, `read font ${xf.fontIndex}`);
-  const fill = workbook.getFill(xf.fillIndex);
-  assertStatus(fill.status, `read fill ${xf.fillIndex}`);
-  const border = workbook.getBorder(xf.borderIndex);
-  assertStatus(border.status, `read border ${xf.borderIndex}`);
-  const numFmt = workbook.getNumFmt(xf.numFmtId);
-  assertStatus(numFmt.status, `read number format ${xf.numFmtId}`);
+  const xf = workbook.getCellXf(effective.xfIndex);
+  assertStatus(xf.status, `read cell format ${effective.xfIndex}`);
+  const font = workbook.getFont(effective.fontIndex);
+  assertStatus(font.status, `read font ${effective.fontIndex}`);
+  const fill = workbook.getFill(effective.fillIndex);
+  assertStatus(fill.status, `read fill ${effective.fillIndex}`);
+  const border = workbook.getBorder(effective.borderIndex);
+  assertStatus(border.status, `read border ${effective.borderIndex}`);
   if (fill.pattern > 1) {
     warning(warnings, "Pattern fills are approximated as solid fills in preview.");
   }
@@ -300,92 +262,65 @@ export function styleFor(
   if (border.diagonalUp || border.diagonalDown) {
     warning(warnings, "Diagonal borders are not rendered in preview.");
   }
-  const appearance: CellAppearance = {
-    numFmtId: xf.numFmtId,
-    formatCode: numFmt.formatCode,
-    style: {
-      fill: fill.pattern === 0 ? undefined : color(fill.fg, fill.fgArgb, warnings),
-      fontFamily: font.name || metrics.fontName,
-      fontSize: font.size || metrics.fontSize,
-      fontColor: color(font.color, font.colorArgb, warnings),
-      bold: font.bold,
-      italic: font.italic,
-      underline: font.underline !== 0,
-      horizontal: xf.horizontalAlign,
-      vertical: xf.verticalAlign,
-      wrapText: xf.wrapText,
-      indent: xf.indent ?? 0,
-      borders: {
-        left: {
-          style: border.left.style,
-          color: borderColor(border.left.color, border.left.colorArgb, warnings),
-        },
-        right: {
-          style: border.right.style,
-          color: borderColor(border.right.color, border.right.colorArgb, warnings),
-        },
-        top: {
-          style: border.top.style,
-          color: borderColor(border.top.color, border.top.colorArgb, warnings),
-        },
-        bottom: {
-          style: border.bottom.style,
-          color: borderColor(border.bottom.color, border.bottom.colorArgb, warnings),
-        },
-      },
+  const side = (edge: { style: number }, resolved: ResolvedColor) => ({
+    style: edge.style,
+    color: color(resolved, warnings),
+  });
+  const style: PreviewStyle = {
+    fill: fill.pattern === 0 ? undefined : color(effective.fillForeground, warnings),
+    fontFamily: font.name || metrics.fontName,
+    fontSize: font.size || metrics.fontSize,
+    fontColor: color(effective.font, warnings),
+    bold: font.bold,
+    italic: font.italic,
+    underline: font.underline !== 0,
+    horizontal: xf.horizontalAlign,
+    vertical: xf.verticalAlign,
+    wrapText: xf.wrapText,
+    indent: xf.indent ?? 0,
+    borders: {
+      left: side(border.left, effective.borders.left),
+      right: side(border.right, effective.borders.right),
+      top: side(border.top, effective.borders.top),
+      bottom: side(border.bottom, effective.borders.bottom),
     },
   };
-  cache.set(indexResult.xfIndex, appearance);
-  return appearance;
+  cache.set(effective.xfIndex, style);
+  return style;
 }
 
+/** Renders the text Excel displays for one non-empty cell. */
 export function cellText(
-  value: Value,
-  appearance: CellAppearance,
+  workbook: Workbook,
+  sheet: number,
+  row: number,
+  col: number,
   warnings: WarningState,
-): { text: string; numeric: boolean } {
-  if (value.kind === 1) {
-    const formatted = formatPreviewNumber(value.number, appearance.numFmtId, appearance.formatCode);
-    if (formatted.warning) {
-      warning(warnings, formatted.warning);
-    }
-    return { text: formatted.text, numeric: true };
+): string {
+  const display = workbook.getDisplayText(sheet, row, col);
+  assertStatus(display.status, `read display text at ${cellToA1(row, col)}`);
+  if (display.displayStatus === DisplayStatus.InvalidFormat) {
+    warning(
+      warnings,
+      "A cell number format is invalid; preview shows its General rendering instead.",
+    );
   }
-  if (value.kind === 4) {
-    return {
-      text: formatPreviewText(value.kind, undefined, errorName(value.errorCode)),
-      numeric: false,
-    };
-  }
-  return {
-    text: formatPreviewText(
-      value.kind,
-      value.kind === 2 ? Boolean(value.boolean) : value.kind === 3 ? value.text : undefined,
-    ),
-    numeric: false,
-  };
+  return display.text;
 }
 
 export function formulaMap(workbook: Workbook, sheet: number, rect: Rect): Map<string, string> {
-  const count = requireNumberResult(workbook.cellCount(sheet), `read sheet ${sheet} cell count`);
-  if (count > MAX_FORMULA_SCAN_CELLS) {
-    throw new Error(
-      `preview formula inventory spans ${count} cells (limit ${MAX_FORMULA_SCAN_CELLS})`,
-    );
-  }
   const formulas = new Map<string, string>();
-  for (let index = 0; index < count; index += 1) {
-    const cell = requireCell(workbook.cellAt(sheet, index), `read sheet ${sheet} cell ${index}`);
-    if (
-      cell.formula &&
-      cell.row >= rect.firstRow &&
-      cell.row <= rect.lastRow &&
-      cell.col >= rect.firstCol &&
-      cell.col <= rect.lastCol
-    ) {
-      formulas.set(`${cell.row},${cell.col}`, cell.formula);
+  let cursor: number | null = null;
+  do {
+    const page = workbook.getCellsInRange(sheet, rect, cursor, FORMULA_PAGE_SIZE);
+    assertStatus(page.status, `read sheet ${sheet} cells`);
+    for (const cell of page.cells) {
+      if (cell.formula) {
+        formulas.set(`${cell.row},${cell.col}`, cell.formula);
+      }
     }
-  }
+    cursor = page.nextCursor;
+  } while (cursor !== null);
   return formulas;
 }
 

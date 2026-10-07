@@ -1,5 +1,3 @@
-import type { ColumnMetrics } from "./geometry.js";
-
 export type PreviewOptions = {
   sheet?: number | string;
   range?: string;
@@ -61,6 +59,36 @@ export type PreviewCellMetadata = {
   height: number;
 };
 
+/** A drawing object placed in preview points relative to the preview origin. */
+export type PreviewObject = {
+  objectId: number;
+  kind: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Embedded raster when the engine's picture can be drawn; absent for a placeholder. */
+  image?: { mime: string; base64: string };
+};
+
+export type PreviewObjectMetadata = {
+  objectId: number;
+  kind: string;
+  name: string;
+  rendered: boolean;
+};
+
+export type PreviewPages = {
+  count: number;
+  scale: number;
+  paperWidthPt: number;
+  paperHeightPt: number;
+  landscape: boolean;
+  ranges: string[];
+  rangesTruncated: boolean;
+};
+
 export type PreviewModel = {
   firstRow: number;
   firstCol: number;
@@ -71,8 +99,8 @@ export type PreviewModel = {
   logicalUnit: "pt";
   columns: number[];
   rows: number[];
-  columnMetrics: ColumnMetrics;
   cells: PreviewCell[];
+  objects: PreviewObject[];
   rowBreaks: number[];
   colBreaks: number[];
   showGridLines: boolean;
@@ -91,6 +119,8 @@ export type PreviewMetadata = {
   scale: number;
   fontList: string[];
   pageCount: number;
+  pages: PreviewPages;
+  objects: PreviewObjectMetadata[];
   rowBreaks: number[];
   colBreaks: number[];
   warnings: string[];
