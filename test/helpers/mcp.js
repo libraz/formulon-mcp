@@ -18,13 +18,19 @@ export function callTool(client, name, arguments_ = {}) {
   return client.callTool({ name, arguments: arguments_ });
 }
 
-export async function withClient(fn) {
+/**
+ * Starts the server over stdio and runs `fn` with a connected client. `options.env`
+ * is merged over the transport's default environment, which otherwise leaves out
+ * variables such as FORMULON_MCP_PROFILE.
+ */
+export async function withClient(fn, options = {}) {
   const client = new Client({ name: "formulon-mcp-test", version: "0.1.0" });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ["./dist/index.js"],
     cwd: process.cwd(),
     stderr: "pipe",
+    ...(options.env ? { env: options.env } : {}),
   });
   await client.connect(transport);
   try {

@@ -103,15 +103,16 @@ test("supports dependency, spill-info, and function metadata APIs", async () => 
       cols: 0,
     });
 
-    const metadata = callWorkbookMethod("analysis", "functionMetadata", ["SUM", 0]);
+    const metadata = callWorkbookMethod("analysis", "functionMetadata", ["SUM"]);
     assert.equal(metadata.result.ok, true);
     assert.equal(metadata.result.name, "SUM");
     assert.equal(
-      callWorkbookMethod("analysis", "localizeFunctionName", ["SUM", 0]).result.value,
-      "SUM",
+      callWorkbookMethod("analysis", "localizeFunctionName", ["SUM", "win-365-de_DE"]).result.value,
+      "SUMME",
     );
     assert.equal(
-      callWorkbookMethod("analysis", "canonicalizeFunctionName", ["SUM", 0]).result.value,
+      callWorkbookMethod("analysis", "canonicalizeFunctionName", ["SUMME", "win-365-de_DE"]).result
+        .value,
       "SUM",
     );
   } finally {

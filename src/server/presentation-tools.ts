@@ -133,11 +133,11 @@ export function registerPresentationTools(server: McpServer): void {
     {
       title: "Column/row dimension operation",
       description:
-        "List column-width/row-height overrides, or set width/height, hidden, or outline level. Columns act on an inclusive [first, last] span; rows act on an inclusive [row, row] span. Column sizes default to Excel character units; row sizes default to points. Use px or mm when a physical display size is easier to specify.",
+        "List column-width/row-height overrides, set width/height, reset it to the sheet default (keeping hidden, outline and style state), or set hidden or outline level. Columns act on an inclusive [first, last] span; rows act on an inclusive [row, row] span. Column sizes default to Excel character units; row sizes default to points. Use px or mm when a physical display size is easier to specify.",
       inputSchema: {
         ...sheetInputSchema,
         axis: z.enum(["column", "row"]),
-        operation: z.enum(["list", "size", "hidden", "outline"]),
+        operation: z.enum(["list", "size", "resetSize", "hidden", "outline"]),
         first: z
           .number()
           .int()
@@ -280,10 +280,14 @@ export function registerPresentationTools(server: McpServer): void {
     {
       title: "Style a range",
       description:
-        "Apply fonts, fills, borders, number formats, and alignment across an A1 range, materializing blank cells so an empty ruled box renders. Each property is a delta: cells keep whatever the style does not state, so ruling a table does not undo the number format already on its amount column. Style in passes — the grid over the whole table, then the header row, then a total cell.",
+        "Apply fonts, fills, borders, number formats, and alignment across an A1 range, materializing blank cells so an empty ruled box renders. Whole columns (B:D) or rows (3:5) are styled as columns or rows, so cells written there later inherit the style. Each property is a delta: cells keep whatever the style does not state, so ruling a table does not undo the number format already on its amount column. Style in passes — the grid over the whole table, then the header row, then a total cell.",
       inputSchema: {
         sessionId: z.string(),
-        range: z.string().describe("A1 range or single cell, for example Sheet1!B2:F20 or B2."),
+        range: z
+          .string()
+          .describe(
+            "A1 range, single cell, whole columns or whole rows, for example Sheet1!B2:F20, B2, C:C or 1:1.",
+          ),
         sheet: sheetRefSchema
           .optional()
           .describe("Sheet used when range has no Sheet!-prefix; defaults to the first sheet."),
@@ -292,7 +296,7 @@ export function registerPresentationTools(server: McpServer): void {
           .enum(["existing", "default"])
           .default("existing")
           .describe(
-            "Start from the style already on the range's top-left cell, or from the workbook default.",
+            "Apply deltas to each cell's current style, or start from the workbook default.",
           ),
       },
     },

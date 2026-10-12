@@ -12,6 +12,7 @@ import createFormulon, {
   ColorResolution,
   DisplayStatus,
   DrawingObjectKind,
+  type ExcelProfileId,
   type FillRecord,
   type FontRecord,
   type FormulonModule,
@@ -36,6 +37,7 @@ export type {
   BorderRecord,
   BorderSide,
   CellXf,
+  ExcelProfileId,
   FillRecord,
   FontRecord,
   HeaderFooterInput,
@@ -255,6 +257,10 @@ export function resultToJson(value: unknown): unknown {
   if (value instanceof Uint8Array) {
     return { byteLength: value.byteLength };
   }
+  // Other typed arrays carry numbers (collation class ids), not opaque bytes.
+  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+    return Array.from(value as unknown as ArrayLike<number>);
+  }
   if (Array.isArray(value)) {
     return value.map((item) => resultToJson(item));
   }
@@ -308,16 +314,60 @@ export async function loadWorkbook(filePath: string): Promise<Workbook> {
   return wb;
 }
 
-/** Loads an existing workbook or creates a default single-sheet workbook. */
-export async function createOrLoadWorkbook(filePath?: string): Promise<Workbook> {
+/** Shape of an Excel profile id; the engine decides which ids exist. */
+export const PROFILE_ID_PATTERN = /^(mac|win)-365-[a-z]{2}_[A-Z]{2}$/;
+
+/** Environment variable naming the profile a workbook gets when none is requested. */
+export const PROFILE_ENV = "FORMULON_MCP_PROFILE";
+
+/** Reports whether the engine knows `profile`. */
+export async function isKnownProfile(profile: string): Promise<boolean> {
+  if (!PROFILE_ID_PATTERN.test(profile)) {
+    return false;
+  }
+  const wb = (await formulonModule()).Workbook.createForProfile(profile);
+  const known = wb.isValid();
+  wb.delete();
+  return known;
+}
+
+/**
+ * Loads an existing workbook or creates a single-sheet one. A profile shapes a
+ * new workbook as Excel creates it in that locale (fonts, style and sheet
+ * names, margins) and sets the profile a loaded workbook evaluates with. An
+ * unrequested profile falls back to `FORMULON_MCP_PROFILE`, then the engine
+ * default.
+ */
+export async function createOrLoadWorkbook(
+  filePath?: string,
+  requested?: ExcelProfileId,
+): Promise<Workbook> {
+  const configured = process.env[PROFILE_ENV]?.trim() || undefined;
+  const profile = requested ?? (configured as ExcelProfileId | undefined);
+  const source = requested === undefined ? ` (from ${PROFILE_ENV})` : "";
   if (filePath) {
-    return loadWorkbook(filePath);
+    const wb = await loadWorkbook(filePath);
+    if (profile !== undefined) {
+      const status = wb.setExcelProfileId(profile);
+      if (!status.ok) {
+        wb.delete();
+        assertStatus(status, `set excel profile ${profile}${source}`);
+      }
+    }
+    return wb;
   }
   const Module = await formulonModule();
-  const wb = Module.Workbook.createDefault();
+  const wb =
+    profile === undefined
+      ? Module.Workbook.createDefault()
+      : Module.Workbook.createForProfile(profile);
   if (!wb.isValid()) {
     wb.delete();
-    throw new Error("create workbook failed");
+    throw new Error(
+      profile === undefined
+        ? "create workbook failed"
+        : `unknown excel profile: ${profile}${source}`,
+    );
   }
   return wb;
 }

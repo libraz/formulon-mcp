@@ -5,12 +5,12 @@ import {
   assertStatus,
   type CellMutation,
   createOrLoadWorkbook,
-  loadWorkbook,
+  type ExcelProfileId,
   saveWorkbook,
   type Workbook,
   workbookSummary,
 } from "../formulon.js";
-import { fail, ok } from "./shared.js";
+import { fail, ok, profileSchema } from "./shared.js";
 
 const concreteMutationSchema = z.discriminatedUnion("type", [
   z.object({
@@ -60,12 +60,17 @@ export function registerFileTools(server: McpServer): void {
         recalc: z.boolean().default(false),
         includeCells: z.boolean().default(false),
         maxCellsPerSheet: z.number().int().nonnegative().max(10_000).default(200),
+        profile: profileSchema
+          .optional()
+          .describe(
+            "Excel profile a recalc evaluates with; defaults to FORMULON_MCP_PROFILE, else win-365-en_US.",
+          ),
       },
     },
-    async ({ path, recalc, includeCells, maxCellsPerSheet }) => {
+    async ({ path, recalc, includeCells, maxCellsPerSheet, profile }) => {
       let workbook: Workbook | undefined;
       try {
-        workbook = await loadWorkbook(path);
+        workbook = await createOrLoadWorkbook(path, profile as ExcelProfileId | undefined);
         if (recalc) {
           assertStatus(workbook.recalc(), "recalc workbook");
         }
@@ -89,12 +94,17 @@ export function registerFileTools(server: McpServer): void {
         outputPath: z.string(),
         recalc: z.boolean().default(true),
         mutations: z.array(concreteMutationSchema).min(1).max(10_000),
+        profile: profileSchema
+          .optional()
+          .describe(
+            "Excel profile the workbook evaluates with; a new workbook is also created as Excel creates it in that locale. Defaults to FORMULON_MCP_PROFILE, else win-365-en_US.",
+          ),
       },
     },
-    async ({ inputPath, outputPath, recalc, mutations }) => {
+    async ({ inputPath, outputPath, recalc, mutations, profile }) => {
       let workbook: Workbook | undefined;
       try {
-        workbook = await createOrLoadWorkbook(inputPath);
+        workbook = await createOrLoadWorkbook(inputPath, profile as ExcelProfileId | undefined);
         for (const [idx, mutation] of mutations.entries()) {
           assertStatus(applyMutation(workbook, mutation as CellMutation), `apply mutation ${idx}`);
         }

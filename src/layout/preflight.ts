@@ -1,14 +1,13 @@
-import { colToIndex, normalizeRange, parseRangeRef } from "../a1.js";
+import { colToIndex, normalizeRange, parseRangeRef, parseSelectionRef } from "../a1.js";
 import { findSheetIndex, type Workbook } from "../formulon.js";
 import { mmToPoints, pixelsToPoints } from "../preview/geometry.js";
 import type { PrintSettingsInput } from "../print.js";
 import { columnPointsToChars } from "../session/geometry.js";
 import { assertInGrid, MAX_COL, MAX_ROW } from "../session/shared.js";
-import type { StyleInput } from "../styles.js";
+import { materializedStyleCells, type StyleInput } from "../styles.js";
 import { nonEmptyPrintSettingsSchema, styleSchema } from "./schemas.js";
 import {
   type LayoutOperation,
-  type LayoutRect,
   MAX_EXPANDED_ROW_WRITES,
   MAX_LAYOUT_COLUMN_WIDTH_CHARS,
   MAX_LAYOUT_OPERATIONS,
@@ -30,20 +29,17 @@ function integerInGrid(value: unknown, name: string, max: number): asserts value
   }
 }
 
-function rangeCellCount(rect: LayoutRect): number {
-  return (rect.lastRow - rect.firstRow + 1) * (rect.lastCol - rect.firstCol + 1);
-}
-
 function resolvedRange(
   workbook: Workbook,
   selectedSheet: number,
   ref: string,
   label: string,
+  wholeLines = false,
 ): ResolvedLayoutRange {
   if (typeof ref !== "string" || ref.trim().length === 0) {
     throw new Error(`${label} must be a non-empty A1 range`);
   }
-  const parsed = normalizeRange(parseRangeRef(ref));
+  const parsed = normalizeRange((wholeLines ? parseSelectionRef : parseRangeRef)(ref));
   const rangeSheet = findSheetIndex(workbook, parsed.sheetName ?? selectedSheet);
   if (rangeSheet !== selectedSheet) {
     throw new Error(`${label} must refer to the selected sheet; got ${ref}`);
@@ -241,8 +237,9 @@ export function preflightLayout(
         selectedSheet,
         operation.range,
         `operations[${index}].range`,
+        true,
       );
-      styledCells += rangeCellCount(resolved.rect);
+      styledCells += materializedStyleCells(resolved.rect, style, operation.range);
       if (styledCells > MAX_STYLED_CELLS) {
         throw new Error(`style operations exceed the ${MAX_STYLED_CELLS}-cell limit`);
       }

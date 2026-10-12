@@ -108,7 +108,6 @@ export function applySessionLayout(
         base: operation.base,
         regions: applied.regions.map((region) => ({
           range: rangeA1(region.firstRow, region.firstCol, region.lastRow, region.lastCol),
-          cellCount: region.cellCount,
           baseXfIndex: region.baseXfIndex,
           xfIndex: region.xfIndex,
         })),

@@ -1,3 +1,4 @@
+import { MAX_COL, MAX_ROW } from "../a1.js";
 import {
   assertStatus,
   type BorderRecord,
@@ -364,34 +365,22 @@ function deriveStyle(
   return derived;
 }
 
-type CellAddress = { row: number; col: number };
-
 /**
- * Groups a band's cells by the style they already carry, so a restyle keeps
- * what it was not asked to change. Excel formats this way — making a range bold
- * does not reset the number format under it — and flattening a band to its
- * top-left cell's style would silently undo an earlier pass.
+ * Counts the cells styling `rect` materializes. Whole rows or columns are
+ * styled as rows or columns and materialize none; an outline border needs
+ * edges, so it is refused on them.
  */
-function groupByBaseStyle(
-  wb: Workbook,
-  sheet: number,
-  rowBand: Band,
-  colBand: Band,
-): Map<number, CellAddress[]> {
-  const groups = new Map<number, CellAddress[]>();
-  for (let row = rowBand.first; row <= rowBand.last; row += 1) {
-    for (let col = colBand.first; col <= colBand.last; col += 1) {
-      const cell = wb.getCellXfIndex(sheet, row, col);
-      assertStatus(cell.status, `read style at ${row},${col}`);
-      const group = groups.get(cell.xfIndex);
-      if (group) {
-        group.push({ row, col });
-      } else {
-        groups.set(cell.xfIndex, [{ row, col }]);
-      }
-    }
+export function materializedStyleCells(rect: StyleRect, style: StyleInput, ref: string): number {
+  const wholeLines =
+    (rect.firstRow === 0 && rect.lastRow === MAX_ROW) ||
+    (rect.firstCol === 0 && rect.lastCol === MAX_COL);
+  if (!wholeLines) {
+    return (rect.lastRow - rect.firstRow + 1) * (rect.lastCol - rect.firstCol + 1);
   }
-  return groups;
+  if (style.border?.outline !== undefined) {
+    throw new Error(`an outline border needs a bounded range, not whole rows or columns: ${ref}`);
+  }
+  return 0;
 }
 
 export type StyledRegion = {
@@ -401,7 +390,6 @@ export type StyledRegion = {
   lastCol: number;
   baseXfIndex: number;
   xfIndex: number;
-  cellCount: number;
 };
 
 export type AppliedStyle = {
@@ -409,13 +397,15 @@ export type AppliedStyle = {
 };
 
 /**
- * Applies a declarative style across a rectangle.
+ * Applies a declarative style across a rectangle, as Excel's attribute-only
+ * formatting does.
  *
- * The rectangle is split two ways: by band, when an outline border means the
- * edges differ from the interior, and by the style each cell already carries,
- * so the requested change is a delta rather than a replacement. A band whose
- * cells all share one style is written with a single range call, which
- * materializes blank cells so an empty ruled box renders.
+ * The rectangle is split by band when an outline border means the edges
+ * differ from the interior. Within a band the engine lists the styles the
+ * selection resolves to and remaps each to its patched copy, so the change is
+ * a delta rather than a replacement: blank cells of a bounded band are
+ * materialized so an empty ruled box renders, while a whole column or row
+ * restyles the column or row itself.
  */
 export function applyRangeStyle(
   wb: Workbook,
@@ -440,14 +430,23 @@ export function applyRangeStyle(
   const regions: StyledRegion[] = [];
   for (const rowBand of rowBands) {
     for (const colBand of colBands) {
-      const bandCells = (rowBand.last - rowBand.first + 1) * (colBand.last - colBand.first + 1);
-      // "default" discards whatever is there, so the band needs no scan.
-      const groups =
-        base === "default"
-          ? new Map<number, CellAddress[] | null>([[0, null]])
-          : (groupByBaseStyle(wb, sheet, rowBand, colBand) as Map<number, CellAddress[] | null>);
-
-      for (const [baseXfIndex, cells] of groups) {
+      const resolved = wb.rangeStyleBases(
+        sheet,
+        rowBand.first,
+        colBand.first,
+        rowBand.last,
+        colBand.last,
+      );
+      assertStatus(resolved.status, "read range styles");
+      const fromXfs = resolved.xfIndices;
+      const patched = new Map<number, number>();
+      const toXfs = fromXfs.map((xfIndex) => {
+        // "default" discards whatever is there, so every base patches xf 0.
+        const baseXfIndex = base === "default" ? 0 : xfIndex;
+        const known = patched.get(baseXfIndex);
+        if (known !== undefined) {
+          return known;
+        }
         const derived = deriveStyle(wb, baseXfIndex, style, cache);
         const borderIndex = borderInput
           ? addStyle(wb, "border", buildBorder(derived.border, borderInput, rowBand, colBand))
@@ -465,49 +464,29 @@ export function applyRangeStyle(
           ),
         );
         assertStatus(added.status, "add cell format");
-
-        if (cells === null || cells.length === bandCells) {
-          assertStatus(
-            wb.setRangeXfIndex(
-              sheet,
-              rowBand.first,
-              colBand.first,
-              rowBand.last,
-              colBand.last,
-              added.index,
-            ),
-            "apply cell format to range",
-          );
-          regions.push({
-            firstRow: rowBand.first,
-            firstCol: colBand.first,
-            lastRow: rowBand.last,
-            lastCol: colBand.last,
-            baseXfIndex,
-            xfIndex: added.index,
-            cellCount: bandCells,
-          });
-          continue;
-        }
-
-        for (const cell of cells) {
-          // One-cell range rather than setCellXfIndex, so a blank cell in a
-          // mixed band is materialized the same way a whole-band write does.
-          assertStatus(
-            wb.setRangeXfIndex(sheet, cell.row, cell.col, cell.row, cell.col, added.index),
-            "apply cell format",
-          );
-        }
+        patched.set(baseXfIndex, added.index);
         regions.push({
-          firstRow: Math.min(...cells.map((cell) => cell.row)),
-          firstCol: Math.min(...cells.map((cell) => cell.col)),
-          lastRow: Math.max(...cells.map((cell) => cell.row)),
-          lastCol: Math.max(...cells.map((cell) => cell.col)),
+          firstRow: rowBand.first,
+          firstCol: colBand.first,
+          lastRow: rowBand.last,
+          lastCol: colBand.last,
           baseXfIndex,
           xfIndex: added.index,
-          cellCount: cells.length,
         });
-      }
+        return added.index;
+      });
+      assertStatus(
+        wb.remapRangeStyle(
+          sheet,
+          rowBand.first,
+          colBand.first,
+          rowBand.last,
+          colBand.last,
+          fromXfs,
+          toXfs,
+        ),
+        "apply cell format to range",
+      );
     }
   }
 

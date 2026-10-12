@@ -1,5 +1,5 @@
 import type { CellsInRangeResult, MergeRange, Value } from "@libraz/formulon";
-import { cellToA1 } from "../a1.js";
+import { cellToA1, MAX_COL, MAX_ROW } from "../a1.js";
 import {
   assertStatus,
   DisplayStatus,
@@ -13,10 +13,7 @@ import {
 import { classifyNumberFormat, describeNumberFormat, type NumberFormatInfo } from "../numfmt.js";
 import type { WorkbookSession } from "./state.js";
 
-/** Excel's maximum zero-based row index (1,048,576 rows). */
-export const MAX_ROW = 1_048_575;
-/** Excel's maximum zero-based column index (16,384 columns, XFD). */
-export const MAX_COL = 16_383;
+export { MAX_COL, MAX_ROW };
 /** Hard ceiling on cells materialized by a single range read. */
 export const MAX_RANGE_CELLS = 100_000;
 export type PrimitiveCellValue = {

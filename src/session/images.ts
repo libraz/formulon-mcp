@@ -234,3 +234,94 @@ export function removeSessionImage(
   touch(session, true);
   return { session: publicInfo(session), sheet: sheetIndex, objectId, removed: true };
 }
+
+export type ImageMoveInput = {
+  anchor?: string;
+  offsetX?: ImageLength;
+  offsetY?: ImageLength;
+  width?: ImageLength;
+  height?: ImageLength;
+  anchorKind?: "oneCell" | "twoCell";
+};
+
+/**
+ * Moves or resizes a picture in place, keeping its id, crop and rotation.
+ * Anything the input omits keeps its current value; a lone width or height
+ * keeps the picture's current aspect ratio.
+ */
+export function moveSessionImage(
+  id: string,
+  sheet: number | string | undefined,
+  objectId: number,
+  input: ImageMoveInput,
+) {
+  const session = getSession(id);
+  const sheetIndex = findSheetIndex(session.workbook, sheet);
+  const objects = session.workbook.listDrawingObjects(sheetIndex);
+  assertStatus(objects.status, "list drawing objects");
+  const current = Array.from(objects).find((object) => object.objectId === objectId);
+  if (!current) {
+    throw new Error(`no drawing object ${objectId} on sheet ${sheetIndex}`);
+  }
+  const anchor = input.anchor === undefined ? undefined : parseCellRef(input.anchor);
+  if (anchor?.sheetName !== undefined) {
+    throw new Error("anchor must be a cell on the selected sheet, without a sheet name");
+  }
+  if (anchor) {
+    assertInGrid(anchor.row, anchor.col);
+  }
+
+  let widthEmu = lengthToEmu(input.width, "width");
+  let heightEmu = lengthToEmu(input.height, "height");
+  if (widthEmu > 0 && heightEmu === 0) {
+    heightEmu = Math.round((widthEmu * current.cy) / current.cx);
+  } else if (heightEmu > 0 && widthEmu === 0) {
+    widthEmu = Math.round((heightEmu * current.cx) / current.cy);
+  }
+  const anchorKind =
+    input.anchorKind === undefined
+      ? current.anchorKind
+      : input.anchorKind === "twoCell"
+        ? AnchorKind.TwoCell
+        : AnchorKind.OneCell;
+
+  touch(session, true);
+  assertStatus(
+    session.workbook.setImageAnchor(sheetIndex, objectId, {
+      anchorKind,
+      row: anchor?.row ?? current.fromRow,
+      col: anchor?.col ?? current.fromCol,
+      colOffEmu:
+        input.offsetX === undefined ? current.fromColOff : lengthToEmu(input.offsetX, "offsetX"),
+      rowOffEmu:
+        input.offsetY === undefined ? current.fromRowOff : lengthToEmu(input.offsetY, "offsetY"),
+      widthEmu,
+      heightEmu,
+    }),
+    "move image",
+  );
+  const placed = listSessionImages(id, sheetIndex).objects.find(
+    (object) => object.objectId === objectId,
+  );
+  return {
+    session: publicInfo(session),
+    sheet: sheetIndex,
+    objectId,
+    ...(placed ? { placed } : {}),
+  };
+}
+
+/** Moves a drawing object to position `index` in the back-to-front stacking order. */
+export function reorderSessionImage(
+  id: string,
+  sheet: number | string | undefined,
+  objectId: number,
+  index: number,
+) {
+  const session = getSession(id);
+  const sheetIndex = findSheetIndex(session.workbook, sheet);
+  touch(session, true);
+  assertStatus(session.workbook.setImageZOrder(sheetIndex, objectId, index), "reorder image");
+  const order = listSessionImages(id, sheetIndex).objects.map((object) => object.objectId);
+  return { session: publicInfo(session), sheet: sheetIndex, objectId, index, order };
+}

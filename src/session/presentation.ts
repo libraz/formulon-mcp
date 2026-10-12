@@ -1,4 +1,4 @@
-import { cellToA1, normalizeRange, parseCellRef, parseRangeRef } from "../a1.js";
+import { cellToA1, normalizeRange, parseCellRef, parseSelectionRef } from "../a1.js";
 import { buildDocument, type DocumentSpec } from "../document.js";
 import { findSheetIndex } from "../formulon.js";
 import { type PrintSettingsInput, readPrintSettings, writePrintSettings } from "../print.js";
@@ -6,6 +6,7 @@ import {
   applyDefaultFont,
   applyRangeStyle,
   type FontStyleInput,
+  materializedStyleCells,
   readDefaultFont,
   type StyleBase,
   type StyleInput,
@@ -103,30 +104,25 @@ export function styleSessionRange(
   base: StyleBase,
 ) {
   const session = getSession(id);
-  const range = normalizeRange(parseRangeRef(ref));
+  const range = normalizeRange(parseSelectionRef(ref));
   const sheetIndex = findSheetIndex(session.workbook, range.sheetName ?? fallbackSheet);
   assertInGrid(range.end.row, range.end.col);
-  // Styling materializes every cell in the rectangle, so an over-wide range is
-  // refused rather than turned into a sheet of millions of styled blanks.
-  const cells = (range.end.row - range.start.row + 1) * (range.end.col - range.start.col + 1);
+  const rect = {
+    firstRow: range.start.row,
+    firstCol: range.start.col,
+    lastRow: range.end.row,
+    lastCol: range.end.col,
+  };
+  // A bounded range materializes every blank cell in it, so an over-wide one
+  // is refused; whole rows and columns are styled as rows and columns instead.
+  const cells = materializedStyleCells(rect, style, ref);
   if (cells > MAX_RANGE_CELLS) {
     throw new Error(
-      `range ${ref} spans ${cells} cells (limit ${MAX_RANGE_CELLS}); style a smaller range`,
+      `range ${ref} spans ${cells} cells (limit ${MAX_RANGE_CELLS}); style a smaller range or whole rows/columns`,
     );
   }
   touch(session, true);
-  const applied = applyRangeStyle(
-    session.workbook,
-    sheetIndex,
-    {
-      firstRow: range.start.row,
-      firstCol: range.start.col,
-      lastRow: range.end.row,
-      lastCol: range.end.col,
-    },
-    style,
-    base,
-  );
+  const applied = applyRangeStyle(session.workbook, sheetIndex, rect, style, base);
   return {
     session: publicInfo(session),
     range: {
@@ -137,7 +133,6 @@ export function styleSessionRange(
     },
     regions: applied.regions.map((region) => ({
       range: rangeA1(region.firstRow, region.firstCol, region.lastRow, region.lastCol),
-      cellCount: region.cellCount,
       baseXfIndex: region.baseXfIndex,
       xfIndex: region.xfIndex,
     })),

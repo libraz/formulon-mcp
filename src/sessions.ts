@@ -28,12 +28,14 @@ export {
   getSessionRange,
   setSessionRange,
 } from "./session/cells.js";
-export type { ImageInsertInput } from "./session/images.js";
+export type { ImageInsertInput, ImageMoveInput } from "./session/images.js";
 export {
   getSessionImage,
   insertSessionImage,
   listSessionImages,
+  moveSessionImage,
   removeSessionImage,
+  reorderSessionImage,
 } from "./session/images.js";
 export type { LayoutOperation } from "./session/layout.js";
 export { applySessionLayout } from "./session/layout.js";
@@ -86,6 +88,7 @@ export {
   recalcSession,
   resolveSessionSheet,
   sessionDimension,
+  sessionProfileId,
   setSessionDefinedName,
   setSessionSheetView,
   traceSession,

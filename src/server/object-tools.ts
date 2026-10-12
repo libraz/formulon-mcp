@@ -5,7 +5,9 @@ import {
   getSessionImage,
   insertSessionImage,
   listSessionImages,
+  moveSessionImage,
   removeSessionImage,
+  reorderSessionImage,
   resolveSessionSheet,
   traceSession,
 } from "../sessions.js";
@@ -314,37 +316,47 @@ export function registerObjectTools(server: McpServer): void {
     {
       title: "Image operation",
       description:
-        "List a sheet's drawing objects (pictures, shapes, charts) with A1 anchors and sizes, get a picture's bytes (returned as an image, optionally written to outputPath), insert a PNG/JPEG/GIF/BMP file anchored at a cell, or remove a picture. Insertion keeps existing drawings; an omitted width or height keeps the aspect ratio, and omitting both uses the pixel size at 96 DPI.",
+        "List a sheet's drawing objects (pictures, shapes, charts) with A1 anchors and sizes, get a picture's bytes (returned as an image, optionally written to outputPath), insert a PNG/JPEG/GIF/BMP file anchored at a cell, move/resize a picture in place, change the stacking order, or remove a picture. Insertion keeps existing drawings; an omitted width or height keeps the aspect ratio, and omitting both uses the pixel size at 96 DPI. A move changes only what it states and keeps the picture's id, crop and rotation.",
       inputSchema: {
         ...sheetInputSchema,
-        operation: z.enum(["list", "get", "insert", "remove"]),
+        operation: z.enum(["list", "get", "insert", "move", "reorder", "remove"]),
         objectId: z
           .number()
           .int()
           .positive()
           .optional()
-          .describe("Drawing object id from list; required for get and remove."),
+          .describe("Drawing object id from list; required for get, move, reorder and remove."),
         path: z.string().optional().describe("Image file to insert; required for insert."),
         anchor: z
           .string()
           .optional()
-          .describe("Top-left cell on the selected sheet, for example B2; required for insert."),
+          .describe(
+            "Top-left cell on the selected sheet, for example B2; required for insert, optional for move.",
+          ),
         offsetX: imageLengthSchema.optional().describe("Offset from the anchor cell's left edge."),
         offsetY: imageLengthSchema.optional().describe("Offset from the anchor cell's top edge."),
         width: imageLengthSchema.optional(),
         height: imageLengthSchema.optional(),
         anchorKind: z
           .enum(["oneCell", "twoCell"])
-          .default("oneCell")
+          .optional()
           .describe(
-            "oneCell keeps the size when rows/columns resize; twoCell stretches with them.",
+            "oneCell keeps the size when rows/columns resize; twoCell stretches with them. Insert defaults to oneCell; move keeps the current kind.",
+          ),
+        index: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe(
+            "For reorder: target position in list order, which is back to front (0 is the back).",
           ),
         name: z.string().optional(),
         description: z.string().optional().describe("Alternative text."),
         outputPath: z.string().optional().describe("For get: write the image bytes to this path."),
       },
     },
-    ({ sessionId, sheet, operation, objectId, path, anchor, outputPath, ...placement }) => {
+    ({ sessionId, sheet, operation, objectId, path, anchor, outputPath, index, ...placement }) => {
       try {
         if (operation === "list") {
           return ok(listSessionImages(sessionId, sheet));
@@ -360,6 +372,19 @@ export function registerObjectTools(server: McpServer): void {
         }
         if (operation === "remove") {
           return ok(removeSessionImage(sessionId, sheet, objectId));
+        }
+        if (operation === "move") {
+          const { name, description, ...move } = placement;
+          if (name !== undefined || description !== undefined) {
+            throw new Error("name and description apply to insert only; move keeps them");
+          }
+          return ok(moveSessionImage(sessionId, sheet, objectId, { anchor, ...move }));
+        }
+        if (operation === "reorder") {
+          if (index === undefined) {
+            throw new Error("index is required for reorder");
+          }
+          return ok(reorderSessionImage(sessionId, sheet, objectId, index));
         }
         const image = getSessionImage(sessionId, sheet, objectId, outputPath);
         return {

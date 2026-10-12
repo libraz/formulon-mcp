@@ -18,5 +18,6 @@ export {
   applyDefaultFont,
   applyRangeStyle,
   describeFont,
+  materializedStyleCells,
   readDefaultFont,
 } from "./styles/resolve.js";

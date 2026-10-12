@@ -10,6 +10,14 @@ export type RangeAddress = {
   end: CellAddress;
 };
 
+/** Excel's maximum zero-based row index (1,048,576 rows). */
+export const MAX_ROW = 1_048_575;
+/** Excel's maximum zero-based column index (16,384 columns, XFD). */
+export const MAX_COL = 16_383;
+
+const WHOLE_LINES_PATTERN =
+  /^(?:(?<sheet>'(?:[^']|'')+'|[^!]+)!)?(?:\$?(?<firstCol>[A-Za-z]+):\$?(?<lastCol>[A-Za-z]+)|\$?(?<firstRow>[1-9][0-9]*):\$?(?<lastRow>[1-9][0-9]*))$/;
+
 const CELL_PATTERN =
   /^(?:(?<sheet>'(?:[^']|'')+'|[^!]+)!)?\$?(?<col>[A-Za-z]+)\$?(?<row>[1-9][0-9]*)$/;
 
@@ -104,6 +112,27 @@ export function parseRangeRef(ref: string): RangeAddress {
       ...end,
       sheetName,
     },
+  };
+}
+
+/**
+ * Parses an A1 range that may also name whole columns (`B:D`) or whole rows
+ * (`3:5`), which span the full grid on the other axis.
+ */
+export function parseSelectionRef(ref: string): RangeAddress {
+  const match = WHOLE_LINES_PATTERN.exec(ref.trim());
+  if (!match?.groups) {
+    return parseRangeRef(ref);
+  }
+  const { firstCol, lastCol, firstRow, lastRow } = match.groups;
+  const sheetName = normalizeSheetName(match.groups.sheet);
+  const [startRow, endRow, startCol, endCol] = firstCol
+    ? [0, MAX_ROW, colToIndex(firstCol), colToIndex(lastCol)]
+    : [Number.parseInt(firstRow, 10) - 1, Number.parseInt(lastRow, 10) - 1, 0, MAX_COL];
+  return {
+    sheetName,
+    start: { sheetName, row: startRow, col: startCol },
+    end: { sheetName, row: endRow, col: endCol },
   };
 }
 

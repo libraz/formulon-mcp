@@ -48,7 +48,11 @@ const mergeOperationSchema = z.object({
 
 const styleOperationSchema = z.object({
   type: z.literal("style"),
-  range: z.string().describe("A1 range on the selected sheet."),
+  range: z
+    .string()
+    .describe(
+      "A1 range, whole columns (C:C) or whole rows (1:1) on the selected sheet; whole lines are styled as columns or rows.",
+    ),
   style: styleSchema,
   base: z
     .enum(["existing", "default"])

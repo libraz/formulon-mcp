@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   assertStatus,
   createOrLoadWorkbook,
+  type ExcelProfileId,
   type LossCounters,
   readLosses,
   saveWorkbook,
@@ -58,11 +59,12 @@ export function publicInfo(session: WorkbookSession): SessionInfo {
 export async function openSession(
   inputPath?: string,
   id: string = randomUUID(),
+  profile?: ExcelProfileId,
 ): Promise<SessionInfo> {
   if (sessions.has(id)) {
     throw new Error(`session already exists: ${id}`);
   }
-  const workbook = await createOrLoadWorkbook(inputPath);
+  const workbook = await createOrLoadWorkbook(inputPath, profile);
   let registered = false;
   try {
     // The first check races with another open that awaited the same engine

@@ -1,5 +1,6 @@
 import {
   assertStatus,
+  type ExcelProfileId,
   findSheetIndex,
   GeometryMode,
   requireListResult,
@@ -218,6 +219,13 @@ export function getSessionMetadata(id: string, kind: "functions" | "externalLink
   };
 }
 
+/** Reads the Excel profile a session evaluates with. */
+export function sessionProfileId(id: string): ExcelProfileId {
+  const result = getSession(id).workbook.excelProfileId();
+  assertStatus(result.status, "read excel profile");
+  return result.value;
+}
+
 /** Resolves a sheet reference (zero-based index or name) to an index for a session. */
 export function resolveSessionSheet(id: string, sheet: number | string | undefined): number {
   return findSheetIndex(getSession(id).workbook, sheet);
@@ -297,7 +305,7 @@ export function traceSession(
 }
 
 export type DimensionAxis = "column" | "row";
-export type DimensionOperation = "list" | "size" | "hidden" | "outline";
+export type DimensionOperation = "list" | "size" | "resetSize" | "hidden" | "outline";
 export type DimensionUnit = "chars" | "pt" | "px" | "mm";
 
 type DisplayGeometry = {
@@ -433,6 +441,9 @@ export function sessionDimension(
         storedSize,
         displayGeometry: displayGeometry(columnCharsToPoints(workbook, sheetIndex, storedSize)),
       };
+    } else if (operation === "resetSize") {
+      touch(session, true);
+      status = workbook.clearColumnWidth(sheetIndex, first, last);
     } else if (operation === "hidden") {
       const hidden = requiredBoolean(params.hidden);
       touch(session, true);
@@ -472,6 +483,9 @@ export function sessionDimension(
         storedSize,
         displayGeometry: displayGeometry(storedSize),
       };
+    } else if (operation === "resetSize") {
+      touch(session, true);
+      status = workbook.clearRowHeight(sheetIndex, rowIndex);
     } else if (operation === "hidden") {
       const hidden = requiredBoolean(params.hidden);
       touch(session, true);

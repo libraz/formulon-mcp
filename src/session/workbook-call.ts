@@ -12,7 +12,9 @@ import { getSession, publicInfo, touch } from "./state.js";
  * session bookkeeping, so saving goes through `formulon_save_session`; and
  * `setIterativeProgress` takes a JS callback, which no JSON tool argument can
  * express. `probeImage` / `insertImage` take raw image bytes, which go through
- * `formulon_image_operation` instead.
+ * `formulon_image_operation` instead. `snapshotImage` / `restoreImage` and
+ * `snapshotRangeStyle` / `restoreRangeStyle` capture and replay opaque bytes,
+ * which a JSON result reduces to a length and a JSON argument cannot carry.
  */
 export const WORKBOOK_METHODS = new Set([
   "addSheet",
@@ -286,6 +288,23 @@ export const WORKBOOK_METHODS = new Set([
   "addPerson",
   "removePerson",
   "removeImage",
+  "setImageAnchor",
+  "setImageZOrder",
+  "setColumnStyle",
+  "clearColumnStyle",
+  "setRowStyle",
+  "clearRowStyle",
+  "clearColumnWidth",
+  "clearCellXfIndex",
+  "rangeStyleBases",
+  "remapRangeStyle",
+  "setThemeScriptFont",
+  "resetTheme",
+  "localizeFormula",
+  "canonicalizeFormula",
+  "localeFacts",
+  "compareText",
+  "collationClasses",
 ]);
 
 /**
@@ -408,6 +427,12 @@ export const READ_ONLY_METHODS = new Set([
   "getPersons",
   "listDrawingObjects",
   "getImage",
+  "rangeStyleBases",
+  "localizeFormula",
+  "canonicalizeFormula",
+  "localeFacts",
+  "compareText",
+  "collationClasses",
 ]);
 /** Calls an allowlisted low-level Formulon Workbook method with positional JSON arguments. */
 export function callWorkbookMethod(id: string, method: string, args: unknown[]) {

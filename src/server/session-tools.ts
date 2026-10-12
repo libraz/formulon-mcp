@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { ExcelProfileId } from "../formulon.js";
 import {
   analyzeSessionWorkbook,
   closeSession,
@@ -12,7 +13,7 @@ import {
   recalcSession,
   replaceSessionCells,
 } from "../sessions.js";
-import { fail, ok, sheetRefSchema } from "./shared.js";
+import { fail, ok, profileSchema, sheetRefSchema } from "./shared.js";
 
 const searchInputSchema = {
   sessionId: z.string(),
@@ -40,11 +41,18 @@ export function registerSessionTools(server: McpServer): void {
           .string()
           .optional()
           .describe("Optional stable session id; defaults to a UUID."),
+        profile: profileSchema
+          .optional()
+          .describe(
+            "Excel profile the session evaluates with (number/date text, TEXT, collation, code page); defaults to FORMULON_MCP_PROFILE, else win-365-en_US. A new workbook is also created as Excel creates it in that locale: body font, Normal style and sheet names, margins.",
+          ),
       },
     },
-    async ({ path, sessionId }) => {
+    async ({ path, sessionId, profile }) => {
       try {
-        return ok({ session: await openSession(path, sessionId) });
+        return ok({
+          session: await openSession(path, sessionId, profile as ExcelProfileId | undefined),
+        });
       } catch (error) {
         return fail(error);
       }
