@@ -20,7 +20,7 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - run: npm install -g npm@12.0.2
+      - run: npm install -g npm@12
       - run: corepack enable
       - run: corepack prepare yarn@4.18.0 --activate
 
