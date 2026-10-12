@@ -17,7 +17,9 @@ Requires Node.js 22 or newer; see [`engines`](https://github.com/libraz/formulon
 npx -y @libraz/formulon-mcp init
 ```
 
-Choose Claude Code, Codex CLI, or Claude Desktop, review the configuration changes, and restart the client. Ask the agent to evaluate `=SUM(10,20,30)` using Formulon; the result is `60`.
+Choose Claude Code, Codex CLI, or Claude Desktop, then the Excel locale and host (Windows or Mac) that new sessions evaluate with. The locale sets number and date text, `TEXT` formats, text comparison, and double-byte text functions; it defaults to the system locale. Review the configuration changes and restart the client. Ask the agent to evaluate `=SUM(10,20,30)` using Formulon; the result is `60`.
+
+For scripted setup, pass the profile directly, for example `init --profile win-365-ja_JP`. A single session can still pick another profile when it is opened.
 
 See [installation](https://formulon.libraz.net/mcp/install) for manual client configuration, local checkouts, and troubleshooting. Remove registration with `npx -y @libraz/formulon-mcp uninstall`.
 

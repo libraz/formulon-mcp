@@ -17,7 +17,9 @@ Node.js 22 以上が必要です。[`engines`](https://github.com/libraz/formulo
 npx -y @libraz/formulon-mcp init
 ```
 
-Claude Code、Codex CLI、Claude Desktop から対象を選び、設定の変更内容を確認してクライアントを再起動します。エージェントに Formulon で `=SUM(10,20,30)` を計算するよう依頼すると、結果は `60` になります。
+Claude Code、Codex CLI、Claude Desktop から対象を選び、続けて新しいセッションが計算に使う Excel のロケールとホスト（Windows または Mac）を選びます。ロケールは数値や日付の文字列、`TEXT` の書式、文字列の比較、2 バイト文字を扱う関数の結果を決めるもので、既定ではシステムのロケールが選ばれます。設定の変更内容を確認してクライアントを再起動します。エージェントに Formulon で `=SUM(10,20,30)` を計算するよう依頼すると、結果は `60` になります。
+
+スクリプトから設定する場合は、`init --profile win-365-ja_JP` のようにプロファイルを直接指定します。個々のセッションでは、開くときに別のプロファイルを選べます。
 
 手動設定、ローカルコードの利用、トラブルシュートは[インストール](https://formulon.libraz.net/ja/mcp/install)を参照してください。登録を削除するには `npx -y @libraz/formulon-mcp uninstall` を実行します。
 
