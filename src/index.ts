@@ -28,8 +28,12 @@ MCP server for Formulon Excel-compatible formula and workbook evaluation.
 
 Usage:
   formulon-mcp            Start the stdio MCP server.
-  formulon-mcp init       Interactive setup: write the formulon MCP entry into
+  formulon-mcp init [--profile <id>]
+                          Interactive setup: write the formulon MCP entry into
                           Claude Code, Codex CLI, and/or Claude Desktop configs.
+                          --profile sets the Excel profile new sessions default
+                          to (for example win-365-ja_JP); otherwise a locale and
+                          host are picked from a menu.
   formulon-mcp uninstall  Interactive removal: drop the formulon MCP entry from
                           those config files.
   formulon-mcp --help     Show this help.
@@ -37,6 +41,23 @@ Usage:
 
 Docs: https://github.com/libraz/formulon-mcp
 `;
+
+/** Reads `--profile <id>` or `--profile=<id>` from the init arguments. */
+const parseProfileFlag = (args: string[]): string | undefined => {
+  for (const [index, arg] of args.entries()) {
+    if (arg.startsWith("--profile=")) {
+      return arg.slice("--profile=".length);
+    }
+    if (arg === "--profile") {
+      const value = args[index + 1];
+      if (value === undefined) {
+        throw new Error("--profile needs a profile id, for example win-365-ja_JP");
+      }
+      return value;
+    }
+  }
+  return undefined;
+};
 
 const main = async (): Promise<void> => {
   const argv = process.argv.slice(2);
@@ -49,7 +70,7 @@ const main = async (): Promise<void> => {
     return;
   }
   if (argv[0] === "init") {
-    await runInit();
+    await runInit({ profile: parseProfileFlag(argv.slice(1)) });
     return;
   }
   if (argv[0] === "uninstall") {

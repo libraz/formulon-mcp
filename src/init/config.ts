@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
+import { PROFILE_ENV } from "../formulon.js";
 
 const PACKAGE_SPEC = "@libraz/formulon-mcp";
 export const SERVER_NAME = "formulon";
@@ -9,6 +10,13 @@ export const SERVER_NAME = "formulon";
 type McpServerEntry = {
   command: string;
   args: string[];
+  env?: Record<string, string>;
+};
+
+/** What `init` writes beyond the launch command. */
+export type InstallOptions = {
+  /** Excel profile new sessions default to, written as `FORMULON_MCP_PROFILE`. */
+  profile?: string;
 };
 
 type ClaudeConfig = {
@@ -16,9 +24,10 @@ type ClaudeConfig = {
   [key: string]: unknown;
 };
 
-const buildEntry = (): McpServerEntry => ({
+const buildEntry = (options: InstallOptions): McpServerEntry => ({
   command: "npx",
   args: ["-y", PACKAGE_SPEC],
+  ...(options.profile ? { env: { [PROFILE_ENV]: options.profile } } : {}),
 });
 
 /**
@@ -41,7 +50,10 @@ const writeFileAtomic = async (path: string, data: string): Promise<void> => {
   }
 };
 
-export const writeJsonConfig = async (path: string): Promise<void> => {
+export const writeJsonConfig = async (
+  path: string,
+  options: InstallOptions = {},
+): Promise<void> => {
   let data: ClaudeConfig = {};
   if (existsSync(path)) {
     const raw = await readFile(path, "utf8");
@@ -56,13 +68,15 @@ export const writeJsonConfig = async (path: string): Promise<void> => {
     }
   }
   data.mcpServers = data.mcpServers ?? {};
-  data.mcpServers[SERVER_NAME] = buildEntry();
+  data.mcpServers[SERVER_NAME] = buildEntry(options);
   await mkdir(dirname(path), { recursive: true });
   await writeFileAtomic(path, `${JSON.stringify(data, null, 2)}\n`);
 };
 
-export const writeClaudeConfig = (path: string): Promise<void> => writeJsonConfig(path);
-export const writeClaudeDesktopConfig = (path: string): Promise<void> => writeJsonConfig(path);
+export const writeClaudeConfig = (path: string, options?: InstallOptions): Promise<void> =>
+  writeJsonConfig(path, options);
+export const writeClaudeDesktopConfig = (path: string, options?: InstallOptions): Promise<void> =>
+  writeJsonConfig(path, options);
 
 /**
  * Matches the server's own Codex TOML header and any sub-table under it, so a
@@ -70,11 +84,14 @@ export const writeClaudeDesktopConfig = (path: string): Promise<void> => writeJs
  * than left behind as an orphan section.
  */
 const CODEX_SECTION_HEADER = new RegExp(
-  `^[ \\t]*\\[mcp_servers\\.${SERVER_NAME}(?:\\.[^\\]]+)?\\][ \\t]*$`,
+  `^[ \\t]*\\[mcp_servers\\.${SERVER_NAME}(?:\\.[^\\]]+)?\\][ \\t]*(?:#.*)?$`,
 );
 
 /** The same matcher applied line-by-line across a whole document. */
 const CODEX_SECTION_HEADER_ANYWHERE = new RegExp(CODEX_SECTION_HEADER.source, "m");
+
+/** Any TOML table or array-of-tables header, with an optional trailing comment. */
+const TOML_TABLE_HEADER = /^[ \t]*\[\[?[^\]]+\]\]?[ \t]*(?:#.*)?$/;
 
 const stripCodexFormulonSection = (content: string): string => {
   const lines = content.split("\n");
@@ -87,7 +104,7 @@ const stripCodexFormulonSection = (content: string): string => {
       continue;
     }
     if (inBlock) {
-      if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      if (TOML_TABLE_HEADER.test(trimmed)) {
         inBlock = false;
         out.push(line);
       }
@@ -98,7 +115,10 @@ const stripCodexFormulonSection = (content: string): string => {
   return out.join("\n");
 };
 
-export const writeCodexConfig = async (path: string): Promise<void> => {
+export const writeCodexConfig = async (
+  path: string,
+  options: InstallOptions = {},
+): Promise<void> => {
   let existing = "";
   if (existsSync(path)) {
     existing = await readFile(path, "utf8");
@@ -109,6 +129,7 @@ export const writeCodexConfig = async (path: string): Promise<void> => {
     `[mcp_servers.${SERVER_NAME}]`,
     'command = "npx"',
     `args = ["-y", "${PACKAGE_SPEC}"]`,
+    ...(options.profile ? [`env = { ${PROFILE_ENV} = "${options.profile}" }`] : []),
   ].join("\n");
   await mkdir(dirname(path), { recursive: true });
   await writeFileAtomic(path, `${prefix}${block}\n`);

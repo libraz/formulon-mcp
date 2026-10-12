@@ -1,6 +1,14 @@
 export type { TargetKind } from "./init/cli.js";
-export { parseTargetChoice, runInit, runUninstall } from "./init/cli.js";
-export type { RemoveOutcome } from "./init/config.js";
+export {
+  assertKnownProfile,
+  defaultLocaleKey,
+  PROFILE_LOCALES,
+  parseProfileChoice,
+  parseTargetChoice,
+  runInit,
+  runUninstall,
+} from "./init/cli.js";
+export type { InstallOptions, RemoveOutcome } from "./init/config.js";
 export {
   claudeDesktopConfigPath,
   displayPath,
