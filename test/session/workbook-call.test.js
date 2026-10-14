@@ -465,13 +465,14 @@ test("compareText orders text case-insensitively under a mac profile at every st
         }
       }
     }
-    // Strength and profile pick the fold: Mac collation equates sharp s with ss
-    // except for exact classic matching, while the Windows fold never does.
+    // Strength picks the fold: Mac and Windows collation both equate sharp s
+    // with ss except for exact classic matching.
     const compare = (a, b, strength, profile) =>
       callWorkbookMethod("compare-mac", "compareText", [a, b, strength, profile]).result.order;
     assert.equal(compare("ß", "ss", 0, "mac-365-en_US"), 0);
     assert.equal(compare("ß", "ss", 2, "mac-365-en_US"), 1);
-    assert.equal(compare("ß", "ss", 0, "win-365-en_US"), 1);
+    assert.equal(compare("ß", "ss", 0, "win-365-en_US"), 0);
+    assert.equal(compare("ß", "ss", 2, "win-365-en_US"), 1);
     assert.throws(
       () => callWorkbookMethod("compare-mac", "compareText", ["a", "b", 0, "mac-365-xx_XX"]),
       /workbook compareText failed/,
