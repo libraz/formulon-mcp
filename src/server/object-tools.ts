@@ -316,7 +316,7 @@ export function registerObjectTools(server: McpServer): void {
     {
       title: "Image operation",
       description:
-        "List a sheet's drawing objects (pictures, shapes, charts) with A1 anchors and sizes, get a picture's bytes (returned as an image, optionally written to outputPath), insert a PNG/JPEG/GIF/BMP file anchored at a cell, move/resize a picture in place, change the stacking order, or remove a picture. Insertion keeps existing drawings; an omitted width or height keeps the aspect ratio, and omitting both uses the pixel size at 96 DPI. A move changes only what it states and keeps the picture's id, crop and rotation.",
+        "List a sheet's drawing objects (pictures, shapes, charts) with A1 anchors and sizes, get a picture's bytes (returned as an image, optionally written to outputPath), insert a PNG/JPEG/GIF/BMP file anchored at a cell, move/resize a picture or chart in place, change the stacking order, or remove a picture or chart. Insertion keeps existing drawings; an omitted width or height keeps the aspect ratio, and omitting both uses the pixel size at 96 DPI. A move changes only what it states and keeps the object's id; a picture also keeps its crop and rotation.",
       inputSchema: {
         ...sheetInputSchema,
         operation: z.enum(["list", "get", "insert", "move", "reorder", "remove"]),

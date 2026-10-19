@@ -38,7 +38,7 @@
     "prepare": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@libraz/formulon": "^0.15.2",
+    "@libraz/formulon": "^0.16.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@resvg/resvg-js": "^2.6.2",
     "zod": "^4.6.5"

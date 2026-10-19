@@ -12,7 +12,7 @@ import { getSession, publicInfo, touch } from "./state.js";
  * session bookkeeping, so saving goes through `formulon_save_session`; and
  * `setIterativeProgress` takes a JS callback, which no JSON tool argument can
  * express. `probeImage` / `insertImage` take raw image bytes, which go through
- * `formulon_image_operation` instead. `snapshotImage` / `restoreImage` and
+ * `formulon_image_operation` instead. `snapshotDrawing` / `restoreDrawing` and
  * `snapshotRangeStyle` / `restoreRangeStyle` capture and replay opaque bytes,
  * which a JSON result reduces to a length and a JSON argument cannot carry.
  */
@@ -268,6 +268,9 @@ export const WORKBOOK_METHODS = new Set([
   "getPersons",
   "listDrawingObjects",
   "getImage",
+  "getChart",
+  "getChartData",
+  "previewChartData",
   "setSheetFormatDefaults",
   "clearRowHeight",
   "setThemeColors",
@@ -287,9 +290,22 @@ export const WORKBOOK_METHODS = new Set([
   "removeThreadedComment",
   "addPerson",
   "removePerson",
-  "removeImage",
-  "setImageAnchor",
-  "setImageZOrder",
+  "removeDrawing",
+  "setDrawingAnchor",
+  "setDrawingZOrder",
+  "insertChart",
+  "setChartType",
+  "setChartTitle",
+  "setChartLegend",
+  "setChartAxis",
+  "setChartDisplay",
+  "setChartSeries",
+  "setChartPoint",
+  "setChartPlot",
+  "setChartFilter",
+  "addChartSeries",
+  "removeChartSeries",
+  "setChartSource",
   "setColumnStyle",
   "clearColumnStyle",
   "setRowStyle",
@@ -427,6 +443,9 @@ export const READ_ONLY_METHODS = new Set([
   "getPersons",
   "listDrawingObjects",
   "getImage",
+  "getChart",
+  "getChartData",
+  "previewChartData",
   "rangeStyleBases",
   "localizeFormula",
   "canonicalizeFormula",

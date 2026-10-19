@@ -221,7 +221,7 @@ export function insertSessionImage(
   };
 }
 
-/** Removes a picture; other drawing objects, values and formatting are kept. */
+/** Removes a picture or chart; other drawing objects, values and formatting are kept. */
 export function removeSessionImage(
   id: string,
   sheet: number | string | undefined,
@@ -230,7 +230,7 @@ export function removeSessionImage(
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
   touch(session, true);
-  assertStatus(session.workbook.removeImage(sheetIndex, objectId), "remove image");
+  assertStatus(session.workbook.removeDrawing(sheetIndex, objectId), "remove image");
   touch(session, true);
   return { session: publicInfo(session), sheet: sheetIndex, objectId, removed: true };
 }
@@ -245,9 +245,9 @@ export type ImageMoveInput = {
 };
 
 /**
- * Moves or resizes a picture in place, keeping its id, crop and rotation.
+ * Moves or resizes a picture or chart in place, keeping its id (and a picture's crop and rotation).
  * Anything the input omits keeps its current value; a lone width or height
- * keeps the picture's current aspect ratio.
+ * keeps the object's current aspect ratio.
  */
 export function moveSessionImage(
   id: string,
@@ -287,7 +287,7 @@ export function moveSessionImage(
 
   touch(session, true);
   assertStatus(
-    session.workbook.setImageAnchor(sheetIndex, objectId, {
+    session.workbook.setDrawingAnchor(sheetIndex, objectId, {
       anchorKind,
       row: anchor?.row ?? current.fromRow,
       col: anchor?.col ?? current.fromCol,
@@ -321,7 +321,7 @@ export function reorderSessionImage(
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
   touch(session, true);
-  assertStatus(session.workbook.setImageZOrder(sheetIndex, objectId, index), "reorder image");
+  assertStatus(session.workbook.setDrawingZOrder(sheetIndex, objectId, index), "reorder image");
   const order = listSessionImages(id, sheetIndex).objects.map((object) => object.objectId);
   return { session: publicInfo(session), sheet: sheetIndex, objectId, index, order };
 }

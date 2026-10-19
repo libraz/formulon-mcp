@@ -339,13 +339,13 @@ const UNEXPOSED_WORKBOOK_METHODS = new Set([
   "insertImage",
   "isValid",
   "probeImage",
-  "restoreImage",
+  "restoreDrawing",
   "restoreRangeStyle",
   "save",
   "saveAs",
   "saveWithDiagnostics",
   "setIterativeProgress",
-  "snapshotImage",
+  "snapshotDrawing",
   "snapshotRangeStyle",
 ]);
 

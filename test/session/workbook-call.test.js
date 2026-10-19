@@ -143,8 +143,8 @@ test("every allowlisted method outside the read-only set marks the session dirty
     "remapRangeStyle",
     "setThemeScriptFont",
     "resetTheme",
-    "setImageAnchor",
-    "setImageZOrder",
+    "setDrawingAnchor",
+    "setDrawingZOrder",
   ]) {
     assert.equal(mutating.includes(required), true, `${required} should be classified as mutating`);
   }
@@ -169,8 +169,8 @@ test("rejects the engine methods that are withheld from the allowlist", async ()
   await openSession(undefined, "withheld");
   try {
     for (const method of [
-      "snapshotImage",
-      "restoreImage",
+      "snapshotDrawing",
+      "restoreDrawing",
       "snapshotRangeStyle",
       "restoreRangeStyle",
       "save",
@@ -408,7 +408,7 @@ test("image anchor and stacking methods are mutations", async () => {
       [first, second],
     );
 
-    const anchored = callWorkbookMethod("call-images", "setImageAnchor", [
+    const anchored = callWorkbookMethod("call-images", "setDrawingAnchor", [
       0,
       first,
       { anchorKind: 0, row: 7, col: 5, colOffEmu: 0, rowOffEmu: 0, widthEmu: 0, heightEmu: 0 },
@@ -420,7 +420,7 @@ test("image anchor and stacking methods are mutations", async () => {
     );
 
     await saveSession("call-images", path.join(dir, "images-2.xlsx"));
-    const stacked = callWorkbookMethod("call-images", "setImageZOrder", [0, first, 1]);
+    const stacked = callWorkbookMethod("call-images", "setDrawingZOrder", [0, first, 1]);
     assert.equal(stacked.session.dirty, true);
     assert.deepEqual(
       listed().map((item) => item.objectId),

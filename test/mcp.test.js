@@ -1571,8 +1571,8 @@ test("MCP workbook_call serializes typed-array results as plain arrays and stays
       assert.equal((await call("compareText", ["b", "a", 0, "mac-365-en_US"])).result.order, 1);
 
       for (const method of [
-        "snapshotImage",
-        "restoreImage",
+        "snapshotDrawing",
+        "restoreDrawing",
         "snapshotRangeStyle",
         "restoreRangeStyle",
       ]) {
