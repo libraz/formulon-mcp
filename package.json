@@ -13,7 +13,7 @@
     "url": "https://github.com/libraz/formulon-mcp/issues"
   },
   "type": "module",
-  "packageManager": "yarn@4.18.0",
+  "packageManager": "yarn@4.18.1",
   "bin": "dist/index.js",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -41,15 +41,15 @@
     "@libraz/formulon": "^0.16.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@resvg/resvg-js": "^2.6.2",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
     "@types/node": "^26.6.5",
-    "@vitest/coverage-v8": "^5.0.3",
+    "@vitest/coverage-v8": "^5.0.5",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.5"
   },
   "engines": {
     "node": ">=22"
