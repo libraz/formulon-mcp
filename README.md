@@ -25,13 +25,13 @@ See [installation](https://formulon.libraz.net/mcp/install) for manual client co
 
 ## Guides
 
-| Task | Documentation |
-| --- | --- |
-| Edit a workbook template and save a copy | [Workbook workflow](https://formulon.libraz.net/mcp/workflow) |
-| Create an invoice with formulas and print settings | [Document authoring](https://formulon.libraz.net/mcp/authoring) |
-| Reproduce a form and inspect its appearance | [Layout and previews](https://formulon.libraz.net/mcp/layout-preview) |
-| Find overwritten or missing formulas | [Formula audit](https://formulon.libraz.net/mcp/formula-audit) |
-| Summarize sales data | [Tables and pivots](https://formulon.libraz.net/mcp/tables-pivots) |
+| Task                                               | Documentation                                                                                             |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Edit a workbook template and save a copy           | [Workbook workflow](https://formulon.libraz.net/mcp/workflow)                                             |
+| Create an invoice with formulas and print settings | [Document authoring](https://formulon.libraz.net/mcp/authoring)                                           |
+| Reproduce a form and inspect its appearance        | [Layout and previews](https://formulon.libraz.net/mcp/layout-preview)                                     |
+| Find overwritten or missing formulas               | [Formula audit](https://formulon.libraz.net/mcp/formula-audit)                                            |
+| Summarize sales data                               | [Tables and pivots](https://formulon.libraz.net/mcp/tables-pivots)                                        |
 | Inspect tool inputs or discover a low-level method | [Tools](https://formulon.libraz.net/mcp/tools) · [Advanced API](https://formulon.libraz.net/mcp/advanced) |
 
 Sessions live in memory and disappear when the server stops. Use explicit output paths and review load/save diagnostics. Preview rendering is approximate; formula audits report review candidates. See the [security model](https://formulon.libraz.net/mcp/security).

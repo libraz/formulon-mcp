@@ -25,14 +25,14 @@ Claude Code、Codex CLI、Claude Desktop から対象を選び、続けて新し
 
 ## ガイド
 
-| 作業 | ドキュメント |
-| --- | --- |
-| テンプレートを編集して別ファイルに保存する | [ワークブックのワークフロー](https://formulon.libraz.net/ja/mcp/workflow) |
-| 数式と印刷設定を含む請求書を作る | [帳票の作成](https://formulon.libraz.net/ja/mcp/authoring) |
-| 帳票を再現して見た目を確認する | [レイアウトとプレビュー](https://formulon.libraz.net/ja/mcp/layout-preview) |
-| 数式の上書きや抜けを探す | [数式の監査](https://formulon.libraz.net/ja/mcp/formula-audit) |
-| 売上データを集計する | [テーブルとピボット](https://formulon.libraz.net/ja/mcp/tables-pivots) |
-| ツールの入力や低レベルメソッドを調べる | [ツール一覧](https://formulon.libraz.net/ja/mcp/tools)・[高度な API 操作](https://formulon.libraz.net/ja/mcp/advanced) |
+| 作業                                       | ドキュメント                                                                                                           |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| テンプレートを編集して別ファイルに保存する | [ワークブックのワークフロー](https://formulon.libraz.net/ja/mcp/workflow)                                              |
+| 数式と印刷設定を含む請求書を作る           | [帳票の作成](https://formulon.libraz.net/ja/mcp/authoring)                                                             |
+| 帳票を再現して見た目を確認する             | [レイアウトとプレビュー](https://formulon.libraz.net/ja/mcp/layout-preview)                                            |
+| 数式の上書きや抜けを探す                   | [数式の監査](https://formulon.libraz.net/ja/mcp/formula-audit)                                                         |
+| 売上データを集計する                       | [テーブルとピボット](https://formulon.libraz.net/ja/mcp/tables-pivots)                                                 |
+| ツールの入力や低レベルメソッドを調べる     | [ツール一覧](https://formulon.libraz.net/ja/mcp/tools)・[高度な API 操作](https://formulon.libraz.net/ja/mcp/advanced) |
 
 セッションはメモリ上にあり、サーバー終了時に失われます。出力パスを明示し、読み込み・保存の診断を確認してください。プレビューは近似表示です。数式監査は確認候補を返します。[セキュリティモデル](https://formulon.libraz.net/ja/mcp/security)も参照してください。
 

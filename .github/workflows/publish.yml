@@ -3,7 +3,7 @@ name: Publish and Create Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
 
 permissions:
   contents: write
@@ -17,8 +17,8 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
 
       - run: npm install -g npm@12
       - run: corepack enable
