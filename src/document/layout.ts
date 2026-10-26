@@ -1,5 +1,5 @@
 import { cellToA1 } from "../a1.js";
-import { assertStatus, normalizeFormula, type Workbook } from "../formulon.js";
+import { assertStatus, isDate1904, normalizeFormula, type Workbook } from "../formulon.js";
 import { classifyNumberFormat, isoToExcelSerial } from "../numfmt.js";
 import { applyRangeStyle, type StyleInput } from "../styles.js";
 import type {
@@ -54,7 +54,7 @@ function formatCode(format: string): string {
  * date format becomes the serial Excel stores, so the cell holds a real date
  * rather than text that merely looks like one.
  */
-function coerceValue(value: CellLiteral, format?: string): CellLiteral {
+function coerceValue(layout: Layout, value: CellLiteral, format?: string): CellLiteral {
   if (typeof value !== "string" || format === undefined) {
     return value;
   }
@@ -62,7 +62,7 @@ function coerceValue(value: CellLiteral, format?: string): CellLiteral {
   if (kind !== "date" && kind !== "datetime" && kind !== "time") {
     return value;
   }
-  return isoToExcelSerial(value) ?? value;
+  return isoToExcelSerial(value, isDate1904(layout.wb)) ?? value;
 }
 
 /** Tracks where every named cell or range landed, for formulas and for the caller. */
@@ -253,7 +253,7 @@ export function placeFields(layout: Layout, block: FieldsBlock, top: number): Pl
     if (item.formula !== undefined) {
       writeFormula(layout, rowIndex, cols.valueFirst, bindFormula(item.formula, layout.names));
     } else if (item.value !== undefined) {
-      writeValue(layout, rowIndex, cols.valueFirst, coerceValue(item.value, item.format));
+      writeValue(layout, rowIndex, cols.valueFirst, coerceValue(layout, item.value, item.format));
     }
     style(layout, row(rowIndex, cols.labelFirst, cols.labelLast), { font: baseFont(layout) });
     style(layout, row(rowIndex, cols.valueFirst, cols.valueLast), {
@@ -336,7 +336,12 @@ export function placeTable(layout: Layout, block: TableBlock, top: number): Plac
           bindFormula(column.formula, layout.names, rowScope),
         );
       } else {
-        writeValue(layout, rowIndex, layout.firstCol + index, coerceValue(value, column.format));
+        writeValue(
+          layout,
+          rowIndex,
+          layout.firstCol + index,
+          coerceValue(layout, value, column.format),
+        );
       }
     });
   }
@@ -434,7 +439,7 @@ export function placeSummary(layout: Layout, block: SummaryBlock, top: number): 
     if (item.formula !== undefined) {
       writeFormula(layout, rowIndex, cols.valueFirst, bindFormula(item.formula, layout.names));
     } else if (item.value !== undefined) {
-      writeValue(layout, rowIndex, cols.valueFirst, coerceValue(item.value, item.format));
+      writeValue(layout, rowIndex, cols.valueFirst, coerceValue(layout, item.value, item.format));
     }
     style(layout, row(rowIndex, cols.labelFirst, cols.valueLast), {
       font: { ...baseFont(layout), bold: item.emphasis ?? false },

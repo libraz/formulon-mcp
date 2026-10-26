@@ -4,6 +4,7 @@ import {
   assertStatus,
   DisplayStatus,
   findSheetIndex,
+  isDate1904,
   requireCell,
   requireNumberResult,
   resultToJson,
@@ -147,7 +148,12 @@ export function decodeNumberCell(
   }
   const display = session.workbook.getDisplayText(sheet, row, col);
   const annotation: CellFormatAnnotation = {
-    ...describeNumberFormat(format.numFmtId, format.formatCode, value.value),
+    ...describeNumberFormat(
+      format.numFmtId,
+      format.formatCode,
+      value.value,
+      isDate1904(session.workbook),
+    ),
   };
   if (display.status.ok) {
     annotation.text = display.text;
@@ -361,9 +367,9 @@ export function requiredNumber(value: number | undefined, name: string): number 
   return value;
 }
 
-export function requiredBoolean(value: boolean | undefined): boolean {
+export function requiredBoolean(value: boolean | undefined, name: string): boolean {
   if (value === undefined) {
-    throw new Error("hidden is required");
+    throw new Error(`${name} is required`);
   }
   return value;
 }

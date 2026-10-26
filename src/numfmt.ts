@@ -85,16 +85,20 @@ export function classifyNumberFormat(numFmtId: number, formatCode: string): Numb
   return "number";
 }
 
+/** Days between the 1900 and 1904 date systems' serial 0 (`<workbookPr date1904>`). */
+const DATE1904_OFFSET = 1462;
+
 /**
  * Converts an Excel serial number to a `Date`.
  *
  * Uses the anchor `serial 25569 == 1970-01-01`, which absorbs Excel's spurious
  * 1900 leap-year day for every date on or after 1900-03-01 — i.e. all
  * real-world dates. Serials below 60 (pre-1900-03) are off by one day; those
- * are not decoded in practice.
+ * are not decoded in practice. A 1904-system serial is shifted onto the 1900 one.
  */
-export function excelSerialToDate(serial: number): Date {
-  return new Date(Math.round((serial - 25569) * 86400 * 1000));
+export function excelSerialToDate(serial: number, date1904 = false): Date {
+  const serial1900 = date1904 ? serial + DATE1904_OFFSET : serial;
+  return new Date(Math.round((serial1900 - 25569) * 86400 * 1000));
 }
 
 /**
@@ -102,7 +106,7 @@ export function excelSerialToDate(serial: number): Date {
  * {@link excelSerialToDate}. Returns `undefined` for anything that is not a
  * date literal, so a caller can fall back to writing the value as text.
  */
-export function isoToExcelSerial(value: string): number | undefined {
+export function isoToExcelSerial(value: string, date1904 = false): number | undefined {
   const match = value
     .trim()
     .match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
@@ -121,7 +125,8 @@ export function isoToExcelSerial(value: string): number | undefined {
   if (Number.isNaN(utc)) {
     return undefined;
   }
-  return utc / 86400 / 1000 + 25569;
+  const serial1900 = utc / 86400 / 1000 + 25569;
+  return date1904 ? serial1900 - DATE1904_OFFSET : serial1900;
 }
 
 function pad2(value: number): string {
@@ -139,18 +144,22 @@ function isoTime(date: Date): string {
 /**
  * Renders a stored number as a readable string for a given format kind, or
  * `undefined` when the kind carries no useful transformation (plain numbers
- * are already readable). Dates below serial 1 that carry a date format are left
- * undecoded because they cannot represent a real calendar day.
+ * are already readable). Dates below the first serial of the date system (1, or 0
+ * under 1904) are left undecoded because they cannot represent a real calendar day.
  */
-export function formatNumberValue(value: number, kind: NumberFormatKind): string | undefined {
+export function formatNumberValue(
+  value: number,
+  kind: NumberFormatKind,
+  date1904 = false,
+): string | undefined {
   if (!Number.isFinite(value)) {
     return undefined;
   }
   switch (kind) {
     case "date":
-      return value < 1 ? undefined : isoDate(excelSerialToDate(value));
+      return value < (date1904 ? 0 : 1) ? undefined : isoDate(excelSerialToDate(value, date1904));
     case "datetime": {
-      const date = excelSerialToDate(value);
+      const date = excelSerialToDate(value, date1904);
       return `${isoDate(date)}T${isoTime(date)}`;
     }
     case "time":
@@ -170,13 +179,14 @@ export function describeNumberFormat(
   numFmtId: number,
   formatCode: string,
   value: number,
+  date1904 = false,
 ): NumberFormatInfo | undefined {
   const formatKind = classifyNumberFormat(numFmtId, formatCode);
   if (formatKind === "general" || formatKind === "number") {
     return undefined;
   }
   const info: NumberFormatInfo = { numberFormat: formatCode, formatKind };
-  const formatted = formatNumberValue(value, formatKind);
+  const formatted = formatNumberValue(value, formatKind, date1904);
   if (formatted !== undefined) {
     info.formatted = formatted;
   }

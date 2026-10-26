@@ -10,7 +10,7 @@ export function registerTableTools(server: McpServer): void {
     {
       title: "Worksheet table operation",
       description:
-        "List, create, update, or remove a native Excel worksheet Table. Create derives unique non-empty column names from the first row when columns is omitted; this is structured Table metadata, not visual formatting. Table indexes are global across the workbook.",
+        "List, create, update, or remove a native Excel worksheet Table. Create derives unique non-empty column names from the first row when columns is omitted; this is structured Table metadata, not visual formatting. Renaming a table on update rewrites the structured references to it. Table indexes are global across the workbook.",
       inputSchema: {
         sessionId: z.string(),
         operation: z.enum(["list", "create", "update", "remove"]),
@@ -27,7 +27,12 @@ export function registerTableTools(server: McpServer): void {
           .nonnegative()
           .optional()
           .describe("Global table index for update/remove."),
-        name: z.string().optional().describe("Native table name for create."),
+        name: z
+          .string()
+          .optional()
+          .describe(
+            "Native table name for create; on update, renames the table and the formulas that reference it.",
+          ),
         columns: z
           .array(z.string())
           .optional()
@@ -47,6 +52,40 @@ export function registerTableTools(server: McpServer): void {
           .boolean()
           .optional()
           .describe("Whether the table has a totals row; defaults false on create."),
+        showFirstColumn: z.boolean().optional().describe("Emphasize the first column."),
+        showLastColumn: z.boolean().optional().describe("Emphasize the last column."),
+        showRowStripes: z
+          .boolean()
+          .optional()
+          .describe("Band rows; a styled table starts with this on."),
+        showColumnStripes: z.boolean().optional().describe("Band columns."),
+        totals: z
+          .array(
+            z.object({
+              column: z
+                .union([z.string(), z.number().int().nonnegative()])
+                .describe("Column name or zero-based column index within the table."),
+              function: z
+                .enum([
+                  "none",
+                  "sum",
+                  "min",
+                  "max",
+                  "average",
+                  "count",
+                  "countNums",
+                  "stdDev",
+                  "var",
+                  "custom",
+                ])
+                .optional()
+                .describe("Totals function; Excel writes SUBTOTAL over the column."),
+              label: z.string().optional().describe("Text shown instead of a function."),
+              formula: z.string().optional().describe("Formula for the custom function."),
+            }),
+          )
+          .optional()
+          .describe("Totals-row cells to write; requires the table's totals row."),
       },
     },
     ({
@@ -62,6 +101,7 @@ export function registerTableTools(server: McpServer): void {
       styleName,
       headerRow,
       totalsRow,
+      ...rest
     }) => {
       try {
         return ok(
@@ -76,6 +116,7 @@ export function registerTableTools(server: McpServer): void {
             styleName,
             headerRow,
             totalsRow,
+            ...rest,
           }),
         );
       } catch (error) {

@@ -143,7 +143,7 @@ export function registerMutationTools(server: McpServer): void {
     {
       title: "Set defined name",
       description:
-        "Add, replace, or remove a defined name. Without `sheet` the name is workbook-scoped; with it the name is local to that sheet. Print settings (_xlnm.Print_Area, _xlnm.Print_Titles) must be sheet-scoped — Excel ignores a workbook-scoped one without reporting an error. Empty formula removes it.",
+        "Add, replace, or remove a defined name. Without `sheet` the name is workbook-scoped; with it the name is local to that sheet. Print settings (_xlnm.Print_Area, _xlnm.Print_Titles) must be sheet-scoped — Excel ignores a workbook-scoped one without reporting an error. Empty formula removes it. Replacing a formula keeps the name's comment and hidden flag unless they are given.",
       inputSchema: {
         sessionId: z.string(),
         name: z.string(),
@@ -151,11 +151,16 @@ export function registerMutationTools(server: McpServer): void {
         sheet: sheetRefSchema
           .optional()
           .describe("Scope the name to this sheet. Omit for workbook scope."),
+        comment: z
+          .string()
+          .optional()
+          .describe("Note shown in Excel's Name Manager; an empty string clears it."),
+        hidden: z.boolean().optional().describe("Hide the name from Excel's Name Manager."),
       },
     },
-    ({ sessionId, name, formula, sheet }) => {
+    ({ sessionId, name, formula, sheet, comment, hidden }) => {
       try {
-        return ok(setSessionDefinedName(sessionId, name, formula, sheet));
+        return ok(setSessionDefinedName(sessionId, name, formula, sheet, { comment, hidden }));
       } catch (error) {
         return fail(error);
       }
@@ -188,13 +193,32 @@ export function registerMutationTools(server: McpServer): void {
     "formulon_set_sheet_view",
     {
       title: "Set sheet view",
-      description: "Set sheet zoom, frozen panes, or tab visibility.",
+      description:
+        "Set sheet zoom, frozen or split panes, scroll origin, tab visibility, formula or outline-symbol display, or make the sheet the active one. A split replaces a freeze and the other way round. Excel refuses to hide the last visible sheet, and hiding the active sheet activates the next visible one.",
       inputSchema: {
         sessionId: z.string(),
         sheet: sheetRefSchema.optional().default(0),
         zoom: z.number().int().min(10).max(400).optional(),
         freezeRows: z.number().int().nonnegative().optional(),
         freezeCols: z.number().int().nonnegative().optional(),
+        splitX: z
+          .number()
+          .nonnegative()
+          .optional()
+          .describe(
+            "Unfrozen split position from the left edge, in points; 0 removes it on that axis.",
+          ),
+        splitY: z
+          .number()
+          .nonnegative()
+          .optional()
+          .describe(
+            "Unfrozen split position from the top edge, in points; 0 removes it on that axis.",
+          ),
+        topLeft: z
+          .string()
+          .optional()
+          .describe("First visible cell of the scrolled view on this sheet, for example A100."),
         hidden: z
           .boolean()
           .optional()
@@ -205,19 +229,23 @@ export function registerMutationTools(server: McpServer): void {
           .describe(
             "Three-state tab visibility. Excel leaves a veryHidden sheet out of its Unhide dialog.",
           ),
+        showFormulas: z
+          .boolean()
+          .optional()
+          .describe("Show formula text in cells instead of results."),
+        showOutlineSymbols: z
+          .boolean()
+          .optional()
+          .describe("Show the outline gutter's group expand/collapse symbols."),
+        active: z
+          .literal(true)
+          .optional()
+          .describe("Make this the sheet Excel opens on; it must be visible."),
       },
     },
-    ({ sessionId, sheet, zoom, freezeRows, freezeCols, hidden, visibility }) => {
+    ({ sessionId, sheet, ...options }) => {
       try {
-        return ok(
-          setSessionSheetView(sessionId, sheet, {
-            zoom,
-            freezeRows,
-            freezeCols,
-            hidden,
-            visibility,
-          }),
-        );
+        return ok(setSessionSheetView(sessionId, sheet, options));
       } catch (error) {
         return fail(error);
       }

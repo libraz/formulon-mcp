@@ -133,11 +133,11 @@ export function registerPresentationTools(server: McpServer): void {
     {
       title: "Column/row dimension operation",
       description:
-        "List column-width/row-height overrides, set width/height, reset it to the sheet default (keeping hidden, outline and style state), or set hidden or outline level. Columns act on an inclusive [first, last] span; rows act on an inclusive [row, row] span. Column sizes default to Excel character units; row sizes default to points. Use px or mm when a physical display size is easier to specify.",
+        "List column-width/row-height overrides, set width/height, reset it to the sheet default (keeping hidden, outline and style state), or set hidden, outline level, or the collapsed flag of the outline group a row/column summarises. Collapsing only marks the summary; hide the detail rows/columns with the hidden operation, as Excel stores both. Columns act on an inclusive [first, last] span; rows act on an inclusive [row, row] span. Column sizes default to Excel's stored character width, padding included as `<col width>` holds it (a default Calibri 11 column is 9.140625); row sizes default to points. Use px or mm when a physical display size is easier to specify.",
       inputSchema: {
         ...sheetInputSchema,
         axis: z.enum(["column", "row"]),
-        operation: z.enum(["list", "size", "resetSize", "hidden", "outline"]),
+        operation: z.enum(["list", "size", "resetSize", "hidden", "outline", "collapsed"]),
         first: z
           .number()
           .int()
@@ -174,6 +174,7 @@ export function registerPresentationTools(server: McpServer): void {
           .nonnegative()
           .optional()
           .describe("Outline level for the 'outline' operation."),
+        collapsed: z.boolean().optional().describe("Collapsed flag for the 'collapsed' operation."),
       },
     },
     ({
@@ -188,6 +189,7 @@ export function registerPresentationTools(server: McpServer): void {
       unit,
       hidden,
       level,
+      collapsed,
       includeGeometry,
     }) => {
       try {
@@ -201,6 +203,7 @@ export function registerPresentationTools(server: McpServer): void {
             unit,
             hidden,
             level,
+            collapsed,
             includeGeometry,
           }),
         );

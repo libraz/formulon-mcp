@@ -5,6 +5,7 @@ import {
   describeNumberFormat,
   excelSerialToDate,
   formatNumberValue,
+  isoToExcelSerial,
 } from "../dist/numfmt.js";
 
 test("classifies format codes into semantic kinds", () => {
@@ -23,6 +24,15 @@ test("classifies format codes into semantic kinds", () => {
 test("converts Excel serials to calendar dates", () => {
   assert.equal(excelSerialToDate(45000).toISOString().slice(0, 10), "2023-03-15");
   assert.equal(excelSerialToDate(25569).toISOString().slice(0, 10), "1970-01-01");
+});
+
+test("shifts serials of the 1904 date system by 1462 days", () => {
+  assert.equal(excelSerialToDate(43538, true).toISOString().slice(0, 10), "2023-03-15");
+  assert.equal(isoToExcelSerial("2023-03-15", true), 43538);
+  assert.equal(isoToExcelSerial("2023-03-15"), 45000);
+  // Serial 0 is a real day (1904-01-01) under the 1904 system.
+  assert.equal(formatNumberValue(0, "date", true), "1904-01-01");
+  assert.equal(formatNumberValue(0, "date"), undefined);
 });
 
 test("formats stored numbers per kind", () => {

@@ -36,6 +36,12 @@ export const rangeSchema = z.object({
   lastCol: z.number().int().nonnegative(),
 });
 
+/** A drawing length (offset, size, line width) in points, 96-DPI pixels or millimetres. */
+export const imageLengthSchema = z.object({
+  size: z.number().finite().nonnegative(),
+  unit: z.enum(["pt", "px", "mm"]).optional().describe("Defaults to points."),
+});
+
 export const sheetInputSchema = {
   sessionId: z.string(),
   sheet: sheetRefSchema

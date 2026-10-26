@@ -1,3 +1,4 @@
+import { parseCellRef } from "../a1.js";
 import {
   assertStatus,
   type ExcelProfileId,
@@ -92,12 +93,17 @@ export function setSessionDefinedName(
   name: string,
   formula: string,
   sheet?: number | string,
+  attrs: { comment?: string; hidden?: boolean } = {},
 ) {
   const session = getSession(id);
   // OOXML <definedName> content is a bare expression with no leading '='.
   // Strip one if the caller supplied it so the saved file is Excel-conformant.
   const trimmed = formula.trim();
   const refersTo = trimmed.startsWith("=") ? trimmed.slice(1) : trimmed;
+  const hasAttrs = attrs.comment !== undefined || attrs.hidden !== undefined;
+  if (refersTo === "" && hasAttrs) {
+    throw new Error("comment and hidden cannot be set while removing a defined name");
+  }
   const localSheetId =
     sheet === undefined ? WORKBOOK_SCOPE : findSheetIndex(session.workbook, sheet);
   touch(session, true);
@@ -106,6 +112,13 @@ export function setSessionDefinedName(
       ? session.workbook.setDefinedName(name, refersTo)
       : session.workbook.setDefinedNameScoped(name, refersTo, localSheetId);
   assertStatus(status, "set defined name");
+  if (hasAttrs) {
+    const attrsStatus = session.workbook.setDefinedNameAttrs(name, localSheetId, {
+      ...(attrs.comment !== undefined ? { comment: attrs.comment } : {}),
+      ...(attrs.hidden !== undefined ? { hidden: attrs.hidden } : {}),
+    });
+    assertStatus(attrsStatus, "set defined name attributes");
+  }
   touch(session, true);
   return { session: publicInfo(session), status: statusToJson(status), localSheetId };
 }
@@ -136,6 +149,9 @@ export function editSessionStructure(
 
 export type SheetVisibilityName = "visible" | "hidden" | "veryHidden";
 
+/** `<pane xSplit ySplit>` is stored in twips. */
+const TWIPS_PER_POINT = 20;
+
 const VISIBILITY_CODES: Record<SheetVisibilityName, SheetVisibility> = {
   visible: SheetVisibility.Visible,
   hidden: SheetVisibility.Hidden,
@@ -157,49 +173,95 @@ export function setSessionSheetView(
     zoom?: number;
     freezeRows?: number;
     freezeCols?: number;
+    splitX?: number;
+    splitY?: number;
+    topLeft?: string;
     hidden?: boolean;
     visibility?: SheetVisibilityName;
+    showFormulas?: boolean;
+    showOutlineSymbols?: boolean;
+    active?: true;
   },
 ) {
   const session = getSession(id);
-  const sheetIndex = findSheetIndex(session.workbook, sheet);
-  const statuses = [];
+  const { workbook } = session;
+  const sheetIndex = findSheetIndex(workbook, sheet);
   if (
-    options.zoom !== undefined ||
-    options.freezeRows !== undefined ||
-    options.freezeCols !== undefined ||
-    options.hidden !== undefined ||
-    options.visibility !== undefined
+    (options.freezeRows !== undefined || options.freezeCols !== undefined) &&
+    (options.splitX !== undefined || options.splitY !== undefined)
   ) {
+    throw new Error(
+      "a view is either frozen or split; pass freezeRows/freezeCols or splitX/splitY",
+    );
+  }
+  const topLeft = options.topLeft === undefined ? undefined : parseCellRef(options.topLeft);
+  if (topLeft?.sheetName !== undefined) {
+    throw new Error(
+      `topLeft is a cell on the selected sheet, without a sheet name: ${options.topLeft}`,
+    );
+  }
+  if (topLeft) {
+    assertInGrid(topLeft.row, topLeft.col);
+  }
+  // Visibility applies before activation, so one call can unhide and activate a sheet.
+  const steps: [boolean, () => Status, string][] = [
+    [
+      options.zoom !== undefined,
+      () => workbook.setSheetZoom(sheetIndex, options.zoom ?? 100),
+      "set sheet zoom",
+    ],
+    [
+      options.freezeRows !== undefined || options.freezeCols !== undefined,
+      () => workbook.setSheetFreeze(sheetIndex, options.freezeRows ?? 0, options.freezeCols ?? 0),
+      "set sheet freeze",
+    ],
+    [
+      options.splitX !== undefined || options.splitY !== undefined,
+      () =>
+        workbook.setSheetSplit(
+          sheetIndex,
+          Math.round((options.splitX ?? 0) * TWIPS_PER_POINT),
+          Math.round((options.splitY ?? 0) * TWIPS_PER_POINT),
+        ),
+      "set sheet split",
+    ],
+    [
+      topLeft !== undefined,
+      () => workbook.setSheetTopLeft(sheetIndex, topLeft?.row ?? 0, topLeft?.col ?? 0),
+      "set sheet top-left cell",
+    ],
+    [
+      options.hidden !== undefined,
+      () => workbook.setSheetTabHidden(sheetIndex, options.hidden ?? false),
+      "set sheet tab hidden",
+    ],
+    [
+      options.visibility !== undefined,
+      () =>
+        workbook.setSheetVisibility(sheetIndex, VISIBILITY_CODES[options.visibility ?? "visible"]),
+      "set sheet visibility",
+    ],
+    [
+      options.showFormulas !== undefined,
+      () => workbook.setSheetShowFormulas(sheetIndex, options.showFormulas ?? false),
+      "set sheet show formulas",
+    ],
+    [
+      options.showOutlineSymbols !== undefined,
+      () => workbook.setSheetShowOutlineSymbols(sheetIndex, options.showOutlineSymbols ?? true),
+      "set sheet show outline symbols",
+    ],
+    [options.active === true, () => workbook.setActiveSheet(sheetIndex), "set active sheet"],
+  ];
+  const pending = steps.filter(([wanted]) => wanted);
+  if (pending.length > 0) {
     touch(session, true);
   }
-  if (options.zoom !== undefined) {
-    const status = session.workbook.setSheetZoom(sheetIndex, options.zoom);
-    assertStatus(status, "set sheet zoom");
-    statuses.push(statusToJson(status));
-  }
-  if (options.freezeRows !== undefined || options.freezeCols !== undefined) {
-    const status = session.workbook.setSheetFreeze(
-      sheetIndex,
-      options.freezeRows ?? 0,
-      options.freezeCols ?? 0,
-    );
-    assertStatus(status, "set sheet freeze");
-    statuses.push(statusToJson(status));
-  }
-  if (options.hidden !== undefined) {
-    const status = session.workbook.setSheetTabHidden(sheetIndex, options.hidden);
-    assertStatus(status, "set sheet tab hidden");
-    statuses.push(statusToJson(status));
-  }
-  if (options.visibility !== undefined) {
-    const status = session.workbook.setSheetVisibility(
-      sheetIndex,
-      VISIBILITY_CODES[options.visibility],
-    );
-    assertStatus(status, "set sheet visibility");
-    statuses.push(statusToJson(status));
-  }
+  const statuses = pending.map(([, apply, action]) => {
+    const status = apply();
+    assertStatus(status, action);
+    return statusToJson(status);
+  });
   touch(session, statuses.length > 0);
   return { session: publicInfo(session), sheet: sheetIndex, statuses };
 }
@@ -305,7 +367,7 @@ export function traceSession(
 }
 
 export type DimensionAxis = "column" | "row";
-export type DimensionOperation = "list" | "size" | "resetSize" | "hidden" | "outline";
+export type DimensionOperation = "list" | "size" | "resetSize" | "hidden" | "outline" | "collapsed";
 export type DimensionUnit = "chars" | "pt" | "px" | "mm";
 
 type DisplayGeometry = {
@@ -386,7 +448,7 @@ function dimensionList(
 }
 
 /**
- * Reads or sets column-width / row-height, hidden, and outline-level overrides.
+ * Reads or sets column-width / row-height, hidden, outline-level and collapsed overrides.
  * Columns act on an inclusive `[first, last]` span; rows act on a single index.
  */
 export function sessionDimension(
@@ -401,6 +463,7 @@ export function sessionDimension(
     size?: number;
     hidden?: boolean;
     level?: number;
+    collapsed?: boolean;
     unit?: DimensionUnit;
     includeGeometry?: boolean;
   },
@@ -445,9 +508,13 @@ export function sessionDimension(
       touch(session, true);
       status = workbook.clearColumnWidth(sheetIndex, first, last);
     } else if (operation === "hidden") {
-      const hidden = requiredBoolean(params.hidden);
+      const hidden = requiredBoolean(params.hidden, "hidden");
       touch(session, true);
       status = workbook.setColumnHidden(sheetIndex, first, last, hidden);
+    } else if (operation === "collapsed") {
+      const collapsed = requiredBoolean(params.collapsed, "collapsed");
+      touch(session, true);
+      status = workbook.setColumnCollapsed(sheetIndex, first, last, collapsed);
     } else {
       const level = requiredNumber(params.level, "level");
       touch(session, true);
@@ -487,9 +554,13 @@ export function sessionDimension(
       touch(session, true);
       status = workbook.clearRowHeight(sheetIndex, rowIndex);
     } else if (operation === "hidden") {
-      const hidden = requiredBoolean(params.hidden);
+      const hidden = requiredBoolean(params.hidden, "hidden");
       touch(session, true);
       status = workbook.setRowHidden(sheetIndex, rowIndex, hidden);
+    } else if (operation === "collapsed") {
+      const collapsed = requiredBoolean(params.collapsed, "collapsed");
+      touch(session, true);
+      status = workbook.setRowCollapsed(sheetIndex, rowIndex, collapsed);
     } else {
       const level = requiredNumber(params.level, "level");
       touch(session, true);

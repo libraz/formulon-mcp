@@ -12,12 +12,7 @@ import {
   traceSession,
 } from "../sessions.js";
 import { conditionalFormatSchema, validationSchema } from "./object-schemas.js";
-import { fail, methodOk, ok, rangeSchema, sheetInputSchema } from "./shared.js";
-
-const imageLengthSchema = z.object({
-  size: z.number().finite().nonnegative(),
-  unit: z.enum(["pt", "px", "mm"]).optional().describe("Defaults to points."),
-});
+import { fail, imageLengthSchema, methodOk, ok, rangeSchema, sheetInputSchema } from "./shared.js";
 
 export function registerObjectTools(server: McpServer): void {
   server.registerTool(
@@ -64,17 +59,22 @@ export function registerObjectTools(server: McpServer): void {
     "formulon_comment_operation",
     {
       title: "Comment operation",
-      description: "List, get, set, or remove a cell comment.",
+      description:
+        "List, get, set, or remove a cell comment, or show/hide it. A shown comment stays open on the sheet; a hidden one appears on hover.",
       inputSchema: {
         ...sheetInputSchema,
-        operation: z.enum(["list", "get", "set", "remove"]),
+        operation: z.enum(["list", "get", "set", "remove", "visibility"]),
         row: z.number().int().nonnegative().optional(),
         col: z.number().int().nonnegative().optional(),
         author: z.string().optional(),
         text: z.string().optional(),
+        visible: z
+          .boolean()
+          .optional()
+          .describe("For visibility: true shows the comment, false hides it."),
       },
     },
-    ({ sessionId, sheet, operation, row, col, author, text }) => {
+    ({ sessionId, sheet, operation, row, col, author, text, visible }) => {
       try {
         const sheetIndex = resolveSessionSheet(sessionId, sheet);
         if (operation === "list") {
@@ -85,6 +85,12 @@ export function registerObjectTools(server: McpServer): void {
         }
         if (operation === "get") {
           return methodOk(sessionId, "getCommentResult", [sheetIndex, row, col]);
+        }
+        if (operation === "visibility") {
+          if (visible === undefined) {
+            throw new Error("visible is required for visibility");
+          }
+          return methodOk(sessionId, "setCommentVisible", [sheetIndex, row, col, visible]);
         }
         return methodOk(sessionId, "setComment", [
           sheetIndex,
@@ -316,7 +322,7 @@ export function registerObjectTools(server: McpServer): void {
     {
       title: "Image operation",
       description:
-        "List a sheet's drawing objects (pictures, shapes, charts) with A1 anchors and sizes, get a picture's bytes (returned as an image, optionally written to outputPath), insert a PNG/JPEG/GIF/BMP file anchored at a cell, move/resize a picture or chart in place, change the stacking order, or remove a picture or chart. Insertion keeps existing drawings; an omitted width or height keeps the aspect ratio, and omitting both uses the pixel size at 96 DPI. A move changes only what it states and keeps the object's id; a picture also keeps its crop and rotation.",
+        "List a sheet's drawing objects (pictures, shapes, charts) with A1 anchors and sizes, get a picture's bytes (returned as an image, optionally written to outputPath), insert a PNG/JPEG/GIF/BMP file anchored at a cell, move/resize a picture or chart in place, change the stacking order, or remove a picture or chart; shapes are edited with formulon_shape_operation. Insertion keeps existing drawings; an omitted width or height keeps the aspect ratio, and omitting both uses the pixel size at 96 DPI. A move changes only what it states and keeps the object's id; a picture also keeps its crop and rotation.",
       inputSchema: {
         ...sheetInputSchema,
         operation: z.enum(["list", "get", "insert", "move", "reorder", "remove"]),

@@ -38,7 +38,7 @@ const FORMAT_NAMES: Record<number, string> = {
   [ImageFormat.Bmp]: "bmp",
 };
 
-const KIND_NAMES: Record<number, string> = {
+export const KIND_NAMES: Record<number, string> = {
   [DrawingObjectKind.Picture]: "picture",
   [DrawingObjectKind.Shape]: "shape",
   [DrawingObjectKind.Chart]: "chart",
@@ -63,7 +63,7 @@ export function imageMimeType(format: number): string | undefined {
   return name && name !== "unknown" ? `image/${name}` : undefined;
 }
 
-function lengthToEmu(length: ImageLength | undefined, label: string): number {
+export function lengthToEmu(length: ImageLength | undefined, label: string): number {
   if (length === undefined) {
     return 0;
   }
@@ -81,22 +81,29 @@ function lengthToEmu(length: ImageLength | undefined, label: string): number {
   return emu;
 }
 
-function emuSize(emu: number) {
+export function emuSize(emu: number) {
   const points = emu / EMU_PER_POINT;
   return { pt: Math.round(points * 100) / 100, px: Math.round(pointsToPixels(points)) };
 }
 
-/** Lists a sheet's drawing objects with A1 anchors and sizes in points and 96-DPI pixels. */
-export function listSessionImages(id: string, sheet: number | string | undefined) {
-  const session = getSession(id);
-  const sheetIndex = findSheetIndex(session.workbook, sheet);
-  const result = session.workbook.listDrawingObjects(sheetIndex);
-  assertStatus(result.status, "list drawing objects");
-  const objects = Array.from(result, (object) => ({
-    objectId: object.objectId,
-    kind: KIND_NAMES[object.kind] ?? "other",
-    name: object.name,
-    description: object.descr,
+/** The anchor fields every drawing record shares, as `listDrawingObjects` and `listShapes` report them. */
+export type DrawingAnchorFields = {
+  anchorKind: AnchorKind;
+  fromRow: number;
+  fromCol: number;
+  fromRowOff: number;
+  fromColOff: number;
+  toRow: number;
+  toCol: number;
+  toRowOff: number;
+  toColOff: number;
+  cx: number;
+  cy: number;
+};
+
+/** Describes a drawing object's anchor with A1 cells and sizes in points and 96-DPI pixels. */
+export function describePlacement(object: DrawingAnchorFields) {
+  return {
     anchorKind: ANCHOR_NAMES[object.anchorKind] ?? "oneCell",
     ...(object.anchorKind === AnchorKind.Absolute
       ? { position: { x: emuSize(object.fromColOff), y: emuSize(object.fromRowOff) } }
@@ -112,6 +119,21 @@ export function listSessionImages(id: string, sheet: number | string | undefined
       : {}),
     width: emuSize(object.cx),
     height: emuSize(object.cy),
+  };
+}
+
+/** Lists a sheet's drawing objects with A1 anchors and sizes in points and 96-DPI pixels. */
+export function listSessionImages(id: string, sheet: number | string | undefined) {
+  const session = getSession(id);
+  const sheetIndex = findSheetIndex(session.workbook, sheet);
+  const result = session.workbook.listDrawingObjects(sheetIndex);
+  assertStatus(result.status, "list drawing objects");
+  const objects = Array.from(result, (object) => ({
+    objectId: object.objectId,
+    kind: KIND_NAMES[object.kind] ?? "other",
+    name: object.name,
+    description: object.descr,
+    ...describePlacement(object),
     ...(object.kind === DrawingObjectKind.Picture
       ? { format: imageFormatName(object.imageFormat) }
       : {}),

@@ -12,6 +12,7 @@ import { registerPresentationTools } from "./presentation-tools.js";
 import { registerPreviewTools } from "./preview-tools.js";
 import { registerReadTools } from "./read-tools.js";
 import { registerSessionTools } from "./session-tools.js";
+import { registerSheetObjectTools } from "./sheet-object-tools.js";
 import { registerTableTools } from "./table-tools.js";
 
 export function registerAllTools(server: McpServer, version: string): void {
@@ -25,6 +26,7 @@ export function registerAllTools(server: McpServer, version: string): void {
   registerFileTools(server);
   registerApiTools(server);
   registerTableTools(server);
+  registerSheetObjectTools(server);
   registerPivotTools(server);
   registerPreviewTools(server);
   registerLayoutTools(server);

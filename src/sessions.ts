@@ -28,6 +28,12 @@ export {
   getSessionRange,
   setSessionRange,
 } from "./session/cells.js";
+export {
+  addSessionDataTable,
+  getSessionDataTable,
+  recalcSessionDataTables,
+  removeSessionDataTable,
+} from "./session/data-tables.js";
 export type { ImageInsertInput, ImageMoveInput } from "./session/images.js";
 export {
   getSessionImage,
@@ -62,6 +68,27 @@ export {
   findSessionCells,
   replaceSessionCells,
 } from "./session/search.js";
+export type {
+  ShapeFields,
+  ShapeInsertInput,
+  ShapePlacementInput,
+} from "./session/shapes.js";
+export {
+  insertSessionShape,
+  listSessionShapes,
+  removeSessionShape,
+  updateSessionShape,
+} from "./session/shapes.js";
+export type {
+  SparklineGroupOptions,
+  SparklineItemInput,
+} from "./session/sparklines.js";
+export {
+  addSessionSparklines,
+  listSessionSparklines,
+  removeSessionSparklines,
+  updateSessionSparklines,
+} from "./session/sparklines.js";
 export type { SessionInfo, WorkbookSession } from "./session/state.js";
 export {
   closeSession,

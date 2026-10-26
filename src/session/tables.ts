@@ -1,4 +1,4 @@
-import type { TableInput, TableUpdateInput } from "@libraz/formulon";
+import type { TableInput, TableTotalsRowFunction, TableUpdateInput } from "@libraz/formulon";
 import { normalizeRange, parseRangeRef } from "../a1.js";
 import { assertStatus, findSheetIndex, resultToJson, statusToJson } from "../formulon.js";
 import { assertInGrid, rangeA1, sheetName } from "./shared.js";
@@ -6,7 +6,22 @@ import { getSession, publicInfo, touch } from "./state.js";
 
 export type TableOperation = "list" | "create" | "update" | "remove";
 
-export type TableOperationOptions = {
+/** One column's totals-row cell: a function, a text label, or a custom formula. */
+export type TableColumnTotals = {
+  column: string | number;
+  function?: TableTotalsRowFunction;
+  label?: string;
+  formula?: string;
+};
+
+export type TableStyleToggles = {
+  showFirstColumn?: boolean;
+  showLastColumn?: boolean;
+  showRowStripes?: boolean;
+  showColumnStripes?: boolean;
+};
+
+export type TableOperationOptions = TableStyleToggles & {
   sheet?: number | string;
   range?: string;
   ref?: string;
@@ -16,8 +31,66 @@ export type TableOperationOptions = {
   styleName?: string;
   headerRow?: boolean;
   totalsRow?: boolean;
+  totals?: TableColumnTotals[];
   index?: number;
 };
+
+const STYLE_TOGGLES = [
+  "showFirstColumn",
+  "showLastColumn",
+  "showRowStripes",
+  "showColumnStripes",
+] as const;
+
+function styleToggles(options: TableStyleToggles): TableStyleToggles {
+  const toggles: TableStyleToggles = {};
+  for (const key of STYLE_TOGGLES) {
+    if (options[key] !== undefined) {
+      toggles[key] = options[key];
+    }
+  }
+  return toggles;
+}
+
+function columnIndex(columns: string[], column: string | number): number {
+  if (typeof column === "number") {
+    if (!Number.isInteger(column) || column < 0 || column >= columns.length) {
+      throw new Error(`table column index must be in 0..${columns.length - 1}: ${column}`);
+    }
+    return column;
+  }
+  const key = column.toLocaleLowerCase();
+  const index = columns.findIndex((name) => name.toLocaleLowerCase() === key);
+  if (index < 0) {
+    throw new Error(`table has no column named ${JSON.stringify(column)}`);
+  }
+  return index;
+}
+
+/** Writes each column's totals cell; the table must already show its totals row. */
+function applyTotals(
+  session: ReturnType<typeof getSession>,
+  index: number,
+  totals: TableColumnTotals[],
+): void {
+  const entry = session.workbook.tableAt(index);
+  assertStatus(entry.status, `read table ${index}`);
+  if (!entry.totalsRowCount) {
+    throw new Error("totals need the table's totals row; pass totalsRow: true");
+  }
+  const columns = (entry.columns ?? []).map((column) => column.name);
+  for (const { column, function: fn, label, formula } of totals) {
+    const trimmed = formula?.trim();
+    const status = session.workbook.setTableColumnTotals(index, columnIndex(columns, column), {
+      ...(fn !== undefined ? { function: fn } : {}),
+      ...(label !== undefined ? { label } : {}),
+      ...(trimmed !== undefined
+        ? { formula: trimmed.startsWith("=") ? trimmed.slice(1) : trimmed }
+        : {}),
+    });
+    assertStatus(status, `set table ${index} totals for column ${JSON.stringify(column)}`);
+  }
+}
 
 type TableRange = {
   sheetIndex: number;
@@ -180,12 +253,16 @@ function createTable(session: ReturnType<typeof getSession>, options: TableOpera
     headerRow,
     totalsRow: options.totalsRow ?? false,
     ...(styleName === undefined ? {} : { styleName }),
+    ...styleToggles(options),
   };
   // A native call can fail after changing part of the workbook. Record the
   // session as dirty before entering the engine and keep that state on error.
   touch(session, true);
   const result = session.workbook.createTable(input);
   assertStatus(result.status, "create table");
+  if (options.totals !== undefined) {
+    applyTotals(session, result.index, options.totals);
+  }
   const table = readTable(session, result.index);
   return { session: publicInfo(session), table, status: statusToJson(result.status) };
 }
@@ -195,14 +272,25 @@ function updateTable(session: ReturnType<typeof getSession>, options: TableOpera
   const current = readTable(session, index);
   const hasRange = options.range !== undefined || options.ref !== undefined;
   const hasStyle = options.style !== undefined || options.styleName !== undefined;
+  const toggles = styleToggles(options);
   if (
     !(hasRange || hasStyle) &&
+    options.name === undefined &&
+    Object.keys(toggles).length === 0 &&
     options.headerRow === undefined &&
-    options.totalsRow === undefined
+    options.totalsRow === undefined &&
+    options.totals === undefined
   ) {
-    throw new Error("table update requires at least one of range, style, headerRow, or totalsRow");
+    throw new Error(
+      "table update requires at least one of range, name, style, a style toggle, headerRow, totalsRow, or totals",
+    );
   }
-  const input: TableUpdateInput = {};
+  const input: TableUpdateInput = { ...toggles };
+  if (options.name !== undefined) {
+    const name = requiredText(options.name, "name");
+    input.name = name;
+    input.displayName = name;
+  }
   if (hasRange) {
     if (current.sheet === null) {
       throw new Error(`table ${index} has no worksheet index`);
@@ -228,6 +316,9 @@ function updateTable(session: ReturnType<typeof getSession>, options: TableOpera
   touch(session, true);
   const status = session.workbook.updateTable(index, input);
   assertStatus(status, `update table ${index}`);
+  if (options.totals !== undefined) {
+    applyTotals(session, index, options.totals);
+  }
   const table = readTable(session, index);
   return { session: publicInfo(session), table, status: statusToJson(status) };
 }

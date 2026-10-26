@@ -293,6 +293,15 @@ test("lossy XLSB saves stay dirty while a clean XLSX save clears dirty", async (
           }),
         );
         assert.equal(created.result.status.ok, true);
+        // A custom table style is one of the parts the XLSB writer defers.
+        const styled = textPayload(
+          await callTool(client, "formulon_workbook_call", {
+            sessionId,
+            method: "setTableStyle",
+            args: [{ name: "LedgerStyle" }],
+          }),
+        );
+        assert.equal(styled.result.ok, true);
 
         const xlsb = textPayload(
           await callTool(client, "formulon_save_session", {
@@ -309,7 +318,7 @@ test("lossy XLSB saves stay dirty while a clean XLSX save clears dirty", async (
             path: xlsbPath,
           }),
         );
-        assert.equal(reloadedXlsb.tables.length, 0);
+        assert.equal(reloadedXlsb.tables.length, 1);
 
         const xlsx = textPayload(
           await callTool(client, "formulon_save_session", {

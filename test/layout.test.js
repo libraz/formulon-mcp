@@ -33,7 +33,10 @@ test("column geometry follows the engine width model", async () => {
     assert.equal(columnCharsToPoints(workbook, 0, 30), expected);
     assert.ok(Math.abs(columnPointsToChars(workbook, 0, expected) - 30) < 1e-9);
     assert.equal(columnPointsToChars(workbook, 0, 0), 0);
-    assert.throws(() => columnPointsToChars(workbook, 0, 1), /must exceed.*padding/);
+    // Stored widths include the cell padding, so even 1pt is a positive width.
+    const narrow = columnPointsToChars(workbook, 0, 1);
+    assert.equal(narrow, workbook.columnPtToChars(0, GeometryMode.Display, 1).value);
+    assert.ok(narrow > 0);
     assert.equal(pointsToMm(mmToPoints(25.4)), 25.4);
   } finally {
     closeSession("layout-geometry");
@@ -82,20 +85,19 @@ test("layout batches preserve operation order and report physical geometry", asy
   }
 });
 
-test("layout accepts millimetres and rejects an unrepresentable narrow column", async () => {
+test("layout accepts millimetres and stores a narrow column with its padding", async () => {
   await openSession(undefined, "layout-units");
   try {
     const result = applySessionLayout("layout-units", 0, [
       { type: "column", first: 0, size: 25.4, unit: "mm" },
       { type: "row", first: 0, size: 10, unit: "mm" },
+      { type: "column", first: 1, size: 1, unit: "pt" },
     ]);
     assert.ok(Math.abs(result.operations[0].displayGeometry.mm - 25.4) < 1e-10);
     assert.ok(Math.abs(result.operations[1].displayGeometry.mm - 10) < 1e-10);
-    assert.throws(
-      () =>
-        applySessionLayout("layout-units", 0, [{ type: "column", first: 1, size: 1, unit: "pt" }]),
-      /must exceed.*padding|exactly zero/,
-    );
+    assert.ok(result.operations[2].storedSize > 0);
+    // Display snaps to whole pixels: 1pt shows as one 0.75pt pixel.
+    assert.equal(result.operations[2].displayGeometry.points, 0.75);
   } finally {
     closeSession("layout-units");
   }

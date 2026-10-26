@@ -185,7 +185,7 @@ __metadata:
   resolution: "@libraz/formulon-mcp@workspace:."
   dependencies:
     "@biomejs/biome": "npm:^2.5.15"
-    "@libraz/formulon": "npm:^0.16.0"
+    "@libraz/formulon": "npm:^0.18.0"
     "@modelcontextprotocol/sdk": "npm:^1.32.1"
     "@resvg/resvg-js": "npm:^2.6.2"
     "@types/node": "npm:^26.6.5"
@@ -199,10 +199,10 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@libraz/formulon@npm:^0.16.0":
-  version: 0.16.0
-  resolution: "@libraz/formulon@npm:0.16.0"
-  checksum: 10c0/3104b510385a63851b89bdafe4f827a1c7105c5a96ce7d9036a161f4361575e322fc812d97298e0a9eedbd4c59fbbf4a8fbca5ee65bf27742540685a560614c2
+"@libraz/formulon@npm:^0.18.0":
+  version: 0.18.0
+  resolution: "@libraz/formulon@npm:0.18.0"
+  checksum: 10c0/3562d338b7dd64fe3531252cfbb128f83a736c8995ae6ef4fed0ee5aa993cf5df63cc1e354006817299d1917c9d12306772e95855ae8ca1aa653ba30be756a52
   languageName: node
   linkType: hard
 

@@ -26,7 +26,11 @@ import createFormulon, {
   type PrintOptionsInput,
   type ReadDiagnosticsResult,
   type SaveDiagnosticsResult,
+  ShapePaint,
   SheetVisibility,
+  SparklineAxisType,
+  SparklineEmptyCells,
+  SparklineType,
   type Status,
   type Value,
   type Workbook,
@@ -56,7 +60,11 @@ export {
   DrawingObjectKind,
   GeometryMode,
   ImageFormat,
+  ShapePaint,
   SheetVisibility,
+  SparklineAxisType,
+  SparklineEmptyCells,
+  SparklineType,
 };
 
 export type CellMutation =
@@ -278,6 +286,11 @@ export function requireNumberResult(result: NumberResult<number>, action: string
   return result.value;
 }
 
+/** Whether the workbook uses the 1904 date system (`<workbookPr date1904>`). */
+export function isDate1904(wb: Workbook): boolean {
+  return requireNumberResult(wb.date1904(), "read date system") !== 0;
+}
+
 /** Asserts a status-bearing list result and returns a plain mutable array. */
 export function requireListResult<T>(result: ListResult<T>, action: string): T[] {
   assertStatus(result.status, action);
@@ -451,6 +464,8 @@ export function workbookSummary(wb: Workbook, includeCells: boolean, maxCells: n
       name: entry.name,
       formula: entry.formula,
       localSheetId: entry.localSheetId ?? WORKBOOK_SCOPE,
+      ...(entry.comment ? { comment: entry.comment } : {}),
+      ...(entry.hidden ? { hidden: true } : {}),
     });
   }
 

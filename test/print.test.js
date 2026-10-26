@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
+  applySheetOperation,
   closeSession,
   openSession,
   sessionPrintSettings,
@@ -112,6 +113,11 @@ test("refuses a set call that states no setting", async () => {
 test("sets the three-state sheet tab visibility", async () => {
   await openSession(undefined, "print-visibility");
   try {
+    assert.throws(
+      () => setSessionSheetView("print-visibility", 0, { visibility: "hidden" }),
+      /visible sheet/,
+    );
+    applySheetOperation("print-visibility", "add", { name: "Second" });
     const hidden = setSessionSheetView("print-visibility", 0, { visibility: "veryHidden" });
     assert.equal(hidden.statuses.length, 1);
     assert.equal(hidden.statuses[0].ok, true);

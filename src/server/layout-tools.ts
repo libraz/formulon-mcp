@@ -24,7 +24,9 @@ const columnOperationSchema = z.object({
   unit: z
     .enum(["chars", "pt", "px", "mm"])
     .optional()
-    .describe("Column width unit; defaults to Excel character units."),
+    .describe(
+      "Column width unit; defaults to Excel's stored character width, padding included (a default Calibri 11 column is 9.140625).",
+    ),
 });
 
 const rowOperationSchema = z.object({

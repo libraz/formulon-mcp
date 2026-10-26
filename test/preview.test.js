@@ -139,12 +139,12 @@ test("renders a styled invoice range with merges, formatting, and pagination met
     // C3:D3 is an off-origin merge over unequal columns. The internal C|D
     // grid segment is suppressed while the merged right perimeter remains.
     assert.equal(
-      /<line x1="253(?:\.000)?" y1="59\.429" x2="253(?:\.000)?" y2="[^"]+" stroke="#D9E0E7"/.test(
+      /<line x1="238(?:\.000)?" y1="59\.429" x2="238(?:\.000)?" y2="[^"]+" stroke="#D9E0E7"/.test(
         result.svg,
       ),
       false,
     );
-    assert.match(result.svg, /x1="293"[^>]*x2="293"/);
+    assert.match(result.svg, /x1="273"[^>]*x2="273"/);
     for (const scale of [0.25, 1.5]) {
       const scaled = previewSessionRange("preview-invoice", {
         range: "A1:D4",

@@ -22,19 +22,12 @@ export function columnCharsToPoints(workbook: Workbook, sheet: number, chars: nu
   );
 }
 
-/** Converts display points to character units; widths at or below the cell padding are rejected. */
+/** Converts display points to Excel's stored column width (character units, padding included). */
 export function columnPointsToChars(workbook: Workbook, sheet: number, points: number): number {
-  const chars = requireNumberResult(
+  return requireNumberResult(
     workbook.columnPtToChars(sheet, GeometryMode.Display, points),
     "convert column width to characters",
   );
-  if (chars === 0 && points > 0) {
-    const padding = resolveColumnMetrics(workbook, sheet).paddingPt;
-    throw new Error(
-      `column width in points must exceed the ${padding}pt visible-column padding, or be exactly zero: ${points}`,
-    );
-  }
-  return chars;
 }
 
 export type { ColumnMetrics } from "../preview/geometry.js";
