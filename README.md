@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/libraz/formulon-mcp/blob/main/LICENSE)
 [![Docs](https://img.shields.io/badge/docs-formulon.libraz.net-2563eb)](https://formulon.libraz.net/mcp/)
 
-A local stdio MCP server for [Formulon](https://github.com/libraz/formulon). Agents can inspect and edit Excel workbooks, recalculate formulas, author printable documents, preview ranges, audit copied formulas, and create native Tables and PivotTables.
+An Excel MCP server for AI agents, running locally over stdio on the [Formulon](https://github.com/libraz/formulon) engine. Agents can inspect and edit Excel workbooks, recalculate formulas, author printable documents, preview ranges, audit copied formulas, and create native Tables and PivotTables.
 
 **[Full documentation](https://formulon.libraz.net/mcp/)** lives on the Formulon website. It covers tool inputs, responses, limits, and end-to-end examples.
 
