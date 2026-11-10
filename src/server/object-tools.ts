@@ -199,23 +199,9 @@ export function registerObjectTools(server: McpServer): void {
           if (index === undefined) {
             throw new Error("index is required for removeAt");
           }
-          return labeledOk(sessionId, "Sheet.setHyperlink", "write", (wb) => {
-            const handle = wb.sheet(sheetIndex);
-            const links = handle.listHyperlinks();
-            if (index >= links.length) {
-              throw new Error(
-                `hyperlink index out of range: ${index} (${links.length} hyperlinks)`,
-              );
-            }
-            // A cell can anchor several links and the engine removes them together, so rebuild the list
-            // without the one at `index`, keeping the order of the rest.
-            handle.clearHyperlinks();
-            links.forEach((link, at) => {
-              if (at !== index) {
-                handle.setHyperlink(link.range.firstRow, link.range.firstCol, link);
-              }
-            });
-          });
+          return labeledOk(sessionId, "Sheet.removeHyperlinkAt", "write", (wb) =>
+            wb.sheet(sheetIndex).removeHyperlinkAt(index),
+          );
         }
         if (row === undefined || col === undefined) {
           throw new Error("row and col are required");
