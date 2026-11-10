@@ -65,22 +65,31 @@ export interface WorkbookApiKind {
 }
 
 /**
- * Whether `method` only reads: the ledger's verb when it names the method, else the name's
- * prefix; `undefined` when neither decides. The catalog also reads a method that only hands
- * out another handle; anything still undecided is refused.
+ * Whether `method` only reads. The ledger's verb decides when it names the method on `lineage`
+ * (the handle kind, then the kinds it extends) or as a bare binding name, and the name's prefix
+ * otherwise. A write by either source wins, so a method the ledger files under a reading verb but
+ * whose name says it changes the workbook (`project`, `showDetails`) is a write: a write taken for
+ * a read would leave a changed session clean. `undefined` when neither source decides; the catalog
+ * also reads a method that only hands out another handle, and refuses anything still undecided.
  */
 export function methodAccess(
   method: string,
   accessors: ReadonlySet<string>,
+  lineage: readonly string[] = [],
 ): "read" | "write" | undefined {
-  const recorded = LEDGER_ACCESS[method];
-  if (recorded) {
-    return recorded;
+  const recorded =
+    lineage.map((kind) => LEDGER_ACCESS[`${kind}.${method}`]).find(Boolean) ??
+    LEDGER_ACCESS[method];
+  const byName =
+    accessors.has(method) || READ_PREFIXES.test(method)
+      ? "read"
+      : WRITE_PREFIXES.test(method)
+        ? "write"
+        : undefined;
+  if (recorded === "write" || byName === "write") {
+    return "write";
   }
-  if (accessors.has(method) || READ_PREFIXES.test(method)) {
-    return "read";
-  }
-  return WRITE_PREFIXES.test(method) ? "write" : undefined;
+  return recorded ?? byName;
 }
 
 type PackageMetadata = {
@@ -248,6 +257,21 @@ function discoverKinds(
   return found;
 }
 
+/** `name` and every interface it extends, nearest first. */
+function lineageOf(name: string, parse: (name: string) => ParsedInterface | undefined): string[] {
+  const lineage: string[] = [];
+  const queue = [name];
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    if (lineage.includes(current)) {
+      continue;
+    }
+    lineage.push(current);
+    queue.push(...(parse(current)?.extends ?? []));
+  }
+  return lineage;
+}
+
 function getParsedCatalog(): ParsedCatalog {
   if (cached) {
     return cached;
@@ -286,7 +310,7 @@ function getParsedCatalog(): ParsedCatalog {
       const access =
         kind.kind === MODULE_KIND
           ? "read"
-          : (methodAccess(method.name, accessors) ??
+          : (methodAccess(method.name, accessors, lineageOf(kind.kind, parse)) ??
             (kinds.has(method.returns.trim()) ? "read" : undefined));
       if (access === undefined) {
         unclassified.push(`${kind.kind}.${method.name}`);

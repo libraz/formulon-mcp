@@ -110,6 +110,44 @@ test("the engine module's functions never mark a session dirty", async () => {
   }
 });
 
+test("pivot cache refresh and numeric grouping are writes, their reads are reads", () => {
+  const catalog = getWorkbookApiCatalog();
+  const access = (kind, name) =>
+    catalog.methods.find((method) => method.target.kind === kind && method.name === name)?.access;
+  assert.equal(access("PivotCache", "refresh"), "write");
+  assert.equal(access("Pivot", "setFieldNumericGroup"), "write");
+  assert.equal(access("Pivot", "getFieldNumericGroup"), "read");
+  assert.equal(access("Pivot", "getFieldDateGroup"), "read");
+  // The ledger files these under a reading verb; their names, and what they do, change the workbook.
+  assert.equal(access("Pivot", "project"), "write");
+  assert.equal(access("Pivot", "showDetails"), "write");
+});
+
+test("refreshing a pivot cache through workbook_call re-reads its source and dirties the session", async () => {
+  await withFixture("refresh", () => {
+    const pivot = targets.Pivot;
+    const grandTotal = () => {
+      const layout = callWorkbookMethod("refresh", pivot, "getLayout", []).result;
+      return Math.max(
+        ...layout.cells.map((cell) => (typeof cell.value === "number" ? cell.value : 0)),
+      );
+    };
+    const before = grandTotal();
+    // The source edit alone does not reach the pivot; the refresh does.
+    callWorkbookMethod("refresh", SHEET, "setNumber", [1, 2, 100]);
+    assert.equal(grandTotal(), before);
+    const cacheId = callWorkbookMethod("refresh", pivot, "cache", []).result.cacheId;
+    const refreshed = callWorkbookMethod(
+      "refresh",
+      { kind: "PivotCache", pivotCache: cacheId },
+      "refresh",
+      [],
+    );
+    assert.equal(refreshed.session.dirty, true);
+    assert.equal(grandTotal(), before + 98);
+  });
+});
+
 test("methodAccess leaves a method neither the ledger nor a prefix names undecided", () => {
   assert.equal(methodAccess("someUnknownVerb", new Set()), undefined);
   assert.equal(methodAccess("frobnicateAll", new Set(["frobnicateAll"])), "read");
