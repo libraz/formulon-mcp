@@ -1,4 +1,4 @@
-import type { PivotAxis } from "@libraz/formulon";
+import { PivotAxis } from "@libraz/formulon";
 import { nativeToJson, okStatus, resultToJson } from "../formulon.js";
 import {
   AGGREGATIONS,
@@ -138,8 +138,12 @@ export function createSessionPivot(id: string, options: CreatePivotOptions) {
     });
     pivotIndex = pivot.index;
 
+    // A value field is placed by addDataField below; only the row, column and page axes are set here.
     for (const fieldIndex of source.headers.keys()) {
-      pivot.setFieldAxis(fieldIndex, resolved.assignments.get(fieldIndex) as PivotAxis);
+      const axis = resolved.assignments.get(fieldIndex);
+      if (axis !== undefined && axis !== PivotAxis.Value) {
+        pivot.setFieldAxis(fieldIndex, axis);
+      }
     }
 
     pivot.setRowFieldOrder(request.rows.map((field) => resolveFieldIndex(source.headers, field)));
