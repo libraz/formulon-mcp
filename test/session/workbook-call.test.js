@@ -87,6 +87,29 @@ test("classifies every cataloged method as read or write", () => {
   assert.deepEqual(catalog.kinds.map((kind) => kind.kind).sort(), Object.keys(targets).sort());
 });
 
+test("the engine module's functions never mark a session dirty", async () => {
+  const catalog = getWorkbookApiCatalog();
+  const module = catalog.methods.filter((method) => method.target.kind === "Formulon");
+  assert.ok(module.length > 10);
+  assert.deepEqual(
+    module.filter((method) => method.access !== "read").map((method) => method.name),
+    [],
+  );
+  await openSession(undefined, "module-clean");
+  try {
+    const target = { kind: "Formulon" };
+    // Verbs that would read as writes elsewhere: a conversion and process-level logging.
+    callWorkbookMethod("module-clean", target, "convertCivilToSerial", [
+      { year: 2024, month: 1, day: 2 },
+    ]);
+    // Off is the engine default, so the process-wide level is left as it was.
+    callWorkbookMethod("module-clean", target, "setLogMinLevel", [4]);
+    assert.equal(dirtyOf("module-clean"), false);
+  } finally {
+    closeSession("module-clean");
+  }
+});
+
 test("methodAccess leaves a method neither the ledger nor a prefix names undecided", () => {
   assert.equal(methodAccess("someUnknownVerb", new Set()), undefined);
   assert.equal(methodAccess("frobnicateAll", new Set(["frobnicateAll"])), "read");

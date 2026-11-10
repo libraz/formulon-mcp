@@ -281,9 +281,13 @@ function getParsedCatalog(): ParsedCatalog {
       if (SESSION_OWNED_METHODS.test(method.name) || UNCALLABLE_SIGNATURE.test(method.signature)) {
         continue;
       }
+      // A module function never changes workbook state, whatever its verb (`setLogMinLevel` sets
+      // process-level logging), so it never marks a session dirty.
       const access =
-        methodAccess(method.name, accessors) ??
-        (kinds.has(method.returns.trim()) ? "read" : undefined);
+        kind.kind === MODULE_KIND
+          ? "read"
+          : (methodAccess(method.name, accessors) ??
+            (kinds.has(method.returns.trim()) ? "read" : undefined));
       if (access === undefined) {
         unclassified.push(`${kind.kind}.${method.name}`);
         continue;
