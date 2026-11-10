@@ -56,7 +56,12 @@ export function registerFileTools(server: McpServer): void {
       description: "Load an xlsx or xlsb workbook path and return a one-shot summary.",
       inputSchema: {
         path: z.string().describe("Path to an .xlsx or .xlsb workbook."),
-        recalc: z.boolean().default(false),
+        recalc: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Recalculate before reading. False reads the values the file cached, as Excel shows them when it opens the file in Manual calculation.",
+          ),
         includeCells: z.boolean().default(false),
         maxCellsPerSheet: z.number().int().nonnegative().max(10_000).default(200),
         profile: profileSchema

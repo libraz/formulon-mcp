@@ -309,10 +309,11 @@ export function resolveUserPath(filePath: string): string {
 }
 
 /**
- * Loads an xlsx or xlsb workbook from disk. With `cachedValues`, reads return the values the file
- * cached until an explicit recalc: the engine loads formulas pending, and under automatic
- * calculation a read would compute them first. Only a workbook that is not saved back is loaded
- * that way, since the calculation mode is part of the file.
+ * Loads an xlsx or xlsb workbook from disk. With `cachedValues` the workbook is put in Manual
+ * calculation, so reads return the values the file cached until an explicit recalc, as Excel
+ * shows a file it opens in Manual mode; under Automatic a profile's open-time rule may compute
+ * them first. The read-only one-shot tools load this way; a workbook that is saved back is not,
+ * since the calculation mode is part of the file.
  */
 export async function loadWorkbook(
   filePath: string,

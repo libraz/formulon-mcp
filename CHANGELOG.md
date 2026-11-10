@@ -69,3 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An engine failure is reported as `<StatusName>: <message> (<context>)`,
   followed by a JSON content item with `code`, `message`, `context` and, for a
   formula syntax error, `parseError` with its positions.
+
+### Changed
+
+- `formulon_inspect_workbook` and `formulon_get_cell` with a `path` and
+  `recalc: false` read the values the file cached, as Excel shows them in
+  Manual calculation; the workbook is not recalculated on open.

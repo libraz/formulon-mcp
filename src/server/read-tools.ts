@@ -36,7 +36,12 @@ export function registerReadTools(server: McpServer): void {
           .nonnegative()
           .optional()
           .describe("Zero-based column (when a1 is omitted)."),
-        recalc: z.boolean().default(true),
+        recalc: z
+          .boolean()
+          .default(true)
+          .describe(
+            "Recalculate before reading. With `path` and false, formulas read the values the file cached, as Excel shows them when it opens the file in Manual calculation.",
+          ),
       },
     },
     async ({ sessionId, path, a1, sheet, row, col, recalc }) => {
