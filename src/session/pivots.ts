@@ -18,6 +18,7 @@ import {
   targetReference,
   validateRangeSize,
 } from "./pivot-source.js";
+import { MAX_COL, MAX_ROW } from "./shared.js";
 import { getSession, publicInfo, touch, type WorkbookSession } from "./state.js";
 
 export type {
@@ -156,6 +157,11 @@ export function createSessionPivot(id: string, options: CreatePivotOptions) {
       pivot.updateGrandTotals(request.totals);
     }
     const layout = pivot.getLayout();
+    // A report whose range is occupied, or runs past the sheet edge, is applied but not drawn.
+    const rect = layout.range;
+    const blocked =
+      pivot.getSpill() !== null ||
+      (rect !== null && (rect.lastRow > MAX_ROW || rect.lastCol > MAX_COL));
     return {
       session: publicInfo(session),
       source: {
@@ -168,6 +174,7 @@ export function createSessionPivot(id: string, options: CreatePivotOptions) {
       target: request.target,
       cacheId,
       pivotIndex,
+      blocked,
       layout: resultToJson({
         rect: layout.range,
         cells: layout.cells.map((cell) => ({ ...cell, value: nativeToJson(cell.value) })),

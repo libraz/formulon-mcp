@@ -311,29 +311,28 @@ export function traceSession(
   const handle = session.workbook.sheet(sheetIndex);
   if (operation === "spillInfo") {
     const info = handle.getSpill(row, col);
-    const engaged = info !== null && !info.blocked;
-    const rows = info === null ? 0 : info.range.lastRow - info.range.firstRow + 1;
-    const cols = info === null ? 0 : info.range.lastCol - info.range.firstCol + 1;
     return {
       session: publicInfo(session),
       operation,
       cell: cellRef(sheetIndex, row, col),
-      spill: {
-        engaged,
-        anchor:
-          engaged && info ? cellRef(sheetIndex, info.range.firstRow, info.range.firstCol) : null,
-        rows,
-        cols,
-        range:
-          engaged && info
-            ? `${sheetName(session, sheetIndex)}!${rangeA1(
+      spill:
+        info === null
+          ? null
+          : {
+              blocked: info.blocked,
+              // A blocked range is reported only at its anchor, and a pivot's takes the page rows above it.
+              anchor: info.blocked
+                ? cellRef(sheetIndex, row, col)
+                : cellRef(sheetIndex, info.range.firstRow, info.range.firstCol),
+              rows: info.range.lastRow - info.range.firstRow + 1,
+              cols: info.range.lastCol - info.range.firstCol + 1,
+              range: `${sheetName(session, sheetIndex)}!${rangeA1(
                 info.range.firstRow,
                 info.range.firstCol,
                 info.range.lastRow,
                 info.range.lastCol,
-              )}`
-            : null,
-      },
+              )}`,
+            },
     };
   }
   const nodes =

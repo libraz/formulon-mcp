@@ -178,7 +178,7 @@ test("trace returns A1 references with sheet names", async () => {
     assert.equal(precedents.cell.ref, "Sheet1!B1");
 
     const spill = traceSession("trace-a1", "spillInfo", 0, 0, 0, 1);
-    assert.equal(typeof spill.spill.engaged, "boolean");
+    assert.equal(spill.spill, null);
   } finally {
     closeSession("trace-a1");
   }

@@ -484,7 +484,7 @@ export function registerObjectTools(server: McpServer): void {
     {
       title: "Trace dependencies",
       description:
-        "Read precedents, dependents, or spill info for a cell. Results carry A1 references (with sheet names), not raw indices.",
+        "Read precedents, dependents, or spill info for a cell. Results carry A1 references (with sheet names), not raw indices. spillInfo returns spill null when the cell is neither in a spill range nor a blocked anchor, else { blocked, anchor, rows, cols, range }. At the anchor of a dynamic array refused with #SPILL! or of a blocked PivotTable report, blocked is true and range is the rectangle it needs, a report's including its page-field rows above the anchor; a report blocked past the sheet edge reads null.",
       inputSchema: {
         ...sheetInputSchema,
         operation: z.enum(["precedents", "dependents", "spillInfo"]),

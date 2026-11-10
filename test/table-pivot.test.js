@@ -13,6 +13,7 @@ import {
   saveSession,
   setSessionRange,
   tableOperation,
+  traceSession,
 } from "../dist/sessions.js";
 import { textPayload, withClient } from "./helpers/mcp.js";
 
@@ -140,6 +141,7 @@ test("creates and round-trips a worksheet-backed PivotTable", async () => {
       grandTotals: { rows: true, columns: true },
     });
     assert.equal(created.pivotIndex, 0);
+    assert.equal(created.blocked, false);
     assert.equal(created.source.headers.join(","), "Region,Product,Amount");
     numberFormat = assertPivotTotals(created.layout);
 
@@ -177,6 +179,79 @@ test("creates and round-trips a worksheet-backed PivotTable", async () => {
   } finally {
     closeSession("pivot-reload");
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("reports a PivotTable report blocked by occupied cells or the sheet edge", async () => {
+  await openSession(undefined, "pivot-blocked");
+  try {
+    const regions = Array.from({ length: 25 }, (_, i) => [`R${String(i).padStart(2, "0")}`, i + 1]);
+    setSessionRange("pivot-blocked", "Sheet1!A1", [["Region", "Amount"], ...regions], 0, true);
+
+    // The empty report frame (3 columns by 18 rows) must be free; a refusal leaves no cache behind.
+    setSessionRange("pivot-blocked", "Sheet1!E3", [["x"]], 0, true);
+    assert.throws(
+      () =>
+        createSessionPivot("pivot-blocked", {
+          sourceRange: "A1:B26",
+          target: "D1",
+          name: "Framed",
+          rows: ["Region"],
+          values: [{ field: "Amount" }],
+        }),
+      /would overwrite non-empty cell Sheet1!E3/,
+    );
+    assert.equal(
+      callWorkbookMethod("pivot-blocked", undefined, "listPivotCaches", []).result.length,
+      0,
+    );
+    setSessionRange("pivot-blocked", "Sheet1!E3", [[{ blank: true }]], 0, true);
+
+    // The finished report needs D1:E27; D22 lies outside the frame but inside the report.
+    setSessionRange("pivot-blocked", "Sheet1!D22", [["x"]], 0, true);
+    const created = createSessionPivot("pivot-blocked", {
+      sourceRange: "A1:B26",
+      target: "D1",
+      name: "Blocked",
+      rows: ["Region"],
+      values: [{ field: "Amount" }],
+    });
+    assert.equal(created.blocked, true);
+    assert.deepEqual(created.layout.rect, { firstRow: 0, firstCol: 3, lastRow: 26, lastCol: 4 });
+    assert.deepEqual(getSessionCellByA1("pivot-blocked", "Sheet1!D1").value, {
+      kind: "error",
+      errorCode: 8,
+      errorName: "#SPILL!",
+    });
+    const blocked = traceSession("pivot-blocked", "spillInfo", 0, 0, 3, 1).spill;
+    assert.deepEqual(blocked, {
+      blocked: true,
+      anchor: { sheet: 0, sheetName: "Sheet1", row: 0, col: 3, ref: "Sheet1!D1" },
+      rows: 27,
+      cols: 2,
+      range: "Sheet1!D1:E27",
+    });
+
+    // Freeing the range draws the report on the next recalculation.
+    setSessionRange("pivot-blocked", "Sheet1!D22", [[{ blank: true }]], 0, true);
+    assert.equal(traceSession("pivot-blocked", "spillInfo", 0, 0, 3, 1).spill, null);
+    assert.deepEqual(getSessionCellByA1("pivot-blocked", "Sheet1!E27").value, {
+      kind: "number",
+      value: 325,
+    });
+
+    // A report running past the last column is blocked with no range inside the grid.
+    const edge = createSessionPivot("pivot-blocked", {
+      sourceRange: "A1:B6",
+      target: "XFB1",
+      name: "PastEdge",
+      columns: ["Region"],
+      values: [{ field: "Amount" }],
+    });
+    assert.equal(edge.blocked, true);
+    assert.equal(traceSession("pivot-blocked", "spillInfo", 0, 0, 16381, 1).spill, null);
+  } finally {
+    closeSession("pivot-blocked");
   }
 });
 
