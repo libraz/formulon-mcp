@@ -64,5 +64,6 @@ export async function buildCallFixture(id, dir, file) {
     Slicer: { kind: "Slicer", sheet: 0, slicer: slicer.properties.objectId },
     Pivot: { kind: "Pivot", sheet: 0, pivot: "Sales" },
     SheetOoxml: SHEET_OOXML,
+    Formulon: { kind: "Formulon" },
   };
 }

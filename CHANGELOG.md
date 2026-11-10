@@ -17,9 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `formulon_workbook_call` addresses the object a method belongs to. `target`
   names a handle kind of the installed engine (`Workbook`, `Sheet`, `Table`,
   `Pivot`, `PivotCache`, `Chart` and the other drawing kinds, the `ooxml`
-  layers) and the key each accessor on the way takes; an omitted `target` is
-  the workbook. The callable methods are read from the engine's declarations
-  instead of a fixed list, and the result carries `target`.
+  layers) and the key each accessor on the way takes, or `Formulon` for the
+  engine's module functions (`compareText`, `getCollationClasses`,
+  `getLocaleFacts`, ...); an omitted `target` is the workbook. The callable
+  methods are read from the engine's declarations instead of a fixed list, and
+  the result carries `target`.
 
   ```jsonc
   // before

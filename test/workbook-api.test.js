@@ -24,6 +24,7 @@ test("catalogs each callable method of every handle kind exactly once", () => {
   assert.deepEqual([...kinds.keys()].sort(), [
     "Chart",
     "Drawing",
+    "Formulon",
     "Picture",
     "Pivot",
     "PivotCache",

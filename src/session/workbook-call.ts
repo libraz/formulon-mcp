@@ -1,5 +1,5 @@
-import { resultToJson, type Workbook } from "../formulon.js";
-import { getWorkbookApiCatalog } from "../workbook-api.js";
+import { loadedFormulon, resultToJson, type Workbook } from "../formulon.js";
+import { getWorkbookApiCatalog, MODULE_KIND } from "../workbook-api.js";
 import { getSession, publicInfo, touch } from "./state.js";
 
 /**
@@ -56,7 +56,7 @@ export function callWorkbookMethod(
     throw new Error(`${kind.kind}.${method} is not a callable method (see formulon_workbook_api)`);
   }
   const session = getSession(id);
-  let receiver: unknown = session.workbook;
+  let receiver: unknown = kind.kind === MODULE_KIND ? loadedFormulon() : session.workbook;
   for (const hop of kind.hops) {
     const current = receiver as Record<string, unknown>;
     if ("property" in hop) {

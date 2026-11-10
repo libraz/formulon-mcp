@@ -27,8 +27,13 @@ const MAX_DECLARATIONS = 64;
 const MAX_DECLARATION_DEPTH = 5;
 const MAX_DECLARATION_CHARS = 12_000;
 const MAX_TOTAL_DECLARATION_CHARS = 48_000;
-/** The interface every target is reached from. */
+/** The interface every session target is reached from. */
 const ROOT_KIND = "Workbook";
+/**
+ * The engine module's interface: its own functions are a target with no keys. Nothing is reached
+ * through it (its `Workbook` constructor would make a workbook outside any session).
+ */
+export const MODULE_KIND = "Formulon";
 /**
  * Members other tools own: `dispose` ends the session's handle (`formulon_close_workbook`) and a
  * save needs the session's bookkeeping (`formulon_save_session`).
@@ -252,6 +257,16 @@ function getParsedCatalog(): ParsedCatalog {
   const declarations = parseExportedDeclarations(source);
   const parse = (name: string) => parseInterface(source, name, declarations);
   const kinds = discoverKinds(parse);
+  const module = parse(MODULE_KIND);
+  if (!module) {
+    throw new Error(
+      "installed @libraz/formulon declaration file has no exported Formulon interface",
+    );
+  }
+  kinds.set(MODULE_KIND, {
+    kind: { kind: MODULE_KIND, keys: [], hops: [], identity: [] },
+    members: module,
+  });
   const accessors = new Set(
     [...kinds.values()].flatMap(({ kind }) =>
       kind.hops.flatMap((hop) => ("method" in hop ? [hop.method] : [])),

@@ -97,6 +97,7 @@ const VALUE_KIND = Object.freeze({
 } as const);
 
 let modulePromise: Promise<Formulon> | undefined;
+let loadedModule: Formulon | undefined;
 
 /** Sends one engine output line to stderr, keeping fd 1 free for JSON-RPC. */
 function toStderr(message: string): void {
@@ -112,8 +113,19 @@ function toStderr(message: string): void {
  * the middle of a JSON-RPC frame, and replacing `console.log` would not stop it.
  */
 export function formulonModule(): Promise<Formulon> {
-  modulePromise ??= createFormulon({ print: toStderr, printErr: toStderr });
+  modulePromise ??= createFormulon({ print: toStderr, printErr: toStderr }).then((module) => {
+    loadedModule = module;
+    return module;
+  });
   return modulePromise;
+}
+
+/** The engine module, for synchronous callers; it is loaded before any workbook session exists. */
+export function loadedFormulon(): Formulon {
+  if (loadedModule === undefined) {
+    throw new Error("the Formulon engine is not loaded yet");
+  }
+  return loadedModule;
 }
 
 /** Returns the Excel error literal for an `ErrorCode` ordinal. */

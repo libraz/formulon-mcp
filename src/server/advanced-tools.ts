@@ -83,7 +83,7 @@ export function registerAdvancedTools(server: McpServer): void {
     {
       title: "Call a Formulon engine method",
       description:
-        'Low-level access to the installed Formulon engine for features no task tool covers. `target` names the object the method belongs to: a handle kind (Workbook, Sheet, Table, Pivot, PivotCache, Chart, ...) and the key of each accessor on the way, for example { kind: "Pivot", sheet: 0, pivot: "Sales" }. Use formulon_workbook_api first: each method it lists carries its target kind and keys, its signature, input records and enum values. Raw bytes, callbacks and saving are not available here.',
+        'Low-level access to the installed Formulon engine for features no task tool covers. `target` names the object the method belongs to: a handle kind (Workbook, Sheet, Table, Pivot, PivotCache, Chart, ...) and the key of each accessor on the way, or Formulon for the module functions of the engine (collation, locale facts, formula translation), for example { kind: "Pivot", sheet: 0, pivot: "Sales" }. Use formulon_workbook_api first: each method it lists carries its target kind and keys, its signature, input records and enum values. Raw bytes, callbacks and saving are not available here.',
       inputSchema: {
         sessionId: z.string(),
         target: z

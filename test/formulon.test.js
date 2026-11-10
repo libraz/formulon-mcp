@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, test } from "vitest";
-import { formulonModule, loadWorkbook } from "../dist/formulon.js";
+import { formulonModule, loadedFormulon, loadWorkbook } from "../dist/formulon.js";
 import { getSession } from "../dist/session/state.js";
 import {
   applySessionMutations,
@@ -84,9 +84,21 @@ test("names error codes outside the classic seven", async () => {
   }
 });
 
-/** Every function member of an engine handle, own and inherited, without `Object.prototype`'s. */
+/**
+ * Every function member of an engine handle, own and inherited, without `Object.prototype`'s.
+ * The engine module is a plain object: its members are its own keys, less the capitalised
+ * classes (`Workbook`, `ExcelError`, ...), which are not functions to call.
+ */
 function functionMembers(handle) {
   const names = new Set();
+  if (Object.getPrototypeOf(handle) === Object.prototype) {
+    for (const name of Object.keys(handle)) {
+      if (typeof handle[name] === "function" && /^[a-z]/.test(name)) {
+        names.add(name);
+      }
+    }
+    return names;
+  }
   for (
     let proto = Object.getPrototypeOf(handle);
     proto && proto !== Object.prototype;
@@ -101,8 +113,14 @@ function functionMembers(handle) {
   return names;
 }
 
-/** Walks a catalog kind's hops from `workbook`, the way the dispatcher does, with the fixture's keys. */
+/**
+ * Walks a catalog kind's hops from `workbook`, the way the dispatcher does, with the fixture's
+ * keys; the module kind is the engine module itself.
+ */
 function resolveReceiver(workbook, kind, target) {
+  if (kind.kind === "Formulon") {
+    return loadedFormulon();
+  }
   let receiver = workbook;
   for (const hop of kind.hops) {
     receiver = "property" in hop ? receiver[hop.property] : receiver[hop.method](target[hop.key]);
@@ -127,6 +145,14 @@ const UNEXPOSED_MEMBERS = new Set([
   "iterRows",
   "addPicture",
   "restoreDrawing",
+  // The engine module's image probe takes bytes and its log sink a callback.
+  "getImageInfo",
+  "setLogSink",
+  // Package-level exports the runtime module also carries but the `Formulon` interface does not
+  // declare, so the catalog cannot see them.
+  "toNative",
+  "enumName",
+  "mergeFunctionMetadata",
 ]);
 
 let fixtureDir;
