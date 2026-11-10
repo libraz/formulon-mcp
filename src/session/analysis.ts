@@ -25,12 +25,8 @@ export function inspectSessionLayout(id: string, options: LayoutOptions) {
   const session = getSession(id);
   const sheets = searchSheets(session, options.sheet).map((sheet) => {
     const handle = session.workbook.sheet(sheet);
-    const { cells, cellCount, truncated } = stableCells(
-      session,
-      sheet,
-      options.maxCells,
-      options.includeStyles,
-    );
+    const { cells, cellCount, truncated, formattedCells, formattedCellCount, formattedTruncated } =
+      stableCells(session, sheet, options.maxCells, options.includeStyles);
     return {
       index: sheet,
       name: sheetName(session, sheet),
@@ -43,6 +39,9 @@ export function inspectSessionLayout(id: string, options: LayoutOptions) {
       protection: safeReadJson(() => handle.getSheetProtection()),
       cells: options.includeCells ? cells : undefined,
       truncated,
+      formattedCells: options.includeCells ? formattedCells : undefined,
+      formattedCellCount,
+      formattedTruncated: options.includeCells ? formattedTruncated : undefined,
     };
   });
   touch(session, false);

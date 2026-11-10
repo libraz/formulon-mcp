@@ -240,33 +240,57 @@ export function stableCells(
   const handle = session.workbook.sheet(sheet);
   const all = handle.listCells();
   const limit = Math.max(0, Math.min(maxCells, all.length));
+  // One read of every cell carrying its own XF; a cell absent from it has the default style.
+  const ownXfCells = includeStyles ? (safeRead(() => handle.ooxml.getCellXfIndices()) ?? []) : [];
+  const ownXf = new Map(ownXfCells.map((entry) => [refA1(entry.row, entry.col), entry.xfIndex]));
+  const xfJson = new Map<number, unknown>();
+  const styleOf = (a1: string) => {
+    const xfIndex = ownXf.get(a1) ?? null;
+    if (xfIndex !== null && !xfJson.has(xfIndex)) {
+      xfJson.set(
+        xfIndex,
+        safeReadJson(() => session.workbook.ooxml.getCellXf(xfIndex)),
+      );
+    }
+    return { xfIndex, xf: xfIndex === null ? null : xfJson.get(xfIndex) };
+  };
   const cells = [];
+  const stored = new Set<string>();
+  for (const cell of all) {
+    stored.add(refA1(cell.row, cell.col));
+  }
   for (const cell of all.slice(0, limit)) {
     const value = jsonCellValue(taggedValue(handle, cell));
     const formula = cell.formula ?? "";
-    const xfIndex = includeStyles
-      ? safeRead(() => handle.ooxml.getCellXfIndex(cell.row, cell.col))
-      : null;
+    const a1 = refA1(cell.row, cell.col);
     cells.push({
       row: cell.row,
       col: cell.col,
-      a1: refA1(cell.row, cell.col),
+      a1,
       value,
       formula,
       kind: cellKind(value, formula),
-      style: includeStyles
-        ? {
-            xfIndex,
-            xf:
-              xfIndex === null
-                ? null
-                : safeReadJson(() => session.workbook.ooxml.getCellXf(xfIndex)),
-          }
-        : undefined,
+      style: includeStyles ? styleOf(a1) : undefined,
     });
   }
   cells.sort((left, right) => left.row - right.row || left.col - right.col);
-  return { cells, cellCount: all.length, truncated: limit < all.length };
+  // Cells formatted but holding no content, which `listCells` does not list.
+  const formattedOnly = ownXfCells.filter((entry) => !stored.has(refA1(entry.row, entry.col)));
+  const formattedLimit = Math.max(0, Math.min(maxCells, formattedOnly.length));
+  const formattedCells = includeStyles
+    ? formattedOnly.slice(0, formattedLimit).map(({ row, col }) => {
+        const a1 = refA1(row, col);
+        return { row, col, a1, style: styleOf(a1) };
+      })
+    : undefined;
+  return {
+    cells,
+    cellCount: all.length,
+    truncated: limit < all.length,
+    formattedCells,
+    formattedCellCount: includeStyles ? formattedOnly.length : undefined,
+    formattedTruncated: includeStyles ? formattedLimit < formattedOnly.length : undefined,
+  };
 }
 
 export function usedRange(cells: { row: number; col: number }[]): string | null {

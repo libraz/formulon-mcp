@@ -205,7 +205,7 @@ export function registerSessionTools(server: McpServer): void {
     {
       title: "Inspect workbook layout",
       description:
-        "Return stable cell, layout, merge, row/column, protection, and optional style data for one or all sheets.",
+        "Return stable cell, layout, merge, row/column, protection, and optional style data for one or all sheets. With includeStyles, formattedCells lists the cells that carry a format but no content.",
       inputSchema: {
         sessionId: z.string(),
         sheet: sheetRefSchema.optional(),

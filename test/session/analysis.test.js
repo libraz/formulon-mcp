@@ -10,8 +10,43 @@ import {
   detectSessionRegions,
   inspectSessionLayout,
   openSession,
+  styleSessionRange,
   traceSession,
 } from "../../dist/sessions.js";
+
+test("lists formatted cells with no content alongside the stored cells' styles", async () => {
+  await openSession(undefined, "formatted-cells");
+  try {
+    applySessionMutations("formatted-cells", [{ type: "number", a1: "Sheet1!A1", value: 1 }], true);
+    styleSessionRange("formatted-cells", "A1", { numberFormat: "0.00" }, undefined, "existing");
+    styleSessionRange("formatted-cells", "C3", { numberFormat: "0.0%" }, undefined, "existing");
+
+    const [sheet] = inspectSessionLayout("formatted-cells", {
+      includeCells: true,
+      includeStyles: true,
+      maxCells: 100,
+    }).sheets;
+    assert.equal(sheet.cells.length, 1);
+    assert.notEqual(sheet.cells[0].style.xfIndex, null);
+    assert.equal(sheet.formattedCellCount, 1);
+    assert.equal(sheet.formattedTruncated, false);
+    assert.deepEqual(
+      sheet.formattedCells.map((cell) => cell.a1),
+      ["C3"],
+    );
+    assert.notEqual(sheet.formattedCells[0].style.xfIndex, null);
+    assert.notEqual(sheet.formattedCells[0].style.xfIndex, sheet.cells[0].style.xfIndex);
+
+    const plain = inspectSessionLayout("formatted-cells", {
+      includeCells: true,
+      includeStyles: false,
+      maxCells: 100,
+    }).sheets[0];
+    assert.equal(plain.formattedCells, undefined);
+  } finally {
+    closeSession("formatted-cells");
+  }
+});
 
 test("inspects layout, detects regions, and analyzes workbook shape across sheets", async () => {
   await openSession(undefined, "high-level");
