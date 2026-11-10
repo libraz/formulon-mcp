@@ -546,6 +546,62 @@ test("table columns name the columns on create and carry the calculated-column m
   });
 });
 
+test("table create leaves column naming and totals defaults to the engine", async () => {
+  await withSession("table-names", () => {
+    setSessionRange(
+      "table-names",
+      "A1",
+      [
+        ["Qty", null, "qty", 5],
+        [1, 2, 3, 4],
+        [null, null, null, null],
+      ],
+      0,
+      true,
+    );
+    const named = tableOperation("table-names", "create", {
+      range: "A1:D3",
+      name: "Numbered",
+      totalsRow: true,
+      columns: [{}, {}, { totalsRowFunction: "max" }],
+    });
+    assert.deepEqual(
+      named.table.raw.columns.map((column) => [
+        column.name,
+        column.totalsRowFunction,
+        column.totalsRowLabel,
+      ]),
+      [
+        ["Qty", null, "Total"],
+        ["Column1", null, null],
+        ["qty2", "max", null],
+        ["5", "sum", null],
+      ],
+    );
+    assert.equal(getSessionCellByA1("table-names", "B1").value.value, "Column1");
+
+    setSessionRange(
+      "table-names",
+      "F1",
+      [
+        [1, 2],
+        [3, 4],
+      ],
+      0,
+      true,
+    );
+    const headless = tableOperation("table-names", "create", {
+      range: "F1:G2",
+      name: "Headless",
+      headerRow: false,
+    });
+    assert.deepEqual(
+      headless.table.raw.columns.map((column) => column.name),
+      ["Column1", "Column2"],
+    );
+  });
+});
+
 test("dates decode and encode under the 1904 date system", async () => {
   await withSession("date1904", () => {
     callWorkbookMethod("date1904", undefined, "setDate1904", [true]);

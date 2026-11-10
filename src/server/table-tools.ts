@@ -10,7 +10,7 @@ export function registerTableTools(server: McpServer): void {
     {
       title: "Worksheet table operation",
       description:
-        "List, create, update, or remove a native Excel worksheet Table. Create derives unique non-empty column names from the first row when columns is omitted; this is structured Table metadata, not visual formatting. Renaming a table on update rewrites the structured references to it. Table indexes are global across the workbook.",
+        "List, create, update, or remove a native Excel worksheet Table. Without column names, create names the columns as Excel does: from the header row, a blank header as Column1 and a repeated one numbered (Qty, qty2); without a header row Column1..n. A totals row turned on for the first time gets Excel's defaults (a Total label in the first column; in the last a sum when every data cell is a number, else a count). This is structured Table metadata, not visual formatting. Renaming a table on update rewrites the structured references to it. Table indexes are global across the workbook.",
       inputSchema: {
         sessionId: z.string(),
         operation: z.enum(["list", "create", "update", "remove"]),
@@ -40,7 +40,7 @@ export function registerTableTools(server: McpServer): void {
                 .string()
                 .optional()
                 .describe(
-                  "Create only: the column's unique non-empty name. Name every column or none; none derives the names from the header row. Rename an existing column with Table.renameColumn through formulon_workbook_call.",
+                  "Create only: the column's name. Name every column or none; none lets Excel's naming rule apply. Rename an existing column with Table.renameColumn through formulon_workbook_call.",
                 ),
               totalsRowFunction: z
                 .enum(TABLE_TOTALS_FUNCTION_NAMES)
@@ -70,7 +70,7 @@ export function registerTableTools(server: McpServer): void {
           )
           .optional()
           .describe(
-            "Per-column settings, element i for column i; it may be shorter than the table and {} changes nothing. An omitted key keeps the setting and null clears it. On update it applies after range, headerRow and totalsRow. Totals settings are stored while the totals row is off and written into its cells while it is shown.",
+            "Per-column settings, element i for column i; it may be shorter than the table and {} changes nothing. An omitted key keeps the setting and null clears it. On update the headerRow and totalsRow toggles apply first, then range (checked against the toggled shape), then columns. Totals settings are stored while the totals row is off and written into its cells while it is shown.",
           ),
         style: z
           .string()

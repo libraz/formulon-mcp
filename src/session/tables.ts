@@ -176,40 +176,6 @@ function resolveTableRange(
   };
 }
 
-function validateColumns(columns: string[], width: number): string[] {
-  if (columns.length !== width) {
-    throw new Error(`table columns count ${columns.length} does not match range width ${width}`);
-  }
-  const seen = new Set<string>();
-  return columns.map((column, index) => {
-    const value = column.trim();
-    if (!value) {
-      throw new Error(`table column ${index + 1} must be a non-empty text name`);
-    }
-    const key = value.toLocaleLowerCase();
-    if (seen.has(key)) {
-      throw new Error(`table column names must be unique; duplicate ${JSON.stringify(value)}`);
-    }
-    seen.add(key);
-    return value;
-  });
-}
-
-function deriveColumns(session: ReturnType<typeof getSession>, range: TableRange): string[] {
-  const sheet = sheetAt(session.workbook, range.sheetIndex);
-  const columns: string[] = [];
-  for (let col = range.firstCol; col <= range.lastCol; col += 1) {
-    const value = sheet.getValue(range.firstRow, col);
-    if (typeof value !== "string" || !value.trim()) {
-      throw new Error(
-        `table header ${range.sheetName}!${rangeA1(range.firstRow, col, range.firstRow, col)} must be non-empty text`,
-      );
-    }
-    columns.push(value);
-  }
-  return validateColumns(columns, range.lastCol - range.firstCol + 1);
-}
-
 type IndexedTable = { index: number; table: Table };
 
 /** Every table in workbook order: sheets in order, each sheet's tables in order. */
@@ -267,34 +233,26 @@ function createTable(session: ReturnType<typeof getSession>, options: TableOpera
   const reference = tableRef(options);
   const range = resolveTableRange(session, reference, options.sheet);
   const width = range.lastCol - range.firstCol + 1;
-  const headerRow = options.headerRow ?? true;
   const settings = options.columns ?? [];
   if (settings.length > width) {
     throw new Error(`table columns count ${settings.length} exceeds range width ${width}`);
   }
+  // The engine names the columns; given names must cover every column.
   const names = settings.flatMap(({ name }) => (name === undefined ? [] : [name]));
   if (names.length > 0 && names.length !== width) {
     throw new Error(
-      "give every column a name in columns, one per range column, or none to derive them from the header row",
+      "give every column a name in columns, one per range column, or none to let the engine name them",
     );
   }
-  const columns =
-    names.length > 0
-      ? validateColumns(names, width)
-      : headerRow
-        ? deriveColumns(session, range)
-        : (() => {
-            throw new Error("column names are required in columns when headerRow is false");
-          })();
   const patch = columnsPatch(settings);
   const name = requiredText(options.name, "name");
   const styleName = options.styleName ?? options.style;
   const input: TableInput = {
     range: range.ref,
     name,
-    columns,
-    headerRow,
-    totalsRow: options.totalsRow ?? false,
+    ...(names.length > 0 ? { columns: names } : {}),
+    ...(options.headerRow === undefined ? {} : { headerRow: options.headerRow }),
+    ...(options.totalsRow === undefined ? {} : { totalsRow: options.totalsRow }),
     ...(styleName === undefined ? {} : { styleName }),
     ...styleToggles(options),
   };
