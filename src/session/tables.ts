@@ -7,12 +7,10 @@ import {
 } from "@libraz/formulon";
 import { normalizeRange, parseRangeRef } from "../a1.js";
 import { findSheetIndex, okStatus, rectA1, resultToJson, sheetAt } from "../formulon.js";
-import { assertInGrid, rangeA1, sheetName } from "./shared.js";
+import { assertInGrid, lowerFirst, rangeA1, sheetName } from "./shared.js";
 import { getSession, publicInfo, touch } from "./state.js";
 
 export type TableOperation = "list" | "create" | "update" | "remove";
-
-const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
 
 // The tool's totals-function names, derived from the engine enum (`CountNumbers` is `countNumbers`); `None` is null.
 const TOTALS_FUNCTION_ORDINALS: ReadonlyMap<string, TableTotalsRowFunction> = new Map(

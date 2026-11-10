@@ -1,4 +1,11 @@
-import { type CellRect, type RangeCell, type Sheet, type Value, ValueKind } from "@libraz/formulon";
+import {
+  type CellRect,
+  type RangeCell,
+  type Sheet,
+  SpillCause,
+  type Value,
+  ValueKind,
+} from "@libraz/formulon";
 import { cellToA1, MAX_COL, MAX_ROW } from "../a1.js";
 import {
   DisplayStatus,
@@ -37,6 +44,52 @@ export function rangeA1(
   lastCol: number,
 ): string {
   return `${refA1(firstRow, firstCol)}:${refA1(lastRow, lastCol)}`;
+}
+
+/** `PascalCase` engine enum key to the camelCase name the tools use. */
+export const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
+
+const SPILL_CAUSE_NAMES: ReadonlyMap<SpillCause, string> = new Map(
+  Object.entries(SpillCause).map(([key, ordinal]) => [ordinal, lowerFirst(key)]),
+);
+
+const sameRect = (a: CellRect, b: CellRect) =>
+  a.firstRow === b.firstRow &&
+  a.firstCol === b.firstCol &&
+  a.lastRow === b.lastRow &&
+  a.lastCol === b.lastCol;
+
+/**
+ * The spill or PivotTable report region `Sheet.getSpill` reads at a cell, with A1 references;
+ * `null` when the cell is in none.
+ */
+export function spillRecord(session: WorkbookOwner, sheet: number, row: number, col: number) {
+  const handle = session.workbook.sheet(sheet);
+  const info = handle.getSpill(row, col);
+  if (info === null) {
+    return null;
+  }
+  const { firstRow, firstCol, lastRow, lastCol } = info.range;
+  // A formula's region reads the same at its top-left anchor; a report reads only at its anchor,
+  // which sits below any page-field rows.
+  const topLeft = firstRow === row && firstCol === col ? info : handle.getSpill(firstRow, firstCol);
+  const [anchorRow, anchorCol] =
+    topLeft !== null && sameRect(topLeft.range, info.range) ? [firstRow, firstCol] : [row, col];
+  const name = sheetName(session, sheet);
+  return {
+    blocked: info.blocked,
+    cause: info.cause === null ? null : (SPILL_CAUSE_NAMES.get(info.cause) ?? null),
+    anchor: {
+      sheet,
+      sheetName: name,
+      row: anchorRow,
+      col: anchorCol,
+      ref: `${name}!${refA1(anchorRow, anchorCol)}`,
+    },
+    rows: lastRow - firstRow + 1,
+    cols: lastCol - firstCol + 1,
+    range: `${name}!${rangeA1(firstRow, firstCol, lastRow, lastCol)}`,
+  };
 }
 
 /** Rejects a cell address that falls outside Excel's grid limits. */

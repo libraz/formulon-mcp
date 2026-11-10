@@ -21,12 +21,12 @@ import {
 } from "./geometry.js";
 import {
   assertInGrid,
-  rangeA1,
   refA1,
   requiredBoolean,
   requiredNumber,
   requiredString,
   sheetName,
+  spillRecord,
 } from "./shared.js";
 import { getSession, publicInfo, touch } from "./state.js";
 
@@ -308,33 +308,15 @@ export function traceSession(
     ref: `${sheetName(session, s)}!${refA1(r, c)}`,
   });
   touch(session, false);
-  const handle = session.workbook.sheet(sheetIndex);
   if (operation === "spillInfo") {
-    const info = handle.getSpill(row, col);
     return {
       session: publicInfo(session),
       operation,
       cell: cellRef(sheetIndex, row, col),
-      spill:
-        info === null
-          ? null
-          : {
-              blocked: info.blocked,
-              // A blocked range is reported only at its anchor, and a pivot's takes the page rows above it.
-              anchor: info.blocked
-                ? cellRef(sheetIndex, row, col)
-                : cellRef(sheetIndex, info.range.firstRow, info.range.firstCol),
-              rows: info.range.lastRow - info.range.firstRow + 1,
-              cols: info.range.lastCol - info.range.firstCol + 1,
-              range: `${sheetName(session, sheetIndex)}!${rangeA1(
-                info.range.firstRow,
-                info.range.firstCol,
-                info.range.lastRow,
-                info.range.lastCol,
-              )}`,
-            },
+      spill: spillRecord(session, sheetIndex, row, col),
     };
   }
+  const handle = session.workbook.sheet(sheetIndex);
   const nodes =
     operation === "precedents"
       ? handle.getPrecedents(row, col, depth)

@@ -141,7 +141,8 @@ test("creates and round-trips a worksheet-backed PivotTable", async () => {
       grandTotals: { rows: true, columns: true },
     });
     assert.equal(created.pivotIndex, 0);
-    assert.equal(created.blocked, false);
+    assert.equal(created.spill.blocked, false);
+    assert.equal(created.spill.anchor.ref, "Sheet1!E1");
     assert.equal(created.source.headers.join(","), "Region,Product,Amount");
     numberFormat = assertPivotTotals(created.layout);
 
@@ -182,7 +183,9 @@ test("creates and round-trips a worksheet-backed PivotTable", async () => {
   }
 });
 
-test("reports a PivotTable report blocked by occupied cells or the sheet edge", async () => {
+const cellAt = (ref, row, col) => ({ sheet: 0, sheetName: "Sheet1", row, col, ref });
+
+test("reports a PivotTable report's region, blocked by occupied cells, a merge or the sheet edge", async () => {
   await openSession(undefined, "pivot-blocked");
   try {
     const regions = Array.from({ length: 25 }, (_, i) => [`R${String(i).padStart(2, "0")}`, i + 1]);
@@ -216,31 +219,48 @@ test("reports a PivotTable report blocked by occupied cells or the sheet edge", 
       rows: ["Region"],
       values: [{ field: "Amount" }],
     });
-    assert.equal(created.blocked, true);
+    const blocked = {
+      blocked: true,
+      cause: "occupied",
+      anchor: cellAt("Sheet1!D1", 0, 3),
+      rows: 27,
+      cols: 2,
+      range: "Sheet1!D1:E27",
+    };
+    assert.deepEqual(created.spill, blocked);
     assert.deepEqual(created.layout.rect, { firstRow: 0, firstCol: 3, lastRow: 26, lastCol: 4 });
     assert.deepEqual(getSessionCellByA1("pivot-blocked", "Sheet1!D1").value, {
       kind: "error",
       errorCode: 8,
       errorName: "#SPILL!",
     });
-    const blocked = traceSession("pivot-blocked", "spillInfo", 0, 0, 3, 1).spill;
-    assert.deepEqual(blocked, {
-      blocked: true,
-      anchor: { sheet: 0, sheetName: "Sheet1", row: 0, col: 3, ref: "Sheet1!D1" },
-      rows: 27,
-      cols: 2,
-      range: "Sheet1!D1:E27",
-    });
+    assert.deepEqual(traceSession("pivot-blocked", "spillInfo", 0, 0, 3, 1).spill, blocked);
 
     // Freeing the range draws the report on the next recalculation.
     setSessionRange("pivot-blocked", "Sheet1!D22", [[{ blank: true }]], 0, true);
-    assert.equal(traceSession("pivot-blocked", "spillInfo", 0, 0, 3, 1).spill, null);
+    assert.deepEqual(traceSession("pivot-blocked", "spillInfo", 0, 0, 3, 1).spill, {
+      ...blocked,
+      blocked: false,
+      cause: null,
+    });
     assert.deepEqual(getSessionCellByA1("pivot-blocked", "Sheet1!E27").value, {
       kind: "number",
       value: 325,
     });
 
-    // A report running past the last column is blocked with no range inside the grid.
+    // A merge inside the report's range reads as its own cause.
+    callWorkbookMethod("pivot-blocked", sheet0, "addMerge", ["J20:K20"]);
+    const merged = createSessionPivot("pivot-blocked", {
+      sourceRange: "A1:B26",
+      target: "J1",
+      name: "Merged",
+      rows: ["Region"],
+      values: [{ field: "Amount" }],
+    });
+    assert.equal(merged.spill.blocked, true);
+    assert.equal(merged.spill.cause, "merged");
+
+    // A report running past the last column is blocked with its range clipped to the grid.
     const edge = createSessionPivot("pivot-blocked", {
       sourceRange: "A1:B6",
       target: "XFB1",
@@ -248,10 +268,57 @@ test("reports a PivotTable report blocked by occupied cells or the sheet edge", 
       columns: ["Region"],
       values: [{ field: "Amount" }],
     });
-    assert.equal(edge.blocked, true);
-    assert.equal(traceSession("pivot-blocked", "spillInfo", 0, 0, 16381, 1).spill, null);
+    assert.equal(edge.spill.blocked, true);
+    assert.equal(edge.spill.cause, "beyondEdge");
+    assert.equal(edge.spill.range, "Sheet1!XFB1:XFD3");
+    assert.deepEqual(traceSession("pivot-blocked", "spillInfo", 0, 0, 16381, 1).spill, edge.spill);
   } finally {
     closeSession("pivot-blocked");
+  }
+});
+
+test("reads a spill's anchor at a phantom cell and a report's anchor below its page rows", async () => {
+  await openSession(undefined, "spill-anchor");
+  try {
+    const rows = Array.from({ length: 5 }, (_, i) => [`R${i}`, `C${i % 2}`, i + 1]);
+    setSessionRange("spill-anchor", "Sheet1!A1", [["Region", "Kind", "Amount"], ...rows], 0, true);
+    const paged = createSessionPivot("spill-anchor", {
+      sourceRange: "A1:C6",
+      target: "F5",
+      name: "Paged",
+      rows: ["Region"],
+      pages: ["Kind"],
+      values: [{ field: "Amount" }],
+    });
+    assert.deepEqual(paged.spill, {
+      blocked: false,
+      cause: null,
+      anchor: cellAt("Sheet1!F5", 4, 5),
+      rows: 9,
+      cols: 2,
+      range: "Sheet1!F3:G11",
+    });
+    // A report's other cells, its page rows included, are ordinary cells.
+    assert.equal(traceSession("spill-anchor", "spillInfo", 0, 2, 5, 1).spill, null);
+
+    setSessionRange("spill-anchor", "Sheet1!K1", [[{ f: "=SEQUENCE(3)" }]], 0, true);
+    const drawn = {
+      blocked: false,
+      cause: null,
+      anchor: cellAt("Sheet1!K1", 0, 10),
+      rows: 3,
+      cols: 1,
+      range: "Sheet1!K1:K3",
+    };
+    assert.deepEqual(traceSession("spill-anchor", "spillInfo", 0, 1, 10, 1).spill, drawn);
+    setSessionRange("spill-anchor", "Sheet1!K3", [["x"]], 0, true);
+    assert.deepEqual(traceSession("spill-anchor", "spillInfo", 0, 0, 10, 1).spill, {
+      ...drawn,
+      blocked: true,
+      cause: "occupied",
+    });
+  } finally {
+    closeSession("spill-anchor");
   }
 });
 
