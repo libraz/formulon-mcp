@@ -1,13 +1,12 @@
-import { assertStatus, GeometryMode, requireNumberResult, type Workbook } from "../formulon.js";
+import { GeometryMode, type Workbook } from "../formulon.js";
 import type { ColumnMetrics } from "../preview/geometry.js";
 
 /** Reads the engine's display width model (Normal font calibration) for one sheet. */
 export function resolveColumnMetrics(workbook: Workbook, sheet: number): ColumnMetrics {
-  const model = workbook.getWidthModel(sheet, GeometryMode.Display);
-  assertStatus(model.status, "read column width model");
+  const model = workbook.sheet(sheet).getWidthModel(GeometryMode.Display);
   return {
     fontName: model.normalFontName,
-    fontSize: model.normalFontSize,
+    fontSize: model.normalFontSizePt,
     pointsPerChar: model.pointsPerChar,
     paddingPt: model.paddingPt,
     approximate: !model.calibrated,
@@ -16,18 +15,12 @@ export function resolveColumnMetrics(workbook: Workbook, sheet: number): ColumnM
 
 /** Converts a stored Excel column width (character units) to display points. */
 export function columnCharsToPoints(workbook: Workbook, sheet: number, chars: number): number {
-  return requireNumberResult(
-    workbook.columnCharsToPt(sheet, GeometryMode.Display, chars),
-    "convert column width to points",
-  );
+  return workbook.sheet(sheet).convertColumnCharsToPt(chars, GeometryMode.Display);
 }
 
 /** Converts display points to Excel's stored column width (character units, padding included). */
 export function columnPointsToChars(workbook: Workbook, sheet: number, points: number): number {
-  return requireNumberResult(
-    workbook.columnPtToChars(sheet, GeometryMode.Display, points),
-    "convert column width to characters",
-  );
+  return workbook.sheet(sheet).convertColumnPtToChars(points, GeometryMode.Display);
 }
 
 export type { ColumnMetrics } from "../preview/geometry.js";

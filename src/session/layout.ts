@@ -1,4 +1,4 @@
-import { assertStatus, findSheetIndex, statusToJson, type Workbook } from "../formulon.js";
+import { findSheetIndex, okStatus, type Workbook } from "../formulon.js";
 import { preflightLayout } from "../layout/preflight.js";
 import type { LayoutOperation, PreparedLayoutOperation } from "../layout/types.js";
 import { writePrintSettings } from "../print.js";
@@ -24,12 +24,18 @@ function applyMerge(
   sheet: number,
   operation: Extract<PreparedLayoutOperation, { type: "merge" }>,
 ) {
-  return workbook[operation.operation === "add" ? "addMerge" : "removeMerge"](sheet, {
+  const handle = workbook.sheet(sheet);
+  const rect = {
     firstRow: operation.resolved.rect.firstRow,
     firstCol: operation.resolved.rect.firstCol,
     lastRow: operation.resolved.rect.lastRow,
     lastCol: operation.resolved.rect.lastCol,
-  });
+  };
+  if (operation.operation === "add") {
+    handle.addMerge(rect);
+  } else {
+    handle.removeMerge(rect);
+  }
 }
 
 /** Applies a bounded sequence of presentation mutations after complete preflight. */
@@ -46,13 +52,9 @@ export function applySessionLayout(
   for (const operation of prepared) {
     if (operation.type === "column") {
       touch(session, true);
-      const status = session.workbook.setColumnWidth(
-        sheetIndex,
-        operation.first,
-        operation.last,
-        operation.storedSize,
-      );
-      assertStatus(status, "set column width");
+      session.workbook
+        .sheet(sheetIndex)
+        .setColumnWidth(operation.first, operation.last, operation.storedSize);
       results.push({
         type: operation.type,
         first: operation.first,
@@ -68,8 +70,7 @@ export function applySessionLayout(
     if (operation.type === "row") {
       for (let row = operation.first; row <= operation.last; row += 1) {
         touch(session, true);
-        const status = session.workbook.setRowHeight(sheetIndex, row, operation.storedSize);
-        assertStatus(status, "set row height");
+        session.workbook.sheet(sheetIndex).setRowHeight(row, row, operation.storedSize);
       }
       results.push({
         type: operation.type,
@@ -83,13 +84,12 @@ export function applySessionLayout(
     }
     if (operation.type === "merge") {
       touch(session, true);
-      const status = applyMerge(session.workbook, sheetIndex, operation);
-      assertStatus(status, `${operation.operation} merge`);
+      applyMerge(session.workbook, sheetIndex, operation);
       results.push({
         type: operation.type,
         operation: operation.operation,
         range: operation.resolved.ref,
-        status: statusToJson(status),
+        status: okStatus(),
       });
       continue;
     }

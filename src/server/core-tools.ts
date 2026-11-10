@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { assertStatus, formulonModule, normalizeFormula, valueToJson } from "../formulon.js";
+import { formulonModule, normalizeFormula, okStatus, valueToJson } from "../formulon.js";
 import { resolveSessionSheet } from "../session/workbook.js";
-import { fail, methodOk, ok, sheetRefSchema } from "./shared.js";
+import { fail, labeledOk, ok, sheetRefSchema } from "./shared.js";
 
 export function registerCoreTools(server: McpServer, version: string): void {
   server.registerTool(
@@ -15,7 +15,7 @@ export function registerCoreTools(server: McpServer, version: string): void {
     async () => {
       try {
         const module = await formulonModule();
-        return ok({ version: module.versionString(), serverVersion: version });
+        return ok({ version: module.getVersion(), serverVersion: version });
       } catch (error) {
         return fail(error);
       }
@@ -53,12 +53,9 @@ export function registerCoreTools(server: McpServer, version: string): void {
       try {
         if (sessionId !== undefined) {
           const sheetIndex = resolveSessionSheet(sessionId, sheet);
-          return methodOk(sessionId, "evaluateFormulaText", [
-            sheetIndex,
-            row,
-            col,
-            normalizeFormula(formula),
-          ]);
+          return labeledOk(sessionId, "Sheet.evaluateTypedFormula", "read", (wb) =>
+            wb.sheet(sheetIndex).evaluateTypedFormula(row, col, normalizeFormula(formula)),
+          );
         }
         if (typeof sheet === "string") {
           throw new Error(
@@ -66,12 +63,11 @@ export function registerCoreTools(server: McpServer, version: string): void {
           );
         }
         const module = await formulonModule();
-        const result = module.evalFormula(normalizeFormula(formula));
-        assertStatus(result.status, "evaluate formula");
+        const value = module.evaluateTypedFormula(normalizeFormula(formula));
         return ok({
           formula: normalizeFormula(formula),
-          status: result.status,
-          value: valueToJson(result.value),
+          status: okStatus(),
+          value: valueToJson(value),
         });
       } catch (error) {
         return fail(error);

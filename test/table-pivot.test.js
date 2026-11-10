@@ -16,6 +16,8 @@ import {
 } from "../dist/sessions.js";
 import { textPayload, withClient } from "./helpers/mcp.js";
 
+const sheet0 = { kind: "Sheet", sheet: 0 };
+
 const sales = [
   ["Region", "Product", "Amount"],
   ["East", "Pen", { f: "=20" }],
@@ -23,38 +25,41 @@ const sales = [
   ["West", "Pen", 5],
 ];
 
-function assertPivotTotals(layout) {
-  const cells = layout.cells;
+// The create tool reports cell values as tagged `{ kind, value }`; a raw engine layout record
+// (Pivot.getLayout) carries the plain value.
+const taggedValue = (cell) => (cell.value.kind === "blank" ? null : cell.value.value);
+const plainValue = (cell) => cell.value;
+
+function assertPivotTotals(layout, cellValue = taggedValue) {
+  const cells = layout.cells.map((cell) => ({ ...cell, value: cellValue(cell) }));
   const rowLabels = cells
-    .filter((cell) => cell.kind === 1 && cell.value.kind === "text")
-    .map((cell) => cell.value.value);
+    .filter((cell) => cell.kind === 1 && typeof cell.value === "string")
+    .map((cell) => cell.value);
   assert.deepEqual([...new Set(rowLabels)], ["East", "West"]);
 
   const rowFor = (label) => {
-    const matches = cells.filter(
-      (cell) => cell.kind === 1 && cell.value.kind === "text" && cell.value.value === label,
-    );
+    const matches = cells.filter((cell) => cell.kind === 1 && cell.value === label);
     assert.equal(matches.length, 1, `expected one row label for ${label}`);
     return matches[0].row;
   };
   const eastRow = rowFor("East");
   const westRow = rowFor("West");
   const eastNumbers = cells
-    .filter((cell) => cell.row === eastRow && cell.value.kind === "number")
-    .map((cell) => cell.value.value);
+    .filter((cell) => cell.row === eastRow && typeof cell.value === "number")
+    .map((cell) => cell.value);
   const westNumbers = cells
-    .filter((cell) => cell.row === westRow && cell.value.kind === "number")
-    .map((cell) => cell.value.value);
+    .filter((cell) => cell.row === westRow && typeof cell.value === "number")
+    .map((cell) => cell.value);
   assert.equal(eastNumbers.includes(30), true);
   assert.equal(westNumbers.includes(5), true);
 
   const grandTotalNumbers = cells
-    .filter((cell) => cell.kind === 6 && cell.value.kind === "number")
-    .map((cell) => cell.value.value);
+    .filter((cell) => cell.kind === 6 && typeof cell.value === "number")
+    .map((cell) => cell.value);
   assert.equal(grandTotalNumbers.includes(35), true);
 
   const formatted = cells
-    .filter((cell) => cell.value.kind === "number" && [5, 30, 35].includes(cell.value.value))
+    .filter((cell) => typeof cell.value === "number" && [5, 30, 35].includes(cell.value))
     .map((cell) => cell.numberFormat);
   assert.equal(formatted.length >= 3, true);
   assert.equal(new Set(formatted).size, 1);
@@ -95,8 +100,11 @@ test("authors a native worksheet Table with derived headers and global indexes",
 
     await openSession(file, "table-reload");
     try {
-      assert.equal(callWorkbookMethod("table-reload", "tableCount", []).result.value, 1);
-      assert.equal(callWorkbookMethod("table-reload", "tableAt", [0]).result.ref, "A1:C5");
+      assert.equal(callWorkbookMethod("table-reload", sheet0, "listTables", []).result.length, 1);
+      assert.deepEqual(
+        callWorkbookMethod("table-reload", sheet0, "table", [0]).result.properties.range,
+        { sheet: 0, rect: { firstRow: 0, firstCol: 0, lastRow: 4, lastCol: 2 } },
+      );
       assert.equal(tableOperation("table-reload", "remove", { index: 0 }).removed.index, 0);
       assert.equal(tableOperation("table-reload", "list").tables.length, 0);
     } finally {
@@ -135,12 +143,16 @@ test("creates and round-trips a worksheet-backed PivotTable", async () => {
     assert.equal(created.source.headers.join(","), "Region,Product,Amount");
     numberFormat = assertPivotTotals(created.layout);
 
-    const source = callWorkbookMethod("pivot-authoring", "pivotCacheGetWorksheetSource", [
-      created.cacheId,
-    ]).result;
-    assert.equal(source.present, true);
-    assert.equal(source.sheet, "Sheet1");
-    assert.equal(source.ref, "A1:C4");
+    const source = callWorkbookMethod(
+      "pivot-authoring",
+      { kind: "PivotCache", pivotCache: created.cacheId },
+      "getWorksheetSource",
+      [],
+    ).result;
+    assert.deepEqual(source.range, {
+      sheet: 0,
+      rect: { firstRow: 0, firstCol: 0, lastRow: 3, lastCol: 2 },
+    });
     const saved = await saveSession("pivot-authoring", file);
     assert.equal(saved.format, "xlsx");
     assert.equal(saved.losses, undefined);
@@ -150,11 +162,18 @@ test("creates and round-trips a worksheet-backed PivotTable", async () => {
 
   await openSession(file, "pivot-reload");
   try {
-    assert.equal(callWorkbookMethod("pivot-reload", "pivotCacheCount", []).result.value, 1);
-    assert.equal(callWorkbookMethod("pivot-reload", "pivotCount", [0]).result.value, 1);
-    const layout = callWorkbookMethod("pivot-reload", "pivotLayout", [0, 0]).result;
-    assert.equal(layout.status.ok, true);
-    assert.equal(assertPivotTotals(layout), numberFormat);
+    assert.equal(
+      callWorkbookMethod("pivot-reload", undefined, "listPivotCaches", []).result.length,
+      1,
+    );
+    assert.equal(callWorkbookMethod("pivot-reload", sheet0, "listPivots", []).result.length, 1);
+    const layout = callWorkbookMethod(
+      "pivot-reload",
+      { kind: "Pivot", sheet: 0, pivot: 0 },
+      "getLayout",
+      [],
+    ).result;
+    assert.equal(assertPivotTotals(layout, plainValue), numberFormat);
   } finally {
     closeSession("pivot-reload");
     await rm(dir, { recursive: true, force: true });
@@ -181,7 +200,10 @@ test("rejects unknown and unused PivotTable fields before creating cache state",
       /not present in source headers/,
     );
     assert.equal(listSessions().find((session) => session.id === "pivot-invalid")?.dirty, false);
-    assert.equal(callWorkbookMethod("pivot-invalid", "pivotCacheCount", []).result.value, 0);
+    assert.equal(
+      callWorkbookMethod("pivot-invalid", undefined, "listPivotCaches", []).result.length,
+      0,
+    );
 
     assert.throws(
       () =>
@@ -195,7 +217,7 @@ test("rejects unknown and unused PivotTable fields before creating cache state",
       /headers are unused: Product/,
     );
     assert.equal(listSessions().find((session) => session.id === "pivot-invalid")?.dirty, false);
-    assert.equal(callWorkbookMethod("pivot-invalid", "pivotCount", [0]).result.value, 0);
+    assert.equal(callWorkbookMethod("pivot-invalid", sheet0, "listPivots", []).result.length, 0);
   } finally {
     closeSession("pivot-invalid");
     await rm(dir, { recursive: true, force: true });

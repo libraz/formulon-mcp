@@ -129,11 +129,9 @@ test("a mutation concurrent with save keeps the session dirty while the artifact
 
     const workbook = await loadWorkbook(outputPath);
     try {
-      const artifactCell = workbook.getValue(0, 0, 0);
-      assert.equal(artifactCell.status.ok, true);
-      assert.equal(artifactCell.value.number, 1);
+      assert.equal(workbook.sheet(0).getValue(0, 0), 1);
     } finally {
-      workbook.delete();
+      workbook.dispose();
     }
   } finally {
     closeSession(sessionId);
@@ -245,7 +243,7 @@ test("get_cell requires exactly one source and formula evaluation resolves sessi
           formula: "=A1*2",
         }),
       );
-      assert.deepEqual(named.result.value, { kind: "number", value: 14 });
+      assert.deepEqual(named.result, { kind: "number", value: 14 });
 
       const globalNamed = await callTool(client, "formulon_eval_formula", {
         sheet: "Sheet1",
@@ -253,10 +251,10 @@ test("get_cell requires exactly one source and formula evaluation resolves sessi
       });
       assert.match(errorPayload(globalNamed), /sheet names require sessionId/i);
 
-      const malformed = textPayload(
-        await callTool(client, "formulon_eval_formula", { formula: "=(" }),
-      );
-      assert.equal(malformed.value.kind, "error");
+      // A formula that does not parse is an engine failure, reported as the tool error.
+      const malformed = await callTool(client, "formulon_eval_formula", { formula: "=(" });
+      assert.match(errorPayload(malformed), /^ParserUnexpectedToken: /);
+      assert.equal(JSON.parse(malformed.content[1].text).code, "ParserUnexpectedToken");
     } finally {
       await callTool(client, "formulon_close_workbook", { sessionId });
     }
@@ -288,11 +286,13 @@ test("lossy XLSB saves stay dirty while a clean XLSX save clears dirty", async (
         const created = textPayload(
           await callTool(client, "formulon_workbook_call", {
             sessionId,
-            method: "createTable",
-            args: [{ sheetIndex: 0, ref: "A1:B2", name: "Items", columns: ["Item", "Qty"] }],
+            target: { kind: "Sheet", sheet: 0 },
+            method: "addTable",
+            args: [{ range: "A1:B2", name: "Items", columns: ["Item", "Qty"] }],
           }),
         );
-        assert.equal(created.result.status.ok, true);
+        assert.equal(created.result.handle, "Table");
+        assert.equal(created.result.properties.name, "Items");
         // A custom table style is one of the parts the XLSB writer defers.
         const styled = textPayload(
           await callTool(client, "formulon_workbook_call", {
@@ -301,7 +301,7 @@ test("lossy XLSB saves stay dirty while a clean XLSX save clears dirty", async (
             args: [{ name: "LedgerStyle" }],
           }),
         );
-        assert.equal(styled.result.ok, true);
+        assert.equal(styled.method, "setTableStyle");
 
         const xlsb = textPayload(
           await callTool(client, "formulon_save_session", {

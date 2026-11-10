@@ -2,10 +2,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   applyMutation,
-  assertStatus,
   type CellMutation,
   createOrLoadWorkbook,
-  type ExcelProfileId,
+  type ProfileId,
   saveWorkbook,
   type Workbook,
   workbookSummary,
@@ -70,15 +69,17 @@ export function registerFileTools(server: McpServer): void {
     async ({ path, recalc, includeCells, maxCellsPerSheet, profile }) => {
       let workbook: Workbook | undefined;
       try {
-        workbook = await createOrLoadWorkbook(path, profile as ExcelProfileId | undefined);
+        workbook = await createOrLoadWorkbook(path, profile as ProfileId | undefined, {
+          cachedValues: !recalc,
+        });
         if (recalc) {
-          assertStatus(workbook.recalc(), "recalc workbook");
+          workbook.recalc();
         }
         return ok(workbookSummary(workbook, includeCells, maxCellsPerSheet));
       } catch (error) {
         return fail(error);
       } finally {
-        workbook?.delete();
+        workbook?.dispose();
       }
     },
   );
@@ -104,12 +105,12 @@ export function registerFileTools(server: McpServer): void {
     async ({ inputPath, outputPath, recalc, mutations, profile }) => {
       let workbook: Workbook | undefined;
       try {
-        workbook = await createOrLoadWorkbook(inputPath, profile as ExcelProfileId | undefined);
-        for (const [idx, mutation] of mutations.entries()) {
-          assertStatus(applyMutation(workbook, mutation as CellMutation), `apply mutation ${idx}`);
+        workbook = await createOrLoadWorkbook(inputPath, profile as ProfileId | undefined);
+        for (const mutation of mutations) {
+          applyMutation(workbook, mutation as CellMutation);
         }
         if (recalc) {
-          assertStatus(workbook.recalc(), "recalc workbook");
+          workbook.recalc();
         }
         const saved = await saveWorkbook(workbook, outputPath);
         return ok({
@@ -122,7 +123,7 @@ export function registerFileTools(server: McpServer): void {
       } catch (error) {
         return fail(error);
       } finally {
-        workbook?.delete();
+        workbook?.dispose();
       }
     },
   );

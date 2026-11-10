@@ -1,6 +1,8 @@
+import { enumName } from "@libraz/formulon";
 import { z } from "zod";
-import { jsonText, PROFILE_ID_PATTERN } from "../formulon.js";
-import { callWorkbookMethod } from "../sessions.js";
+import type { Workbook } from "../formulon.js";
+import { errorText, FormulonError, jsonText, PROFILE_ID_PATTERN, StatusCode } from "../formulon.js";
+import { callLabeled } from "../sessions.js";
 
 export function ok(value: unknown) {
   return {
@@ -8,16 +10,35 @@ export function ok(value: unknown) {
   };
 }
 
+/**
+ * The MCP error result of a failed tool call. An engine `FormulonError` reads as its status name,
+ * message and context, and carries those fields (with `parseError` for a formula syntax error) as
+ * a second JSON content item.
+ */
 export function fail(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return {
-    isError: true,
-    content: [{ type: "text" as const, text: message }],
-  };
+  const content = [{ type: "text" as const, text: errorText(error) }];
+  if (error instanceof FormulonError) {
+    content.push({
+      type: "text" as const,
+      text: jsonText({
+        code: enumName(StatusCode, error.code) ?? error.code,
+        message: error.message,
+        context: error.context,
+        ...(error.parseError ? { parseError: error.parseError } : {}),
+      }),
+    });
+  }
+  return { isError: true, content };
 }
 
-export function methodOk(sessionId: string, method: string, args: unknown[]) {
-  return ok(callWorkbookMethod(sessionId, method, args));
+/** The `ok` result of `callLabeled`: one named engine operation on the session's workbook. */
+export function labeledOk(
+  sessionId: string,
+  method: string,
+  access: "read" | "write",
+  operation: (workbook: Workbook) => unknown,
+) {
+  return ok(callLabeled(sessionId, method, access, operation));
 }
 
 export const sheetRefSchema = z.union([z.number().int().nonnegative(), z.string()]);

@@ -52,7 +52,7 @@ test("formula patterns compare copied formulas by their relative R1C1 text", asy
     assert.equal(result.unsupportedFormulaCells, 0);
     assert.deepEqual(
       result.findings.map((finding) => [finding.a1, finding.type, finding.expectedPattern]),
-      [["D6", "formula_pattern_outlier", 'LOG10(RC[-2])+R2C2+LEN("A1")+SUM(C[-3])']],
+      [["D6", "formula_pattern_outlier", '=LOG10(RC[-2])+R2C2+LEN("A1")+SUM(C[-3])']],
     );
   } finally {
     closeSession("formula-audit-patterns");

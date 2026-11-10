@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { ExcelProfileId } from "../formulon.js";
+import type { ProfileId } from "../formulon.js";
 import {
   analyzeSessionWorkbook,
   closeSession,
@@ -51,7 +51,7 @@ export function registerSessionTools(server: McpServer): void {
     async ({ path, sessionId, profile }) => {
       try {
         return ok({
-          session: await openSession(path, sessionId, profile as ExcelProfileId | undefined),
+          session: await openSession(path, sessionId, profile as ProfileId | undefined),
         });
       } catch (error) {
         return fail(error);

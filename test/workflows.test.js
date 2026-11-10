@@ -11,64 +11,82 @@ test("AI tools publish validation and conditional-format shapes and reject inval
     const conditional = tools.find((tool) => tool.name === "formulon_conditional_format_operation");
     const validation = tools.find((tool) => tool.name === "formulon_validation_operation");
     const rule = conditional.inputSchema.properties.rule;
-    assert.equal(rule.properties.dataBar.properties.direction.maximum, 2);
-    assert.equal(rule.properties.iconSet.properties.floor.properties.type.maximum, 7);
-    assert.equal(
-      validation.inputSchema.properties.validation.properties.allowBlank.type,
-      "boolean",
-    );
+    // The records are the engine's inputs: ranges and the enum member name are required,
+    // and every other key is forwarded to the engine, which validates it.
+    assert.deepEqual(rule.required, ["ranges", "type"]);
+    assert.equal(rule.properties.type.type, "string");
+    assert.equal(rule.properties.operator.type, "string");
+    assert.equal(rule.properties.timePeriod.type, "string");
+    assert.notEqual(rule.additionalProperties, false);
+    const record = validation.inputSchema.properties.validation;
+    assert.deepEqual(record.required, ["ranges", "type"]);
+    assert.equal(record.properties.type.type, "string");
+    assert.equal(record.properties.errorStyle.type, "string");
+    assert.notEqual(record.additionalProperties, false);
     const sessionId = "schema-preflight";
     textPayload(
       await client.callTool({ name: "formulon_open_workbook", arguments: { sessionId } }),
     );
     try {
       for (const [name, extra] of [
-        [
-          "formulon_conditional_format_operation",
-          { rule: { type: 99, sqref: [{ firstRow: 0, firstCol: 0, lastRow: 1, lastCol: 1 }] } },
-        ],
+        ["formulon_conditional_format_operation", { rule: { type: "Bogus", ranges: "A1:B2" } }],
         [
           "formulon_conditional_format_operation",
           {
             rule: {
-              type: 3,
-              sqref: [{ firstRow: 0, firstCol: 0, lastRow: 1, lastCol: 1 }],
-              dataBar: { min: { type: 3 }, max: { type: 4 }, fill: { r: 256, g: 0, b: 0 } },
+              type: "DataBar",
+              ranges: "A1:B2",
+              dataBar: { min: { type: "Min" }, max: { type: "Max" }, fill: "#12345G" },
             },
           },
         ],
         [
           "formulon_validation_operation",
           {
-            validation: { type: 1, ranges: [{ firstRow: 2, firstCol: 0, lastRow: 1, lastCol: 1 }] },
+            validation: {
+              type: "Whole",
+              ranges: [{ firstRow: 2, firstCol: 0, lastRow: 1, lastCol: 1 }],
+            },
           },
         ],
         ...[
-          { type: 0, id: "not-a-guid", formula1: "TRUE" },
+          { type: "Expression", id: "not-a-guid", formula1: "TRUE" },
           {
-            type: 3,
+            type: "DataBar",
             dataBar: {
-              min: { type: 3 },
-              max: { type: 4 },
-              fill: { r: 0, g: 100, b: 200 },
+              min: { type: "Min" },
+              max: { type: "Max" },
+              fill: "#0064C8",
               minLengthPct: 90,
               maxLengthPct: 10,
             },
           },
           {
-            type: 3,
+            type: "DataBar",
             dataBar: {
-              min: { type: 3 },
-              max: { type: 4 },
-              fill: { r: 0, g: 100, b: 200 },
+              min: { type: "Min" },
+              max: { type: "Max" },
+              fill: "#0064C8",
               minLengthPct: 10.5,
             },
           },
-          { type: 4, iconSet: { name: 0, thresholds: Array(4).fill({ type: 1, value: "50" }) } },
-          { type: 4, iconSet: { name: 8, thresholds: Array(2).fill({ type: 1, value: "50" }) } },
+          {
+            type: "IconSet",
+            iconSet: {
+              name: "ThreeArrows",
+              thresholds: Array(4).fill({ type: "Percent", value: "50" }),
+            },
+          },
+          {
+            type: "IconSet",
+            iconSet: {
+              name: "FourArrows",
+              thresholds: Array(2).fill({ type: "Percent", value: "50" }),
+            },
+          },
         ].map((rule) => [
           "formulon_conditional_format_operation",
-          { rule: { sqref: [{ firstRow: 0, firstCol: 0, lastRow: 1, lastCol: 1 }], ...rule } },
+          { rule: { ranges: "A1:B2", ...rule } },
         ]),
       ]) {
         assert.match(
@@ -78,7 +96,7 @@ test("AI tools publish validation and conditional-format shapes and reject inval
               arguments: { sessionId, operation: "add", ...extra },
             }),
           ),
-          /validation|invalid/i,
+          /validation|invalid|must be/i,
         );
         const state = textPayload(
           await client.callTool({
@@ -158,14 +176,14 @@ test("AI tools preserve icon floors and data-bar directions through xlsx and xls
         sessionId,
         operation: "add",
         rule: {
-          type: 3,
+          type: "DataBar",
           id: "{12345678-1234-1234-1234-123456789ABC}",
-          sqref: [{ firstRow: 0, firstCol: 0, lastRow: 2, lastCol: 0 }],
+          ranges: "A1:A3",
           dataBar: {
-            min: { type: 0, value: "0" },
-            max: { type: 0, value: "100" },
-            fill: { r: 0, g: 100, b: 200, a: 255 },
-            direction: 2,
+            min: { type: "Number", value: "0" },
+            max: { type: "Number", value: "100" },
+            fill: "#FF0064C8",
+            direction: "RightToLeft",
           },
         },
       });
@@ -173,14 +191,14 @@ test("AI tools preserve icon floors and data-bar directions through xlsx and xls
         sessionId,
         operation: "add",
         rule: {
-          type: 4,
-          sqref: [{ firstRow: 0, firstCol: 1, lastRow: 2, lastCol: 1 }],
+          type: "IconSet",
+          ranges: "B1:B3",
           iconSet: {
-            name: 0,
-            floor: { type: 0, value: "10", gte: true },
+            name: "ThreeArrows",
+            floor: { type: "Number", value: "10", gte: true },
             thresholds: [
-              { type: 0, value: "50" },
-              { type: 0, value: "80" },
+              { type: "Number", value: "50" },
+              { type: "Number", value: "80" },
             ],
           },
         },
@@ -195,9 +213,9 @@ test("AI tools preserve icon floors and data-bar directions through xlsx and xls
             sessionId: reloaded,
             operation: "list",
           });
-          assert.equal(rules.result.status.ok, true);
-          assert.equal(rules.result.items.find((rule) => rule.type === 3).dataBar.direction, 2);
-          assert.deepEqual(rules.result.items.find((rule) => rule.type === 4).iconSet.floor, {
+          assert.equal(rules.method, "Sheet.listCfRules");
+          assert.equal(rules.result.find((rule) => rule.type === 3).dataBar.direction, 2);
+          assert.deepEqual(rules.result.find((rule) => rule.type === 4).iconSet.floor, {
             type: 0,
             value: "10",
             gte: true,
@@ -210,15 +228,15 @@ test("AI tools preserve icon floors and data-bar directions through xlsx and xls
             lastRow: 2,
             lastCol: 1,
           });
-          assert.equal(evaluated.result.status.ok, true);
-          const bar = evaluated.result.cells.find((cell) => cell.row === 1 && cell.col === 0);
-          assert.equal(bar.matches.find((match) => match.kind === 2).barDirection, 2);
+          assert.equal(evaluated.method, "Sheet.evaluateCfRange");
+          const bar = evaluated.result.find((cell) => cell.row === 1 && cell.col === 0);
+          assert.equal(bar.matches.find((match) => match.kind === 2).bar.direction, 2);
           assert.equal(
-            evaluated.result.cells.some((cell) => cell.row === 0 && cell.col === 1),
+            evaluated.result.some((cell) => cell.row === 0 && cell.col === 1),
             false,
           );
-          const icon = evaluated.result.cells.find((cell) => cell.row === 2 && cell.col === 1);
-          assert.equal(icon.matches.find((match) => match.kind === 3).iconIndex, 2);
+          const icon = evaluated.result.find((cell) => cell.row === 2 && cell.col === 1);
+          assert.equal(icon.matches.find((match) => match.kind === 3).icon.iconIndex, 2);
         } finally {
           await call("formulon_close_workbook", { sessionId: reloaded });
         }

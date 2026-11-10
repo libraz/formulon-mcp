@@ -228,7 +228,7 @@ test("adds, updates and removes sparkline groups without resetting unstated sett
         [{ data: "Sheet1!A1:D2", location: "F1" }],
         {},
       );
-      assert.deepEqual(replaced.group.sparklines, [{ data: "Sheet1!A1:D2", location: "F1" }]);
+      assert.deepEqual(replaced.group.sparklines, [{ data: "'Sheet1'!A1:D2", location: "F1" }]);
       assert.equal(replaced.group.negative, true);
       assert.throws(() => updateSessionSparklines("sparklines", 0, 0, undefined, {}), /requires/);
       assert.throws(() => addSessionSparklines("sparklines", 0, [], {}), /at least one/);
@@ -297,7 +297,7 @@ test("models a one-variable What-If data table", async () => {
 
 test("sets formula display, split panes, scroll origin and the active sheet", async () => {
   await withSession("sheet-view", () => {
-    callWorkbookMethod("sheet-view", "addSheet", ["Second"]);
+    callWorkbookMethod("sheet-view", undefined, "addSheet", ["Second"]);
     const result = setSessionSheetView("sheet-view", "Second", {
       showFormulas: true,
       showOutlineSymbols: false,
@@ -307,20 +307,29 @@ test("sets formula display, split panes, scroll origin and the active sheet", as
       active: true,
     });
     assert.equal(result.statuses.length, 5);
-    const { view } = callWorkbookMethod("sheet-view", "getSheetView", [1]).result;
-    assert.equal(view.showFormulas, 1);
-    assert.equal(view.showOutlineSymbols, 0);
-    assert.equal(view.splitX, 1440);
-    assert.equal(view.splitY, 720);
-    assert.equal(view.topLeftRow, 9);
-    assert.equal(view.topLeftCol, 2);
-    assert.equal(callWorkbookMethod("sheet-view", "activeSheet", []).result.index, 1);
+    const view = callWorkbookMethod(
+      "sheet-view",
+      { kind: "Sheet", sheet: 1 },
+      "getView",
+      [],
+    ).result;
+    assert.equal(view.showFormulas, true);
+    assert.equal(view.showOutlineSymbols, false);
+    assert.equal(view.splitXTwips, 1440);
+    assert.equal(view.splitYTwips, 720);
+    assert.deepEqual(view.topLeft, { row: 9, col: 2 });
+    assert.equal(callWorkbookMethod("sheet-view", undefined, "activeSheet", []).result.index, 1);
 
     // A freeze replaces the split.
     setSessionSheetView("sheet-view", 1, { freezeRows: 1 });
-    const frozen = callWorkbookMethod("sheet-view", "getSheetView", [1]).result.view;
+    const frozen = callWorkbookMethod(
+      "sheet-view",
+      { kind: "Sheet", sheet: 1 },
+      "getView",
+      [],
+    ).result;
     assert.equal(frozen.freezeRows, 1);
-    assert.equal(frozen.splitX, 0);
+    assert.equal(frozen.splitXTwips, 0);
     assert.throws(
       () => setSessionSheetView("sheet-view", 1, { freezeRows: 1, splitX: 10 }),
       /either frozen or split/,
@@ -331,8 +340,11 @@ test("sets formula display, split panes, scroll origin and the active sheet", as
     );
     // Hiding the active sheet activates the next visible one.
     setSessionSheetView("sheet-view", 1, { visibility: "hidden" });
-    assert.equal(callWorkbookMethod("sheet-view", "activeSheet", []).result.index, 0);
-    assert.throws(() => setSessionSheetView("sheet-view", 1, { active: true }), /active/);
+    assert.equal(callWorkbookMethod("sheet-view", undefined, "activeSheet", []).result.index, 0);
+    assert.throws(
+      () => setSessionSheetView("sheet-view", 1, { active: true }),
+      /setActiveSheet sheet is hidden/,
+    );
   });
 });
 
@@ -342,10 +354,10 @@ test("marks outline groups collapsed on rows and columns", async () => {
     sessionDimension("collapsed", "row", "collapsed", { row: 2, collapsed: true });
     sessionDimension("collapsed", "column", "collapsed", { first: 3, last: 4, collapsed: true });
     const rows = sessionDimension("collapsed", "row", "list", {}).value.rows;
-    assert.equal(rows.find((row) => row.row === 2).collapsed, 1);
-    assert.equal(rows.find((row) => row.row === 1).hidden, 0);
+    assert.equal(rows.find((row) => row.row === 2).collapsed, true);
+    assert.equal(rows.find((row) => row.row === 1).hidden, false);
     const columns = sessionDimension("collapsed", "column", "list", {}).value.columns;
-    assert.equal(columns.find((column) => column.first === 3).collapsed, 1);
+    assert.equal(columns.find((column) => column.first === 3).collapsed, true);
     assert.throws(
       () => sessionDimension("collapsed", "row", "collapsed", { row: 2 }),
       /collapsed is required/,
@@ -364,7 +376,7 @@ test("defined names carry a comment and a hidden flag", async () => {
       names.find((entry) => entry.name === "Rate"),
       {
         name: "Rate",
-        formula: "0.1",
+        formula: "=0.1",
         localSheetId: -1,
         comment: "Tax rate",
         hidden: true,
@@ -380,7 +392,7 @@ test("defined names carry a comment and a hidden flag", async () => {
       names.find((entry) => entry.name === "Rate"),
       {
         name: "Rate",
-        formula: "0.2",
+        formula: "=0.2",
         localSheetId: -1,
       },
     );
@@ -413,8 +425,17 @@ test("tables take style toggles, totals-row cells and a rename that rewrites ref
       showFirstColumn: true,
       showRowStripes: false,
     });
-    assert.equal(created.table.raw.showFirstColumn, true);
-    assert.equal(created.table.raw.showRowStripes, false);
+    // The style toggles are no longer part of the table properties record; read them from the handle.
+    const styleOptions = callWorkbookMethod(
+      "table-totals",
+      { kind: "Table", table: "Items" },
+      "getStyleOptions",
+      [],
+    ).result;
+    assert.equal(styleOptions.styleName, "TableStyleMedium2");
+    assert.equal(styleOptions.showFirstColumn, true);
+    assert.equal(styleOptions.showRowStripes, false);
+    assert.equal(created.table.name, "Items");
     assert.throws(
       () =>
         tableOperation("table-totals", "update", {
@@ -437,8 +458,8 @@ test("tables take style toggles, totals-row cells and a rename that rewrites ref
     assert.deepEqual(
       updated.table.raw.columns.map((column) => [column.totalsRowFunction, column.totalsRowLabel]),
       [
-        ["none", "Total"],
-        ["sum", ""],
+        [0, "Total"],
+        [1, null],
       ],
     );
     assert.equal(getSessionCellByA1("table-totals", "E1", 0, true).formula, "=SUM(Goods[Qty])");
@@ -457,7 +478,7 @@ test("tables take style toggles, totals-row cells and a rename that rewrites ref
 
 test("dates decode and encode under the 1904 date system", async () => {
   await withSession("date1904", () => {
-    callWorkbookMethod("date1904", "setDate1904", [true]);
+    callWorkbookMethod("date1904", undefined, "setDate1904", [true]);
     // 1904 serial 43538 is the 1900 serial 45000: 2023-03-15.
     setSessionRange("date1904", "A1", [[43538]], 0, true);
     styleSessionRange("date1904", "A1", { numberFormat: "yyyy-mm-dd" }, 0, "existing");
@@ -511,11 +532,12 @@ test("new tools are registered and reachable over stdio", async () => {
       const visible = textPayload(
         await callTool(client, "formulon_workbook_call", {
           sessionId,
+          target: { kind: "Sheet", sheet: 0 },
           method: "getCommentVisible",
-          args: [0, 0, 0],
+          args: [0, 0],
         }),
       );
-      assert.equal(visible.result.value, 1);
+      assert.equal(visible.result, true);
       const sparkline = textPayload(
         await callTool(client, "formulon_sparkline_operation", {
           sessionId,

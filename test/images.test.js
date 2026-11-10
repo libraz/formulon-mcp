@@ -177,7 +177,7 @@ test("moves, resizes, and restacks a picture in place", async () => {
             anchor: "A1",
           }),
         ),
-        /no drawing object 999/,
+        /NotFound: Sheet\.drawing .*has no object 999/,
       );
     });
   } finally {
@@ -569,7 +569,10 @@ test("rejects a move whose anchor is not a cell on the selected sheet", async ()
       assert.deepEqual(await listPictures(client, sessionId), before);
 
       // The last cell is a valid address, but a picture anchored there would run off the sheet.
-      assert.match(errorPayload(await move({ anchor: "XFD1048576" })), /move image failed/);
+      assert.match(
+        errorPayload(await move({ anchor: "XFD1048576" })),
+        /InvalidArgument: Picture\.update .*within the sheet/,
+      );
       assert.deepEqual(await listPictures(client, sessionId), before);
       assert.equal(textPayload(await move({ anchor: "AAA1000" })).placed.from, "AAA1000");
       // Lower-case and dollar-marked cells are accepted spellings.
@@ -619,7 +622,7 @@ test("a move finds objects on the selected sheet only", async () => {
               ...args,
             }),
           ),
-          /no drawing object \d+ on sheet 0/,
+          /NotFound: Sheet\.drawing .*has no object \d+/,
         );
       }
       const moved = textPayload(
@@ -723,7 +726,7 @@ test("reorders pictures to the front, the back and the middle", async () => {
               index,
             }),
           ),
-          /reorder image failed/,
+          /IndexOutOfRange: Picture\.setZOrder .*less than the object count/,
           `index ${index}`,
         );
       }
@@ -736,7 +739,7 @@ test("reorders pictures to the front, the back and the middle", async () => {
             index: 0,
           }),
         ),
-        /reorder image failed/,
+        /NotFound: Sheet\.drawing .*has no object 999/,
       );
       assert.deepEqual(await orderOf(), before);
 

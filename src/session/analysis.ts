@@ -6,7 +6,7 @@ import {
   primitiveText,
   rangeA1,
   refA1,
-  safeWorkbookCall,
+  safeReadJson,
   searchSheets,
   sheetName,
   stableCells,
@@ -24,6 +24,7 @@ export type LayoutOptions = {
 export function inspectSessionLayout(id: string, options: LayoutOptions) {
   const session = getSession(id);
   const sheets = searchSheets(session, options.sheet).map((sheet) => {
+    const handle = session.workbook.sheet(sheet);
     const { cells, cellCount, truncated } = stableCells(
       session,
       sheet,
@@ -35,11 +36,11 @@ export function inspectSessionLayout(id: string, options: LayoutOptions) {
       name: sheetName(session, sheet),
       usedRange: usedRange(cells),
       cellCount,
-      mergedRanges: safeWorkbookCall(session, "getMerges", [sheet]),
-      view: safeWorkbookCall(session, "getSheetView", [sheet]),
-      columns: safeWorkbookCall(session, "getSheetColumns", [sheet]),
-      rows: safeWorkbookCall(session, "getSheetRowOverrides", [sheet]),
-      protection: safeWorkbookCall(session, "getSheetProtection", [sheet]),
+      mergedRanges: safeReadJson(() => handle.listMerges()),
+      view: safeReadJson(() => handle.getView()),
+      columns: safeReadJson(() => handle.listColumnOverrides()),
+      rows: safeReadJson(() => handle.listRowOverrides()),
+      protection: safeReadJson(() => handle.getSheetProtection()),
       cells: options.includeCells ? cells : undefined,
       truncated,
     };

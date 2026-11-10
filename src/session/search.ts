@@ -1,6 +1,6 @@
 import { cellToA1 } from "../a1.js";
-import { assertStatus, requireCell, requireNumberResult, statusToJson } from "../formulon.js";
-import { cellDisplayText, searchSheets, sheetName, textValue } from "./shared.js";
+import { okStatus } from "../formulon.js";
+import { cellDisplayText, searchSheets, sheetName, taggedValue, textValue } from "./shared.js";
 import { getSession, publicInfo, touch } from "./state.js";
 
 export type SearchTarget = "texts" | "formulas" | "both";
@@ -90,15 +90,8 @@ export function findSessionCells(id: string, query: string, options: SearchOptio
 
   for (const sheet of searchSheets(session, options.sheet)) {
     const name = sheetName(session, sheet);
-    const count = requireNumberResult(
-      session.workbook.cellCount(sheet),
-      `read sheet ${sheet} cell count`,
-    );
-    for (let index = 0; index < count; index += 1) {
-      const cell = requireCell(
-        session.workbook.cellAt(sheet, index),
-        `read sheet ${sheet} cell ${index}`,
-      );
+    const handle = session.workbook.sheet(sheet);
+    for (const cell of handle.listCells()) {
       const a1 = cellToA1(cell.row, cell.col);
       const addResult = (target: "text" | "formula", text: string) => {
         if (!matcher(text)) {
@@ -125,7 +118,7 @@ export function findSessionCells(id: string, query: string, options: SearchOptio
           addResult("formula", cell.formula);
         }
       } else {
-        const text = cellDisplayText(cell.value);
+        const text = cellDisplayText(taggedValue(handle, cell));
         if ((options.target === "texts" || options.target === "both") && text !== undefined) {
           addResult("text", text);
         }
@@ -162,15 +155,8 @@ export function replaceSessionCells(id: string, query: string, options: ReplaceO
 
   for (const sheet of searchSheets(session, options.sheet)) {
     const name = sheetName(session, sheet);
-    const count = requireNumberResult(
-      session.workbook.cellCount(sheet),
-      `read sheet ${sheet} cell count`,
-    );
-    for (let index = 0; index < count; index += 1) {
-      const cell = requireCell(
-        session.workbook.cellAt(sheet, index),
-        `read sheet ${sheet} cell ${index}`,
-      );
+    const handle = session.workbook.sheet(sheet);
+    for (const cell of handle.listCells()) {
       const a1 = cellToA1(cell.row, cell.col);
       const replaceOne = (target: "text" | "formula", text: string) => {
         if (!matcher(text)) {
@@ -184,11 +170,11 @@ export function replaceSessionCells(id: string, query: string, options: ReplaceO
         // The engine may commit a partial change before reporting a failure;
         // retain dirty state from the moment a mutating call is attempted.
         touch(session, true);
-        const status =
-          target === "formula"
-            ? session.workbook.setFormula(sheet, cell.row, cell.col, next)
-            : session.workbook.setText(sheet, cell.row, cell.col, next);
-        assertStatus(status, `replace ${target} ${name}!${a1}`);
+        if (target === "formula") {
+          handle.setFormula(cell.row, cell.col, next);
+        } else {
+          handle.setText(cell.row, cell.col, next);
+        }
         replacements.push({
           sheet,
           sheetName: name,
@@ -200,7 +186,7 @@ export function replaceSessionCells(id: string, query: string, options: ReplaceO
           text,
           before: text,
           after: next,
-          status: statusToJson(status),
+          status: okStatus(),
         });
       };
 
@@ -209,7 +195,7 @@ export function replaceSessionCells(id: string, query: string, options: ReplaceO
           replaceOne("formula", cell.formula);
         }
       } else {
-        const text = textValue(cell.value);
+        const text = textValue(taggedValue(handle, cell));
         if ((options.target === "texts" || options.target === "both") && text !== undefined) {
           replaceOne("text", text);
         }
@@ -224,7 +210,7 @@ export function replaceSessionCells(id: string, query: string, options: ReplaceO
   }
 
   if (replacements.length > 0 && options.recalc) {
-    assertStatus(session.workbook.recalc(), "recalc workbook");
+    session.workbook.recalc();
   }
   if (replacements.length === 0) {
     touch(session, false);

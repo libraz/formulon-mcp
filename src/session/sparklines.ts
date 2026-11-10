@@ -1,13 +1,12 @@
-import type { ColorSpec, SparklineGroup, SparklineGroupInput } from "@libraz/formulon";
+import type {
+  BlanksAs,
+  Color,
+  SheetRect,
+  SparklineGroup,
+  SparklineGroupPatch,
+} from "@libraz/formulon";
 import { cellToA1, parseCellRef, parseRangeRef } from "../a1.js";
-import {
-  assertStatus,
-  findSheetIndex,
-  requireListResult,
-  SparklineAxisType,
-  SparklineEmptyCells,
-  SparklineType,
-} from "../formulon.js";
+import { findSheetIndex, rectA1, SparklineAxisType, SparklineType, sheetAt } from "../formulon.js";
 import { formatColor, parseColor } from "../styles/input.js";
 import { assertInGrid, sheetName } from "./shared.js";
 import { getSession, publicInfo, touch } from "./state.js";
@@ -19,11 +18,7 @@ const TYPE_CODES: Record<SparklineTypeName, SparklineType> = {
   winLoss: SparklineType.Stacked,
 };
 const EMPTY_NAMES = ["gap", "zero", "span"] as const;
-const EMPTY_CODES: Record<SparklineEmptyName, SparklineEmptyCells> = {
-  gap: SparklineEmptyCells.Gap,
-  zero: SparklineEmptyCells.Zero,
-  span: SparklineEmptyCells.Span,
-};
+const EMPTY_CODES: Record<SparklineEmptyName, BlanksAs> = { gap: 1, zero: 0, span: 2 };
 const COLOR_FIELDS = {
   series: "colorSeries",
   negative: "colorNegative",
@@ -64,36 +59,39 @@ export type SparklineGroupOptions = Partial<Record<(typeof FLAGS)[number], boole
 };
 
 type Session = ReturnType<typeof getSession>;
+type GroupSpec = { -readonly [K in keyof SparklineGroupPatch]: SparklineGroupPatch[K] };
 
 function quotedSheet(name: string): string {
   return `'${name.replaceAll("'", "''")}'`;
 }
 
-/** Resolves one sparkline: its data range (qualified with the host sheet when bare) and its cell. */
-function sparklineItem(session: Session, sheetIndex: number, item: SparklineItemInput) {
-  const data = item.data.trim().replace(/^=/, "");
-  const range = parseRangeRef(data);
+/** Resolves one sparkline: its data range (a bare one resolves on the host sheet) and its cell. */
+function sparklineItem(item: SparklineItemInput) {
+  const source = item.data.trim().replace(/^=/, "");
+  parseRangeRef(source);
   const location = parseCellRef(item.location);
   if (location.sheetName !== undefined) {
     throw new Error(`sparkline location must be a cell on the selected sheet: ${item.location}`);
   }
   assertInGrid(location.row, location.col);
-  return {
-    formula:
-      range.sheetName === undefined
-        ? `${quotedSheet(sheetName(session, sheetIndex))}!${data}`
-        : data,
-    location: cellToA1(location.row, location.col),
-  };
+  return { source, location: cellToA1(location.row, location.col) };
 }
 
-function colorSpec(spec: string): ColorSpec {
-  return { kind: 1, rgb: parseColor(spec), theme: 0, tint: 0, indexed: 0 };
+/** The sheet-qualified A1 text of a range on a workbook sheet. */
+function qualifiedRange(session: Session, range: SheetRect): string {
+  return `${quotedSheet(sheetName(session, range.sheet))}!${rectA1(range.rect)}`;
 }
 
-function describeColor(color: ColorSpec): string | { theme: number; tint: number } | undefined {
+function colorSpec(spec: string): Color {
+  return { kind: 1, argb: parseColor(spec), theme: 0, tint: 0, indexed: 0 };
+}
+
+function describeColor(color: Color | null): string | { theme: number; tint: number } | undefined {
+  if (color === null) {
+    return undefined;
+  }
   if (color.kind === 1) {
-    return formatColor(color.rgb);
+    return formatColor(color.argb);
   }
   return color.kind === 2 ? { theme: color.theme, tint: color.tint } : undefined;
 }
@@ -117,8 +115,8 @@ function axisSpec(
   };
 }
 
-function groupSpec(session: Session, sheetIndex: number, options: SparklineGroupOptions) {
-  const spec: SparklineGroupInput = {};
+function groupSpec(options: SparklineGroupOptions) {
+  const spec: GroupSpec = {};
   if (options.type !== undefined) {
     spec.type = TYPE_CODES[options.type];
   }
@@ -133,7 +131,7 @@ function groupSpec(session: Session, sheetIndex: number, options: SparklineGroup
     }
   }
   if (options.lineWeight !== undefined) {
-    spec.lineWeight = options.lineWeight;
+    spec.lineWidthPt = options.lineWeight;
   }
   if (options.emptyCells !== undefined) {
     spec.emptyCellsAs = EMPTY_CODES[options.emptyCells];
@@ -151,10 +149,10 @@ function groupSpec(session: Session, sheetIndex: number, options: SparklineGroup
   if (options.dateAxis !== undefined) {
     const dateRange = options.dateAxis.trim().replace(/^=/, "");
     spec.dateAxis = dateRange !== "";
-    spec.dateAxisRef =
-      dateRange === "" || parseRangeRef(dateRange).sheetName !== undefined
-        ? dateRange
-        : `${quotedSheet(sheetName(session, sheetIndex))}!${dateRange}`;
+    if (dateRange !== "") {
+      parseRangeRef(dateRange);
+    }
+    spec.dateAxisRange = dateRange === "" ? null : dateRange;
   }
   return spec;
 }
@@ -166,7 +164,7 @@ function describeAxis(type: SparklineAxisType, manual: number | null): Sparkline
   return type === SparklineAxisType.Group ? "group" : "individual";
 }
 
-function describeGroup(group: SparklineGroup, index: number) {
+function describeGroup(session: Session, group: SparklineGroup, index: number) {
   const colors: Partial<Record<SparklineColorName, ReturnType<typeof describeColor>>> = {};
   for (const [name, field] of Object.entries(COLOR_FIELDS)) {
     const color = describeColor(group[field]);
@@ -177,22 +175,24 @@ function describeGroup(group: SparklineGroup, index: number) {
   return {
     index,
     type: TYPE_NAMES[group.type] ?? "line",
-    sparklines: group.sparklines.map(({ formula, location }) => ({ data: formula, location })),
+    sparklines: group.sparklines.map(({ source, location }) => ({
+      data: source === null ? null : qualifiedRange(session, source),
+      location: cellToA1(location.row, location.col),
+    })),
     ...Object.fromEntries(FLAGS.filter((flag) => group[flag]).map((flag) => [flag, true])),
     ...(Object.keys(colors).length > 0 ? { colors } : {}),
-    lineWeight: group.lineWeight,
-    emptyCells: EMPTY_NAMES[group.emptyCellsAs] ?? "gap",
+    lineWeight: group.lineWidthPt,
+    emptyCells: EMPTY_NAMES.find((name) => EMPTY_CODES[name] === group.emptyCellsAs) ?? "gap",
     minAxis: describeAxis(group.minAxisType, group.manualMin),
     maxAxis: describeAxis(group.maxAxisType, group.manualMax),
-    ...(group.dateAxis ? { dateAxis: group.dateAxisRef } : {}),
+    ...(group.dateAxis && group.dateAxisRange
+      ? { dateAxis: qualifiedRange(session, group.dateAxisRange) }
+      : {}),
   };
 }
 
 function groups(session: Session, sheetIndex: number) {
-  return requireListResult(
-    session.workbook.listSparklineGroups(sheetIndex),
-    "list sparkline groups",
-  );
+  return sheetAt(session.workbook, sheetIndex).listSparklineGroups();
 }
 
 function groupAt(session: Session, sheetIndex: number, index: number) {
@@ -200,14 +200,16 @@ function groupAt(session: Session, sheetIndex: number, index: number) {
   if (!group) {
     throw new Error(`no sparkline group ${index} on sheet ${sheetIndex}`);
   }
-  return describeGroup(group, index);
+  return describeGroup(session, group, index);
 }
 
 /** Lists a sheet's sparkline groups in document order with their sparklines. */
 export function listSessionSparklines(id: string, sheet: number | string | undefined) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
-  const value = groups(session, sheetIndex).map(describeGroup);
+  const value = groups(session, sheetIndex).map((group, index) =>
+    describeGroup(session, group, index),
+  );
   touch(session, false);
   return {
     session: publicInfo(session),
@@ -230,12 +232,12 @@ export function addSessionSparklines(
   if (sparklines.length === 0) {
     throw new Error("a sparkline group needs at least one sparkline");
   }
-  const spec: SparklineGroupInput = {
-    ...groupSpec(session, sheetIndex, options),
-    sparklines: sparklines.map((item) => sparklineItem(session, sheetIndex, item)),
+  const spec = {
+    ...groupSpec(options),
+    sparklines: sparklines.map(sparklineItem),
   };
   touch(session, true);
-  assertStatus(session.workbook.addSparklineGroup(sheetIndex, spec), "add sparkline group");
+  sheetAt(session.workbook, sheetIndex).addSparklineGroup(spec);
   const index = groups(session, sheetIndex).length - 1;
   return {
     session: publicInfo(session),
@@ -254,12 +256,11 @@ export function updateSessionSparklines(
 ) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
-  const current = groups(session, sheetIndex)[index];
-  if (!current) {
+  if (!groups(session, sheetIndex)[index]) {
     throw new Error(`no sparkline group ${index} on sheet ${sheetIndex}`);
   }
-  const spec = groupSpec(session, sheetIndex, options);
-  const items = sparklines?.map((item) => sparklineItem(session, sheetIndex, item));
+  const spec = groupSpec(options);
+  const items = sparklines?.map(sparklineItem);
   if (items?.length === 0) {
     throw new Error("a sparkline group needs at least one sparkline");
   }
@@ -267,20 +268,10 @@ export function updateSessionSparklines(
     throw new Error("sparkline update requires at least one setting or sparklines");
   }
   touch(session, true);
-  if (Object.keys(spec).length > 0) {
-    // An update rewrites every modelled field, so the unstated ones are carried over.
-    const { sparklines: _kept, ...settings } = current;
-    assertStatus(
-      session.workbook.updateSparklineGroup(sheetIndex, index, { ...settings, ...spec }),
-      "update sparkline group",
-    );
-  }
-  if (items !== undefined) {
-    assertStatus(
-      session.workbook.setSparklineGroupSparklines(sheetIndex, index, items),
-      "set sparklines",
-    );
-  }
+  sheetAt(session.workbook, sheetIndex).updateSparklineGroup(index, {
+    ...spec,
+    ...(items === undefined ? {} : { sparklines: items }),
+  });
   return {
     session: publicInfo(session),
     sheet: sheetIndex,
@@ -298,7 +289,7 @@ export function removeSessionSparklines(
   const sheetIndex = findSheetIndex(session.workbook, sheet);
   const removed = groupAt(session, sheetIndex, index);
   touch(session, true);
-  assertStatus(session.workbook.removeSparklineGroup(sheetIndex, index), "remove sparkline group");
+  sheetAt(session.workbook, sheetIndex).removeSparklineGroup(index);
   touch(session, true);
   return { session: publicInfo(session), sheet: sheetIndex, removed };
 }

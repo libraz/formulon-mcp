@@ -1,21 +1,11 @@
-import type { ResolvedColor } from "@libraz/formulon";
+import { HorizontalAlign, type ResolvedColor, VerticalAlign } from "@libraz/formulon";
 import { cellToA1, normalizeRange, parseRangeRef } from "../a1.js";
-import {
-  assertStatus,
-  ColorResolution,
-  DisplayStatus,
-  GeometryMode,
-  requireCell,
-  requireListResult,
-  requireNumberResult,
-  type Workbook,
-} from "../formulon.js";
+import { ColorResolution, DisplayStatus, GeometryMode, type Workbook } from "../formulon.js";
 import type { ColumnMetrics } from "./geometry.js";
 import type { PreviewCell, PreviewCellMetadata, PreviewStyle } from "./types.js";
 
 export const MAX_METADATA_CELLS = 500;
 export const MAX_METADATA_TEXT = 256;
-const MAX_CELL_SCAN_CELLS = 1_000_000;
 const MAX_PREVIEW_MERGES = 10_000;
 const FORMULA_PAGE_SIZE = 4_096;
 
@@ -100,7 +90,7 @@ export function clipMerge(
 }
 
 export function readMergesInRange(workbook: Workbook, sheet: number, rect: Rect): MergeRange[] {
-  const merges = requireListResult(workbook.getMergesInRange(sheet, rect), "read merged ranges");
+  const merges = workbook.sheet(sheet).getMergesInRange(rect);
   if (merges.length > MAX_PREVIEW_MERGES) {
     throw new Error(
       `preview range has ${merges.length} merged cells (limit ${MAX_PREVIEW_MERGES})`,
@@ -115,27 +105,8 @@ export function readMergesInRange(workbook: Workbook, sheet: number, rect: Rect)
 }
 
 export function usedBounds(workbook: Workbook, sheet: number): Rect | undefined {
-  const count = requireNumberResult(workbook.cellCount(sheet), `read sheet ${sheet} cell count`);
-  if (count === 0) {
-    return undefined;
-  }
-  if (count > MAX_CELL_SCAN_CELLS) {
-    throw new Error(
-      `preview used-cell inventory spans ${count} cells (limit ${MAX_CELL_SCAN_CELLS})`,
-    );
-  }
-  let firstRow = Number.POSITIVE_INFINITY;
-  let firstCol = Number.POSITIVE_INFINITY;
-  let lastRow = 0;
-  let lastCol = 0;
-  for (let index = 0; index < count; index += 1) {
-    const cell = requireCell(workbook.cellAt(sheet, index), `read sheet ${sheet} cell ${index}`);
-    firstRow = Math.min(firstRow, cell.row);
-    firstCol = Math.min(firstCol, cell.col);
-    lastRow = Math.max(lastRow, cell.row);
-    lastCol = Math.max(lastCol, cell.col);
-  }
-  return { firstRow, firstCol, lastRow, lastCol };
+  const used = workbook.sheet(sheet).getUsedRange();
+  return used === null ? undefined : { ...used };
 }
 
 export function chooseRect(
@@ -156,8 +127,7 @@ export function chooseRect(
       rangeLabel: `${cellToA1(rect.firstRow, rect.firstCol)}:${cellToA1(rect.lastRow, rect.lastCol)}`,
     };
   }
-  const pagination = workbook.paginate(sheet);
-  assertStatus(pagination.status, "paginate preview sheet");
+  const pagination = workbook.sheet(sheet).getPagination();
   if (pagination.printArea.length > 1) {
     throw new Error("preview range is required when the sheet has multiple print areas");
   }
@@ -175,7 +145,7 @@ export function chooseRect(
     };
   }
   const used = usedBounds(workbook, sheet);
-  const sheetMerges = requireListResult(workbook.getMerges(sheet), "read merged ranges");
+  const sheetMerges = workbook.sheet(sheet).listMerges();
   const merged = sheetMerges.reduce<Rect | undefined>((bounds, merge) => {
     if (!bounds) {
       return { ...merge };
@@ -214,14 +184,12 @@ export function dimensions(
   sheet: number,
   rect: Rect,
 ): { columns: number[]; rows: number[] } {
+  const handle = workbook.sheet(sheet);
   const columns = Array.from({ length: rect.lastCol - rect.firstCol + 1 }, (_, offset) =>
-    requireNumberResult(
-      workbook.getColumnWidthPt(sheet, rect.firstCol + offset, GeometryMode.Display),
-      "read column width",
-    ),
+    handle.getColumnWidthPt(rect.firstCol + offset, GeometryMode.Display),
   );
   const rows = Array.from({ length: rect.lastRow - rect.firstRow + 1 }, (_, offset) =>
-    requireNumberResult(workbook.getRowHeightPt(sheet, rect.firstRow + offset), "read row height"),
+    handle.getRowHeightPt(rect.firstRow + offset),
   );
   return { columns, rows };
 }
@@ -236,24 +204,20 @@ export function styleFor(
   warnings: WarningState,
   cache: Map<number, PreviewStyle>,
 ): PreviewStyle {
-  const effective = workbook.getEffectiveStyle(sheet, row, col);
-  assertStatus(effective.status, `read cell style at ${cellToA1(row, col)}`);
+  const effective = workbook.sheet(sheet).ooxml.getEffectiveStyle(row, col);
   const cached = cache.get(effective.xfIndex);
   if (cached) {
     return cached;
   }
-  const xf = workbook.getCellXf(effective.xfIndex);
-  assertStatus(xf.status, `read cell format ${effective.xfIndex}`);
-  const font = workbook.getFont(effective.fontIndex);
-  assertStatus(font.status, `read font ${effective.fontIndex}`);
-  const fill = workbook.getFill(effective.fillIndex);
-  assertStatus(fill.status, `read fill ${effective.fillIndex}`);
-  const border = workbook.getBorder(effective.borderIndex);
-  assertStatus(border.status, `read border ${effective.borderIndex}`);
+  const { ooxml } = workbook;
+  const xf = ooxml.getCellXf(effective.xfIndex);
+  const font = ooxml.getFont(effective.fontIndex);
+  const fill = ooxml.getFill(effective.fillIndex);
+  const border = ooxml.getBorder(effective.borderIndex);
   if (fill.pattern > 1) {
     warning(warnings, "Pattern fills are approximated as solid fills in preview.");
   }
-  if (xf.textRotation !== undefined && xf.textRotation !== 0) {
+  if (xf.textRotation !== null && xf.textRotation !== 0) {
     warning(warnings, "Rotated text is not rendered in preview.");
   }
   if (xf.shrinkToFit) {
@@ -269,14 +233,14 @@ export function styleFor(
   const style: PreviewStyle = {
     fill: fill.pattern === 0 ? undefined : color(effective.fillForeground, warnings),
     fontFamily: font.name || metrics.fontName,
-    fontSize: font.size || metrics.fontSize,
-    fontColor: color(effective.font, warnings),
-    bold: font.bold,
-    italic: font.italic,
+    fontSize: font.sizePt || metrics.fontSize,
+    fontColor: color(effective.fontColor, warnings),
+    bold: font.bold === true,
+    italic: font.italic === true,
     underline: font.underline !== 0,
-    horizontal: xf.horizontalAlign,
-    vertical: xf.verticalAlign,
-    wrapText: xf.wrapText,
+    horizontal: xf.horizontal ?? HorizontalAlign.General,
+    vertical: xf.vertical ?? VerticalAlign.Bottom,
+    wrapText: xf.wrapText === true,
     indent: xf.indent ?? 0,
     borders: {
       left: side(border.left, effective.borders.left),
@@ -297,8 +261,7 @@ export function cellText(
   col: number,
   warnings: WarningState,
 ): string {
-  const display = workbook.getDisplayText(sheet, row, col);
-  assertStatus(display.status, `read display text at ${cellToA1(row, col)}`);
+  const display = workbook.sheet(sheet).getDisplayText(row, col);
   if (display.displayStatus === DisplayStatus.InvalidFormat) {
     warning(
       warnings,
@@ -310,10 +273,10 @@ export function cellText(
 
 export function formulaMap(workbook: Workbook, sheet: number, rect: Rect): Map<string, string> {
   const formulas = new Map<string, string>();
+  const handle = workbook.sheet(sheet);
   let cursor: number | null = null;
   do {
-    const page = workbook.getCellsInRange(sheet, rect, cursor, FORMULA_PAGE_SIZE);
-    assertStatus(page.status, `read sheet ${sheet} cells`);
+    const page = handle.getCellsInRange(rect, { cursor, limit: FORMULA_PAGE_SIZE });
     for (const cell of page.cells) {
       if (cell.formula) {
         formulas.set(`${cell.row},${cell.col}`, cell.formula);

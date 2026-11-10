@@ -1,14 +1,11 @@
-import type { CellsInRangeResult, MergeRange, Value } from "@libraz/formulon";
+import { type CellRect, type RangeCell, type Sheet, type Value, ValueKind } from "@libraz/formulon";
 import { cellToA1, MAX_COL, MAX_ROW } from "../a1.js";
 import {
-  assertStatus,
   DisplayStatus,
+  ExcelError,
   findSheetIndex,
   isDate1904,
-  requireCell,
-  requireNumberResult,
   resultToJson,
-  type Status,
   valueToJson,
 } from "../formulon.js";
 import { classifyNumberFormat, describeNumberFormat, type NumberFormatInfo } from "../numfmt.js";
@@ -26,9 +23,7 @@ export type PrimitiveCellValue = {
 export type WorkbookOwner = Pick<WorkbookSession, "workbook">;
 
 export function sheetName(session: WorkbookOwner, sheet: number): string {
-  const name = session.workbook.sheetName(sheet);
-  assertStatus(name.status, `read sheet ${sheet} name`);
-  return name.value;
+  return session.workbook.sheet(sheet).name;
 }
 
 export function refA1(row: number, col: number): string {
@@ -59,6 +54,27 @@ export function assertInGrid(row: number, col: number): void {
 /** One populated cell of a rectangle read, with its formula text ("" for a constant). */
 export type RectCell = { row: number; col: number; formula: string; value: Value };
 
+/** The tagged `Value` of a range cell read, which carries its value natively with its kind. */
+export function taggedValue(sheet: Sheet, cell: RangeCell): Value {
+  const value = cell.value;
+  if (value === null) {
+    return { kind: ValueKind.Blank };
+  }
+  if (typeof value === "number") {
+    return { kind: ValueKind.Number, number: value };
+  }
+  if (typeof value === "boolean") {
+    return { kind: ValueKind.Bool, boolean: value };
+  }
+  if (typeof value === "string") {
+    return { kind: ValueKind.Text, text: value };
+  }
+  if (value instanceof ExcelError) {
+    return { kind: ValueKind.Error, errorCode: value.code };
+  }
+  return sheet.getTypedValue(cell.row, cell.col);
+}
+
 /**
  * Pages the engine's populated cells inside a rectangle in row-major order.
  * `pageSize` caps each engine call; stopping the iteration early stops the paging.
@@ -66,20 +82,20 @@ export type RectCell = { row: number; col: number; formula: string; value: Value
 export function* rectCells(
   session: WorkbookOwner,
   sheet: number,
-  rect: MergeRange,
+  rect: CellRect,
   pageSize?: number,
 ): Generator<RectCell> {
+  const handle = session.workbook.sheet(sheet);
   let cursor: number | null = null;
   do {
-    const page: CellsInRangeResult = session.workbook.getCellsInRange(
-      sheet,
-      rect,
-      cursor,
-      pageSize,
-    );
-    assertStatus(page.status, `read sheet ${sheet} cells`);
+    const page = handle.getCellsInRange(rect, { cursor, limit: pageSize ?? null });
     for (const cell of page.cells) {
-      yield { row: cell.row, col: cell.col, formula: cell.formula ?? "", value: cell.value };
+      yield {
+        row: cell.row,
+        col: cell.col,
+        formula: cell.formula ?? "",
+        value: taggedValue(handle, cell),
+      };
     }
     cursor = page.nextCursor;
   } while (cursor !== null);
@@ -87,9 +103,7 @@ export function* rectCells(
 
 /** Reads the formula text at one cell (leading `=` included), or "" for a constant. */
 export function formulaAt(session: WorkbookOwner, sheet: number, row: number, col: number): string {
-  const result = session.workbook.getFormula(sheet, row, col);
-  assertStatus(result.status, `read formula ${cellToA1(row, col)}`);
-  return result.formula ?? "";
+  return session.workbook.sheet(sheet).getFormula(row, col) ?? "";
 }
 
 /**
@@ -103,22 +117,14 @@ export function cellNumberFormat(
   row: number,
   col: number,
 ): { numFmtId: number; formatCode: string } | null {
-  const xfIndexResult = safeWorkbookCall(session, "getCellXfIndex", [sheet, row, col]) as {
-    xfIndex?: number;
-  } | null;
-  if (typeof xfIndexResult?.xfIndex !== "number") {
-    return null;
-  }
-  const xf = safeWorkbookCall(session, "getCellXf", [xfIndexResult.xfIndex]) as {
-    numFmtId?: number;
-  } | null;
-  if (typeof xf?.numFmtId !== "number") {
-    return null;
-  }
-  const numFmt = safeWorkbookCall(session, "getNumFmt", [xf.numFmtId]) as {
-    formatCode?: string;
-  } | null;
-  return { numFmtId: xf.numFmtId, formatCode: numFmt?.formatCode ?? "" };
+  return safeRead(() => {
+    const xfIndex = session.workbook.sheet(sheet).ooxml.getCellXfIndex(row, col);
+    if (xfIndex === null) {
+      return null;
+    }
+    const numFmtId = session.workbook.ooxml.getCellXf(xfIndex).numFmtId;
+    return { numFmtId, formatCode: session.workbook.ooxml.getNumberFormat(numFmtId) ?? "" };
+  });
 }
 
 /** Format annotation of a numeric cell plus the engine's display text. */
@@ -146,7 +152,7 @@ export function decodeNumberCell(
   if (!format || classifyNumberFormat(format.numFmtId, format.formatCode) === "general") {
     return undefined;
   }
-  const display = session.workbook.getDisplayText(sheet, row, col);
+  const display = safeRead(() => session.workbook.sheet(sheet).getDisplayText(row, col));
   const annotation: CellFormatAnnotation = {
     ...describeNumberFormat(
       format.numFmtId,
@@ -155,7 +161,7 @@ export function decodeNumberCell(
       isDate1904(session.workbook),
     ),
   };
-  if (display.status.ok) {
+  if (display !== null) {
     annotation.text = display.text;
     if (display.displayStatus === DisplayStatus.Overflow) {
       annotation.textStatus = "overflow";
@@ -166,47 +172,21 @@ export function decodeNumberCell(
   return annotation;
 }
 
-export function safeWorkbookCall(session: WorkbookOwner, method: string, args: unknown[]): unknown {
-  const callable = (session.workbook as unknown as Record<string, unknown>)[method];
-  if (typeof callable !== "function") {
-    return null;
-  }
+/**
+ * Runs an optional engine read for an inspection payload and converts its result to JSON;
+ * a read the engine refuses yields `null` instead of failing the whole tool call.
+ */
+export function safeRead<T>(read: () => T): T | null {
   try {
-    const raw = (callable as (...methodArgs: unknown[]) => unknown).apply(session.workbook, args);
-    const status = resultStatus(raw);
-    if (status) {
-      assertStatus(status, `${method}`);
-    }
-    // High-level inspection payloads use ordinary arrays. The low-level
-    // workbook-call surface retains the ListResult envelope via resultToJson.
-    const value = isListResultLike(raw) ? Array.from(raw) : raw;
-    return resultToJson(value);
+    return read();
   } catch {
     return null;
   }
 }
 
-export function resultStatus(value: unknown): Status | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const record = value as { ok?: unknown; status?: unknown };
-  if (typeof record.ok === "boolean" && typeof record.status === "number") {
-    return value as Status;
-  }
-  if (
-    typeof record.status === "object" &&
-    record.status !== null &&
-    typeof (record.status as { ok?: unknown }).ok === "boolean" &&
-    typeof (record.status as { status?: unknown }).status === "number"
-  ) {
-    return record.status as Status;
-  }
-  return undefined;
-}
-
-export function isListResultLike(value: unknown): value is readonly unknown[] & { status: Status } {
-  return Array.isArray(value) && resultStatus(value) !== undefined && "status" in value;
+/** `safeRead` of a read whose result is reported as-is, converted to JSON. */
+export function safeReadJson(read: () => unknown): unknown {
+  return safeRead(() => resultToJson(read()));
 }
 
 export function jsonCellValue(value: unknown): PrimitiveCellValue {
@@ -257,25 +237,16 @@ export function stableCells(
   maxCells: number,
   includeStyles: boolean,
 ) {
-  const count = requireNumberResult(
-    session.workbook.cellCount(sheet),
-    `read sheet ${sheet} cell count`,
-  );
-  const limit = Math.max(0, Math.min(maxCells, count));
+  const handle = session.workbook.sheet(sheet);
+  const all = handle.listCells();
+  const limit = Math.max(0, Math.min(maxCells, all.length));
   const cells = [];
-  for (let index = 0; index < limit; index += 1) {
-    const cell = requireCell(
-      session.workbook.cellAt(sheet, index),
-      `read sheet ${sheet} cell ${index}`,
-    );
-    const value = jsonCellValue(cell.value);
-    const formula = cell.formula;
-    const xfIndexResult = includeStyles
-      ? (safeWorkbookCall(session, "getCellXfIndex", [sheet, cell.row, cell.col]) as {
-          xfIndex?: number;
-        } | null)
+  for (const cell of all.slice(0, limit)) {
+    const value = jsonCellValue(taggedValue(handle, cell));
+    const formula = cell.formula ?? "";
+    const xfIndex = includeStyles
+      ? safeRead(() => handle.ooxml.getCellXfIndex(cell.row, cell.col))
       : null;
-    const xfIndex = typeof xfIndexResult?.xfIndex === "number" ? xfIndexResult.xfIndex : null;
     cells.push({
       row: cell.row,
       col: cell.col,
@@ -286,13 +257,16 @@ export function stableCells(
       style: includeStyles
         ? {
             xfIndex,
-            xf: xfIndex === null ? null : safeWorkbookCall(session, "getCellXf", [xfIndex]),
+            xf:
+              xfIndex === null
+                ? null
+                : safeReadJson(() => session.workbook.ooxml.getCellXf(xfIndex)),
           }
         : undefined,
     });
   }
   cells.sort((left, right) => left.row - right.row || left.col - right.col);
-  return { cells, cellCount: count, truncated: limit < count };
+  return { cells, cellCount: all.length, truncated: limit < all.length };
 }
 
 export function usedRange(cells: { row: number; col: number }[]): string | null {
@@ -311,8 +285,7 @@ export function searchSheets(
   if (sheet !== undefined) {
     return [findSheetIndex(session.workbook, sheet)];
   }
-  const count = requireNumberResult(session.workbook.sheetCount(), "read sheet count");
-  return Array.from({ length: count }, (_, index) => index);
+  return Array.from({ length: session.workbook.sheetCount }, (_, index) => index);
 }
 
 export function textValue(value: unknown): string | undefined {

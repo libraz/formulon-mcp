@@ -121,6 +121,7 @@ export {
   traceSession,
 } from "./session/workbook.js";
 export {
+  callLabeled,
   callWorkbookMethod,
-  WORKBOOK_METHODS,
+  type WorkbookCallTarget,
 } from "./session/workbook-call.js";

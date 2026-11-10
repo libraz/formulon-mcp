@@ -1,5 +1,5 @@
 import type { PivotAxis } from "@libraz/formulon";
-import { assertStatus, resultToJson, statusToJson, type Workbook } from "../formulon.js";
+import { nativeToJson, okStatus, resultToJson } from "../formulon.js";
 import {
   AGGREGATIONS,
   assignAxes,
@@ -10,11 +10,9 @@ import {
   normalizedValues,
   normalizeFieldList,
   readSource,
-  registerPivotNumberFormat,
   resolveFieldIndex,
   resolveRange,
   resolveTarget,
-  type SourceValue,
   sourceHeadersForValidation,
   sourceReference,
   targetReference,
@@ -29,26 +27,6 @@ export type {
   PivotValueOption,
 } from "./pivot-source.js";
 
-function writeCacheValue(
-  workbook: Workbook,
-  cacheId: number,
-  record: number,
-  field: number,
-  value: SourceValue,
-): void {
-  const status =
-    value.kind === 0
-      ? workbook.pivotCacheRecordSetBlank(cacheId, record, field)
-      : value.kind === 1
-        ? workbook.pivotCacheRecordSetNumber(cacheId, record, field, value.number)
-        : value.kind === 2
-          ? workbook.pivotCacheRecordSetBool(cacheId, record, field, value.boolean)
-          : value.kind === 3
-            ? workbook.pivotCacheRecordSetText(cacheId, record, field, value.text)
-            : workbook.pivotCacheRecordSetError(cacheId, record, field, value.errorCode);
-  assertStatus(status, `write pivot cache record ${record}, field ${field}`);
-}
-
 function cleanupPivot(
   session: WorkbookSession,
   targetSheet: number,
@@ -57,14 +35,14 @@ function cleanupPivot(
 ): void {
   if (pivotIndex !== undefined) {
     try {
-      session.workbook.pivotRemove(targetSheet, pivotIndex);
+      session.workbook.sheet(targetSheet).removePivot(pivotIndex);
     } catch {
       // Keep the original engine error; cleanup is best effort.
     }
   }
   if (cacheId !== undefined) {
     try {
-      session.workbook.pivotCacheRemove(cacheId);
+      session.workbook.removePivotCache(cacheId);
     } catch {
       // A cache still referenced by a partially-created pivot is retained.
     }
@@ -111,7 +89,7 @@ export function createSessionPivot(id: string, options: CreatePivotOptions) {
 
   if (formulaInRange(session, request.sourceRange)) {
     touch(session, true);
-    assertStatus(session.workbook.recalc(), "recalc pivot source");
+    session.workbook.recalc();
   }
   const source = readSource(session, request.sourceRange, request.sourceLimit);
   // Formula headers can change after recalc, so repeat all header/axis checks
@@ -128,111 +106,61 @@ export function createSessionPivot(id: string, options: CreatePivotOptions) {
   let pivotIndex: number | undefined;
   try {
     touch(session, true);
-    const cache = session.workbook.pivotCacheCreate(0);
-    assertStatus(cache.status, "create pivot cache");
-    cacheId = cache.index;
-    assertStatus(
-      session.workbook.pivotCacheSetWorksheetSource(cacheId, {
-        present: true,
-        ref: source.range.ref,
-        sheet: source.range.sheetName,
-      }),
-      "set pivot cache worksheet source",
-    );
+    const cache = session.workbook.addPivotCache();
+    cacheId = cache.cacheId;
+    const { firstRow, firstCol, lastRow, lastCol } = source.range;
+    cache.setWorksheetSource({
+      range: { sheet: source.range.sheet, rect: { firstRow, firstCol, lastRow, lastCol } },
+    });
 
     for (const [index, header] of source.headers.entries()) {
-      const added = session.workbook.pivotCacheFieldAdd(cacheId, header);
-      assertStatus(added.status, `add pivot cache field ${header}`);
-      if (added.index !== index) {
-        throw new Error(
-          `pivot cache field order mismatch: expected ${index}, received ${added.index}`,
-        );
+      const added = cache.addField(header);
+      if (added !== index) {
+        throw new Error(`pivot cache field order mismatch: expected ${index}, received ${added}`);
       }
     }
     for (const [recordIndex, record] of source.records.entries()) {
-      const added = session.workbook.pivotCacheRecordAdd(cacheId);
-      assertStatus(added.status, `add pivot cache record ${recordIndex}`);
-      if (added.index !== recordIndex) {
+      const added = cache.addRecord();
+      if (added !== recordIndex) {
         throw new Error(
-          `pivot cache record order mismatch: expected ${recordIndex}, received ${added.index}`,
+          `pivot cache record order mismatch: expected ${recordIndex}, received ${added}`,
         );
       }
       for (const [fieldIndex, value] of record.entries()) {
-        writeCacheValue(session.workbook, cacheId, recordIndex, fieldIndex, value);
+        cache.setRecordValue(recordIndex, fieldIndex, value);
       }
     }
 
-    const created = session.workbook.pivotCreate(
-      request.target.sheet,
-      request.name,
+    const pivot = session.workbook.sheet(request.target.sheet).addPivot({
+      name: request.name,
       cacheId,
-      request.target.row,
-      request.target.col,
-    );
-    assertStatus(created.status, "create pivot table");
-    pivotIndex = created.index;
+      anchor: { row: request.target.row, col: request.target.col },
+    });
+    pivotIndex = pivot.index;
 
-    const pivotFieldIndexes: number[] = [];
-    for (const [fieldIndex, header] of source.headers.entries()) {
-      const added = session.workbook.pivotFieldAdd(request.target.sheet, pivotIndex, {
-        sourceName: header,
-        axis: resolved.assignments.get(fieldIndex) as PivotAxis,
-      });
-      assertStatus(added.status, `add pivot field ${header}`);
-      if (added.index !== fieldIndex) {
-        throw new Error(
-          `pivot field order mismatch: expected ${fieldIndex}, received ${added.index}`,
-        );
-      }
-      pivotFieldIndexes.push(added.index);
+    for (const fieldIndex of source.headers.keys()) {
+      pivot.setFieldAxis(fieldIndex, resolved.assignments.get(fieldIndex) as PivotAxis);
     }
 
-    const rowOrder = request.rows.map(
-      (field) => pivotFieldIndexes[resolveFieldIndex(source.headers, field)],
-    );
-    const colOrder = request.columns.map(
-      (field) => pivotFieldIndexes[resolveFieldIndex(source.headers, field)],
-    );
-    assertStatus(
-      session.workbook.pivotSetRowFieldOrder(request.target.sheet, pivotIndex, rowOrder),
-      "set pivot row field order",
-    );
-    assertStatus(
-      session.workbook.pivotSetColFieldOrder(request.target.sheet, pivotIndex, colOrder),
-      "set pivot column field order",
+    pivot.setRowFieldOrder(request.rows.map((field) => resolveFieldIndex(source.headers, field)));
+    pivot.setColumnFieldOrder(
+      request.columns.map((field) => resolveFieldIndex(source.headers, field)),
     );
 
     for (const value of request.values) {
-      const format =
-        value.format === undefined
-          ? undefined
-          : String(registerPivotNumberFormat(session.workbook, value.format));
-      const added = session.workbook.pivotDataFieldAdd(request.target.sheet, pivotIndex, {
+      pivot.addDataField({
         name: value.name,
-        fieldIndex: pivotFieldIndexes[resolveFieldIndex(source.headers, value.field)],
+        fieldIndex: resolveFieldIndex(source.headers, value.field),
         aggregation: AGGREGATIONS[value.aggregation],
-        ...(format === undefined ? {} : { numberFormat: format }),
+        ...(value.format === undefined ? {} : { numberFormat: value.format }),
       });
-      assertStatus(added.status, `add pivot data field ${value.name}`);
     }
 
-    assertStatus(
-      session.workbook.pivotSetLayout(request.target.sheet, pivotIndex, request.layout),
-      "set pivot layout",
-    );
+    pivot.setReportLayout(request.layout);
     if (request.totals) {
-      assertStatus(
-        session.workbook.pivotSetGrandTotals(
-          request.target.sheet,
-          pivotIndex,
-          request.totals.rows,
-          request.totals.columns,
-        ),
-        "set pivot grand totals",
-      );
+      pivot.updateGrandTotals(request.totals);
     }
-    const layout = session.workbook.pivotLayout(request.target.sheet, pivotIndex);
-    assertStatus(layout.status, "read pivot layout");
+    const layout = pivot.getLayout();
     return {
       session: publicInfo(session),
       source: {
@@ -245,8 +173,11 @@ export function createSessionPivot(id: string, options: CreatePivotOptions) {
       target: request.target,
       cacheId,
       pivotIndex,
-      layout: resultToJson(layout),
-      status: statusToJson(layout.status),
+      layout: resultToJson({
+        rect: layout.range,
+        cells: layout.cells.map((cell) => ({ ...cell, value: nativeToJson(cell.value) })),
+      }),
+      status: okStatus(),
     };
   } catch (error) {
     // Only remove objects created by this operation. Any failure remains dirty

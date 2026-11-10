@@ -1,20 +1,22 @@
-import type { ShapeInput } from "@libraz/formulon";
+import type {
+  ChartFill,
+  ChartFillPatch,
+  ChartLine,
+  ChartLinePatch,
+  DrawingAnchor,
+  DrawingAnchorInput,
+  DrawingPatch,
+  Shape,
+  ShapePatch,
+} from "@libraz/formulon";
 import { parseCellRef } from "../a1.js";
-import {
-  AnchorEditAs,
-  AnchorKind,
-  assertStatus,
-  findSheetIndex,
-  requireListResult,
-  ShapePaint,
-} from "../formulon.js";
+import { AnchorKind, findSheetIndex, sheetAt } from "../formulon.js";
 import { formatColor, parseColor } from "../styles/input.js";
 import { describePlacement, emuSize, type ImageLength, KIND_NAMES, lengthToEmu } from "./images.js";
 import { assertInGrid, sheetName } from "./shared.js";
 import { getSession, publicInfo, touch } from "./state.js";
 
-/** DrawingML stores rotation in 60000ths of a degree. */
-const ROTATION_UNITS_PER_DEGREE = 60_000;
+const EMU_PER_POINT = 12_700;
 
 /** A solid `#RRGGBB` colour or `none`; shapes carry no alpha. */
 export type ShapePaintInput = string;
@@ -43,7 +45,7 @@ export type ShapePlacementInput = {
 export type ShapeInsertInput = ShapeFields & ShapePlacementInput & { anchor: string };
 
 type Session = ReturnType<typeof getSession>;
-type CurrentShape = ReturnType<Session["workbook"]["listShapes"]>[number];
+type ShapeFieldsSpec = ShapePatch & Pick<DrawingPatch, "name" | "hidden">;
 
 function sheetCell(ref: string, label: string) {
   const cell = parseCellRef(ref);
@@ -54,51 +56,56 @@ function sheetCell(ref: string, label: string) {
   return cell;
 }
 
-function paint(spec: ShapePaintInput, label: string): { kind: ShapePaint; rgb: number } {
+function paint(spec: ShapePaintInput, label: string): ChartFillPatch {
   if (spec.trim().toLowerCase() === "none") {
-    return { kind: ShapePaint.None, rgb: 0 };
+    return { none: true };
   }
   const argb = parseColor(spec);
   if (argb >>> 24 !== 0xff) {
     throw new Error(`${label} must be an opaque #RRGGBB colour or none: ${spec}`);
   }
-  return { kind: ShapePaint.Solid, rgb: argb & 0xffffff };
+  return { color: formatColor(argb), none: false };
 }
 
-function describePaint(kind: ShapePaint, rgb: number): string | undefined {
-  if (kind === ShapePaint.Solid) {
-    return formatColor((rgb | 0xff000000) >>> 0);
+function describePaint(paintState: ChartFill | ChartLine | null): string | undefined {
+  if (paintState === null) {
+    return undefined;
   }
-  return kind === ShapePaint.None ? "none" : kind === ShapePaint.Other ? "other" : undefined;
+  if (paintState.none) {
+    return "none";
+  }
+  if (paintState.color?.kind === 1) {
+    return formatColor(paintState.color.argb);
+  }
+  return paintState.other || paintState.color ? "other" : undefined;
 }
 
-function describeShape(shape: CurrentShape) {
-  const fill = describePaint(shape.fillKind, shape.fillRgb);
-  const line = describePaint(shape.lineKind, shape.lineRgb);
+function describeShape(shape: Shape) {
+  const properties = shape.getProperties();
+  const base = shape.getDrawingProperties();
+  const fill = describePaint(properties.fill);
+  const line = describePaint(properties.line);
+  const widthPt = properties.line?.widthPt;
   return {
-    objectId: shape.objectId,
-    kind: KIND_NAMES[shape.kind] ?? "other",
-    name: shape.name,
-    geometry: shape.prst,
-    ...(shape.text ? { text: shape.text } : {}),
-    ...(shape.textBox ? { textBox: true } : {}),
-    ...describePlacement(shape),
+    objectId: base.objectId,
+    kind: KIND_NAMES[base.kind] ?? "other",
+    name: base.name,
+    geometry: properties.presetGeometry,
+    ...(properties.text ? { text: properties.text } : {}),
+    ...(properties.textBox ? { textBox: true } : {}),
+    ...describePlacement(base.anchor),
     ...(fill ? { fill } : {}),
     ...(line ? { line } : {}),
-    ...(shape.lineWidthEmu ? { lineWidth: emuSize(shape.lineWidthEmu) } : {}),
-    ...(shape.rotation ? { rotation: shape.rotation / ROTATION_UNITS_PER_DEGREE } : {}),
-    ...(shape.hidden ? { hidden: true } : {}),
+    ...(widthPt ? { lineWidth: emuSize(widthPt * EMU_PER_POINT) } : {}),
+    ...(properties.rotationDeg ? { rotation: properties.rotationDeg } : {}),
+    ...(base.hidden ? { hidden: true } : {}),
   };
 }
 
-function currentShapes(session: Session, sheetIndex: number): CurrentShape[] {
-  return requireListResult(session.workbook.listShapes(sheetIndex), "list shapes");
-}
-
-function fieldsSpec(fields: ShapeFields): ShapeInput {
-  const spec: ShapeInput = {};
+function fieldsSpec(fields: ShapeFields): ShapeFieldsSpec {
+  const spec: { -readonly [K in keyof ShapeFieldsSpec]: ShapeFieldsSpec[K] } = {};
   if (fields.geometry !== undefined) {
-    spec.prst = fields.geometry;
+    spec.presetGeometry = fields.geometry;
   }
   if (fields.text !== undefined) {
     spec.text = fields.text;
@@ -110,24 +117,21 @@ function fieldsSpec(fields: ShapeFields): ShapeInput {
     spec.name = fields.name;
   }
   if (fields.fill !== undefined) {
-    const { kind, rgb } = paint(fields.fill, "fill");
-    spec.fillKind = kind;
-    spec.fillRgb = rgb;
+    spec.fill = paint(fields.fill, "fill");
   }
-  if (fields.line !== undefined) {
-    const { kind, rgb } = paint(fields.line, "line");
-    spec.lineKind = kind;
-    spec.lineRgb = rgb;
-  }
-  if (fields.lineWidth !== undefined) {
-    spec.lineWidthEmu = lengthToEmu(fields.lineWidth, "lineWidth");
+  if (fields.line !== undefined || fields.lineWidth !== undefined) {
+    const line: { -readonly [K in keyof ChartLinePatch]: ChartLinePatch[K] } =
+      fields.line === undefined ? {} : paint(fields.line, "line");
+    if (fields.lineWidth !== undefined) {
+      line.widthPt = lengthToEmu(fields.lineWidth, "lineWidth") / EMU_PER_POINT;
+    }
+    spec.line = line;
   }
   if (fields.rotation !== undefined) {
     if (!Number.isFinite(fields.rotation)) {
       throw new Error(`rotation must be a finite number of degrees: ${fields.rotation}`);
     }
-    const degrees = ((fields.rotation % 360) + 360) % 360;
-    spec.rotation = Math.round(degrees * ROTATION_UNITS_PER_DEGREE);
+    spec.rotationDeg = ((fields.rotation % 360) + 360) % 360;
   }
   if (fields.hidden !== undefined) {
     spec.hidden = fields.hidden;
@@ -151,9 +155,9 @@ function hasPlacement(input: ShapePlacementInput): boolean {
  * back to `current` for what is left out. A `to` cell makes a two-cell box;
  * otherwise the shape is one-cell with an explicit size.
  */
-function anchorSpec(input: ShapePlacementInput, current?: CurrentShape): ShapeInput {
+function anchorSpec(input: ShapePlacementInput, current?: DrawingAnchor): DrawingAnchorInput {
   const kind = current
-    ? current.anchorKind
+    ? current.kind
     : input.to === undefined
       ? AnchorKind.OneCell
       : AnchorKind.TwoCell;
@@ -164,13 +168,13 @@ function anchorSpec(input: ShapePlacementInput, current?: CurrentShape): ShapeIn
   const offsets = {
     fromRow: from?.row ?? current?.fromRow ?? 0,
     fromCol: from?.col ?? current?.fromCol ?? 0,
-    fromColOff:
+    fromColOffsetEmu:
       input.offsetX === undefined
-        ? (current?.fromColOff ?? 0)
+        ? (current?.fromColOffsetEmu ?? 0)
         : lengthToEmu(input.offsetX, "offsetX"),
-    fromRowOff:
+    fromRowOffsetEmu:
       input.offsetY === undefined
-        ? (current?.fromRowOff ?? 0)
+        ? (current?.fromRowOffsetEmu ?? 0)
         : lengthToEmu(input.offsetY, "offsetY"),
   };
   if (kind === AnchorKind.TwoCell) {
@@ -184,42 +188,38 @@ function anchorSpec(input: ShapePlacementInput, current?: CurrentShape): ShapeIn
       throw new Error("to must not lie above or left of the anchor cell");
     }
     return {
-      anchorKind: AnchorKind.TwoCell,
-      editAs: current?.editAs ?? AnchorEditAs.TwoCell,
+      kind: AnchorKind.TwoCell,
       ...offsets,
       toRow,
       toCol,
-      toRowOff: to ? 0 : (current?.toRowOff ?? 0),
-      toColOff: to ? 0 : (current?.toColOff ?? 0),
+      toRowOffsetEmu: to ? 0 : (current?.toRowOffsetEmu ?? 0),
+      toColOffsetEmu: to ? 0 : (current?.toColOffsetEmu ?? 0),
     };
   }
   if (input.to !== undefined) {
     throw new Error("a one-cell shape keeps its anchor kind; use width and height instead of to");
   }
-  const cx = input.width === undefined ? current?.cx : lengthToEmu(input.width, "width");
-  const cy = input.height === undefined ? current?.cy : lengthToEmu(input.height, "height");
-  if (!(cx && cy)) {
+  const widthEmu =
+    input.width === undefined ? current?.widthEmu : lengthToEmu(input.width, "width");
+  const heightEmu =
+    input.height === undefined ? current?.heightEmu : lengthToEmu(input.height, "height");
+  if (!(widthEmu && heightEmu)) {
     throw new Error("a one-cell shape needs a positive width and height, or a to cell");
   }
-  return {
-    anchorKind: AnchorKind.OneCell,
-    editAs: current?.editAs ?? AnchorEditAs.OneCell,
-    ...offsets,
-    cx,
-    cy,
-  };
+  return { kind: AnchorKind.OneCell, ...offsets, widthEmu, heightEmu };
 }
 
-function placedShape(session: Session, sheetIndex: number, objectId: number) {
-  const shape = currentShapes(session, sheetIndex).find((entry) => entry.objectId === objectId);
-  return shape ? describeShape(shape) : undefined;
+function currentShape(session: Session, sheetIndex: number, objectId: number): Shape | undefined {
+  return sheetAt(session.workbook, sheetIndex)
+    .listShapes()
+    .find((entry) => entry.objectId === objectId);
 }
 
 /** Lists a sheet's shapes, text boxes, connectors and groups in z-order, back first. */
 export function listSessionShapes(id: string, sheet: number | string | undefined) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
-  const shapes = currentShapes(session, sheetIndex).map(describeShape);
+  const shapes = sheetAt(session.workbook, sheetIndex).listShapes().map(describeShape);
   touch(session, false);
   return {
     session: publicInfo(session),
@@ -238,16 +238,14 @@ export function insertSessionShape(
 ) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
-  const spec = { ...fieldsSpec(input), ...anchorSpec(input) };
+  const spec = { ...fieldsSpec(input), anchor: anchorSpec(input) };
   touch(session, true);
-  const result = session.workbook.insertShape(sheetIndex, spec);
-  assertStatus(result.status, "insert shape");
-  const placed = placedShape(session, sheetIndex, result.objectId);
+  const shape = sheetAt(session.workbook, sheetIndex).addShape(spec);
   return {
     session: publicInfo(session),
     sheet: sheetIndex,
-    objectId: result.objectId,
-    ...(placed ? { placed } : {}),
+    objectId: shape.objectId,
+    placed: describeShape(shape),
   };
 }
 
@@ -260,25 +258,26 @@ export function updateSessionShape(
 ) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
-  const current = currentShapes(session, sheetIndex).find((entry) => entry.objectId === objectId);
+  const current = currentShape(session, sheetIndex, objectId);
   if (!current) {
     throw new Error(`no shape ${objectId} on sheet ${sheetIndex}`);
   }
   const spec = {
     ...fieldsSpec(input),
-    ...(hasPlacement(input) ? anchorSpec(input, current) : {}),
+    ...(hasPlacement(input)
+      ? { anchor: anchorSpec(input, current.getDrawingProperties().anchor) }
+      : {}),
   };
   if (Object.keys(spec).length === 0) {
     throw new Error("shape update requires at least one field or placement change");
   }
   touch(session, true);
-  assertStatus(session.workbook.updateShape(sheetIndex, objectId, spec), "update shape");
-  const placed = placedShape(session, sheetIndex, objectId);
+  current.update(spec);
   return {
     session: publicInfo(session),
     sheet: sheetIndex,
     objectId,
-    ...(placed ? { placed } : {}),
+    placed: describeShape(current),
   };
 }
 
@@ -290,8 +289,10 @@ export function removeSessionShape(
 ) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
+  const sheetHandle = sheetAt(session.workbook, sheetIndex);
+  const shape = sheetHandle.shape(objectId);
   touch(session, true);
-  assertStatus(session.workbook.removeShape(sheetIndex, objectId), "remove shape");
+  sheetHandle.removeDrawing(shape);
   touch(session, true);
   return { session: publicInfo(session), sheet: sheetIndex, objectId, removed: true };
 }

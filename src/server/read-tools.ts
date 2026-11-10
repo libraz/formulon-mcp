@@ -65,7 +65,7 @@ export function registerReadTools(server: McpServer): void {
         }
         if (a1 !== undefined) {
           const parsed = parseCellRef(a1);
-          workbook = await loadWorkbook(path);
+          workbook = await loadWorkbook(path, { cachedValues: !recalc });
           return ok(
             readWorkbookCell(
               { workbook },
@@ -79,12 +79,12 @@ export function registerReadTools(server: McpServer): void {
         if (row === undefined || col === undefined) {
           throw new Error("row and col are required when a1 is omitted");
         }
-        workbook = await loadWorkbook(path);
+        workbook = await loadWorkbook(path, { cachedValues: !recalc });
         return ok(readWorkbookCell({ workbook }, sheet, row, col, recalc));
       } catch (error) {
         return fail(error);
       } finally {
-        workbook?.delete();
+        workbook?.dispose();
       }
     },
   );
@@ -148,9 +148,9 @@ export function registerReadTools(server: McpServer): void {
         kind: z.enum(["functions", "externalLinks"]),
       },
     },
-    ({ sessionId, kind }) => {
+    async ({ sessionId, kind }) => {
       try {
-        return ok(getSessionMetadata(sessionId, kind));
+        return ok(await getSessionMetadata(sessionId, kind));
       } catch (error) {
         return fail(error);
       }

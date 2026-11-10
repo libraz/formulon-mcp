@@ -78,12 +78,17 @@ export const STYLE_VOCABULARY = Object.freeze({
   verticalAlign: VERTICAL_ALIGN,
 });
 
-export function ordinal(table: readonly string[], name: string, what: string): number {
+/** Looks a vocabulary name up as the engine ordinal at the same position of its table. */
+export function ordinal<T extends number = number>(
+  table: readonly string[],
+  name: string,
+  what: string,
+): T {
   const index = table.indexOf(name);
   if (index < 0) {
     throw new Error(`unknown ${what}: ${name} (expected one of ${table.join(", ")})`);
   }
-  return index;
+  return index as T;
 }
 
 /**

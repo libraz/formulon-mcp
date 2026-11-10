@@ -1,6 +1,6 @@
-import type { DataTable, DataTableInput } from "@libraz/formulon";
+import type { DataTable, DataTableInputCell } from "@libraz/formulon";
 import { parseCellRef, parseRangeRef } from "../a1.js";
-import { assertStatus, findSheetIndex, statusToJson } from "../formulon.js";
+import { findSheetIndex, okStatus, sheetAt } from "../formulon.js";
 import { assertInGrid, rangeA1, refA1 } from "./shared.js";
 import { getSession, publicInfo, touch } from "./state.js";
 
@@ -15,7 +15,7 @@ function sheetCell(ref: string, label: string) {
   return { row: cell.row, col: cell.col };
 }
 
-function describeInput(input: DataTableInput | null) {
+function describeInput(input: DataTableInputCell | null) {
   if (!input) {
     return undefined;
   }
@@ -24,9 +24,10 @@ function describeInput(input: DataTableInput | null) {
 
 function describeTable(table: DataTable) {
   const rowInput = describeInput(table.rowInput);
-  const colInput = describeInput(table.colInput);
+  const colInput = describeInput(table.columnInput);
+  const { firstRow, firstCol, lastRow, lastCol } = table.range;
   return {
-    range: rangeA1(table.firstRow, table.firstCol, table.lastRow, table.lastCol),
+    range: rangeA1(firstRow, firstCol, lastRow, lastCol),
     twoDimensional: table.twoDimensional,
     ...(rowInput ? { rowInput } : {}),
     ...(colInput ? { colInput } : {}),
@@ -34,9 +35,8 @@ function describeTable(table: DataTable) {
 }
 
 function tableAt(session: Session, sheetIndex: number, cell: { row: number; col: number }) {
-  const result = session.workbook.getDataTable(sheetIndex, cell.row, cell.col);
-  assertStatus(result.status, "read data table");
-  return result.dataTable ? describeTable(result.dataTable) : null;
+  const dataTable = sheetAt(session.workbook, sheetIndex).getDataTable(cell.row, cell.col);
+  return dataTable ? describeTable(dataTable) : null;
 }
 
 /** Reads the What-If data table whose result range covers `cell`, or null. */
@@ -71,18 +71,17 @@ export function addSessionDataTable(
   const rowInput = input.rowInput === undefined ? null : sheetCell(input.rowInput, "rowInput");
   const colInput = input.colInput === undefined ? null : sheetCell(input.colInput, "colInput");
   touch(session, true);
-  assertStatus(
-    session.workbook.addDataTable(sheetIndex, {
+  sheetAt(session.workbook, sheetIndex).addDataTable({
+    range: {
       firstRow: range.start.row,
       firstCol: range.start.col,
       lastRow: range.end.row,
       lastCol: range.end.col,
-      rowInput,
-      colInput,
-    }),
-    "add data table",
-  );
-  assertStatus(session.workbook.recalc(), "recalc workbook");
+    },
+    rowInput,
+    columnInput: colInput,
+  });
+  session.workbook.recalc();
   return {
     session: publicInfo(session),
     sheet: sheetIndex,
@@ -104,10 +103,7 @@ export function removeSessionDataTable(
     throw new Error(`no data table covers ${cell}`);
   }
   touch(session, true);
-  assertStatus(
-    session.workbook.removeDataTable(sheetIndex, target.row, target.col),
-    "remove data table",
-  );
+  sheetAt(session.workbook, sheetIndex).removeDataTable(target.row, target.col);
   touch(session, true);
   return { session: publicInfo(session), sheet: sheetIndex, removed };
 }
@@ -116,7 +112,6 @@ export function removeSessionDataTable(
 export function recalcSessionDataTables(id: string) {
   const session = getSession(id);
   touch(session, true);
-  const status = session.workbook.recalcDataTables();
-  assertStatus(status, "recalc data tables");
-  return { session: publicInfo(session), status: statusToJson(status) };
+  session.workbook.recalcDataTables();
+  return { session: publicInfo(session), status: okStatus() };
 }

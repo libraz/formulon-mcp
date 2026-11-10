@@ -1,12 +1,5 @@
-import {
-  AnchorKind,
-  assertStatus,
-  DrawingObjectKind,
-  GeometryMode,
-  ImageFormat,
-  requireListResult,
-  type Workbook,
-} from "../formulon.js";
+import { DrawingObjectKind } from "@libraz/formulon";
+import { AnchorKind, GeometryMode, ImageFormat, type Workbook } from "../formulon.js";
 import { type Rect, type WarningState, warning } from "./read.js";
 import type { PreviewObject, PreviewObjectMetadata } from "./types.js";
 
@@ -37,35 +30,48 @@ export function readObjects(
   rect: Rect,
   warnings: WarningState,
 ): { objects: PreviewObject[]; metadata: PreviewObjectMetadata[] } {
-  const listed = requireListResult(workbook.listDrawingObjects(sheet), "list drawing objects");
+  const sheetHandle = workbook.sheet(sheet);
+  const listed = sheetHandle.listDrawings();
   const objects: PreviewObject[] = [];
   const metadata: PreviewObjectMetadata[] = [];
   if (listed.length === 0) {
     return { objects, metadata };
   }
-  const origin = workbook.getCellRectPt(sheet, rect, GeometryMode.Display);
-  assertStatus(origin.status, "read preview range geometry");
+  const origin = sheetHandle.getCellRectPt(rect, GeometryMode.Display);
   const pointAt = (row: number, col: number, rowOff: number, colOff: number) => {
-    const cell = workbook.getCellRectPt(
-      sheet,
+    const cell = sheetHandle.getCellRectPt(
       { firstRow: row, firstCol: col, lastRow: row, lastCol: col },
       GeometryMode.Display,
     );
-    assertStatus(cell.status, "read drawing anchor geometry");
     return { x: cell.x + colOff / EMU_PER_POINT, y: cell.y + rowOff / EMU_PER_POINT };
   };
   let embeddedBytes = 0;
   let placeholders = 0;
-  for (const object of listed) {
+  for (const drawing of listed) {
+    const object = drawing.getDrawingProperties();
+    const { anchor } = object;
     let start: { x: number; y: number };
-    let width = object.cx / EMU_PER_POINT;
-    let height = object.cy / EMU_PER_POINT;
-    if (object.anchorKind === AnchorKind.Absolute) {
-      start = { x: object.fromColOff / EMU_PER_POINT, y: object.fromRowOff / EMU_PER_POINT };
+    let width = anchor.widthEmu / EMU_PER_POINT;
+    let height = anchor.heightEmu / EMU_PER_POINT;
+    if (anchor.kind === AnchorKind.Absolute) {
+      start = {
+        x: anchor.fromColOffsetEmu / EMU_PER_POINT,
+        y: anchor.fromRowOffsetEmu / EMU_PER_POINT,
+      };
     } else {
-      start = pointAt(object.fromRow, object.fromCol, object.fromRowOff, object.fromColOff);
-      if (object.anchorKind === AnchorKind.TwoCell) {
-        const end = pointAt(object.toRow, object.toCol, object.toRowOff, object.toColOff);
+      start = pointAt(
+        anchor.fromRow,
+        anchor.fromCol,
+        anchor.fromRowOffsetEmu,
+        anchor.fromColOffsetEmu,
+      );
+      if (anchor.kind === AnchorKind.TwoCell) {
+        const end = pointAt(
+          anchor.toRow,
+          anchor.toCol,
+          anchor.toRowOffsetEmu,
+          anchor.toColOffsetEmu,
+        );
         width = end.x - start.x;
         height = end.y - start.y;
       }
@@ -73,9 +79,9 @@ export function readObjects(
     const intersectsRect =
       width > 0 &&
       height > 0 &&
-      start.x < origin.x + origin.width &&
+      start.x < origin.x + origin.widthPt &&
       start.x + width > origin.x &&
-      start.y < origin.y + origin.height &&
+      start.y < origin.y + origin.heightPt &&
       start.y + height > origin.y;
     if (!intersectsRect) {
       continue;
@@ -96,15 +102,15 @@ export function readObjects(
       width,
       height,
     };
-    const mime =
-      object.kind === DrawingObjectKind.Picture ? IMAGE_MIME[object.imageFormat] : undefined;
-    if (mime) {
-      const image = workbook.getImage(sheet, object.objectId);
-      assertStatus(image.status, `read picture ${object.objectId}`);
-      const base64 = Buffer.from(image.bytes).toString("base64");
-      if (embeddedBytes + base64.length <= MAX_EMBEDDED_IMAGE_BYTES) {
-        embeddedBytes += base64.length;
-        placed.image = { mime, base64 };
+    if (object.kind === DrawingObjectKind.Picture) {
+      const picture = sheetHandle.picture(drawing).getProperties();
+      const mime = IMAGE_MIME[picture.format];
+      if (mime) {
+        const base64 = Buffer.from(picture.bytes).toString("base64");
+        if (embeddedBytes + base64.length <= MAX_EMBEDDED_IMAGE_BYTES) {
+          embeddedBytes += base64.length;
+          placed.image = { mime, base64 };
+        }
       }
     }
     if (!placed.image) {

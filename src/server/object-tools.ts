@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { jsonText } from "../formulon.js";
+import { formulonModule, jsonText } from "../formulon.js";
 import {
   getSessionImage,
   insertSessionImage,
@@ -11,8 +11,13 @@ import {
   resolveSessionSheet,
   traceSession,
 } from "../sessions.js";
-import { conditionalFormatSchema, validationSchema } from "./object-schemas.js";
-import { fail, imageLengthSchema, methodOk, ok, rangeSchema, sheetInputSchema } from "./shared.js";
+import {
+  conditionalFormatInput,
+  conditionalFormatSchema,
+  validationInput,
+  validationSchema,
+} from "./object-schemas.js";
+import { fail, imageLengthSchema, labeledOk, ok, rangeSchema, sheetInputSchema } from "./shared.js";
 
 export function registerObjectTools(server: McpServer): void {
   server.registerTool(
@@ -31,24 +36,39 @@ export function registerObjectTools(server: McpServer): void {
       try {
         const sheetIndex = resolveSessionSheet(sessionId, sheet);
         if (operation === "list") {
-          return methodOk(sessionId, "getMerges", [sheetIndex]);
+          return labeledOk(sessionId, "Sheet.listMerges", "read", (wb) =>
+            wb.sheet(sheetIndex).listMerges(),
+          );
         }
         if (operation === "clear") {
-          return methodOk(sessionId, "clearMerges", [sheetIndex]);
+          return labeledOk(sessionId, "Sheet.clearMerges", "write", (wb) =>
+            wb.sheet(sheetIndex).clearMerges(),
+          );
         }
         if (operation === "removeAt") {
           if (index === undefined) {
             throw new Error("index is required for removeAt");
           }
-          return methodOk(sessionId, "removeMergeAt", [sheetIndex, index]);
+          return labeledOk(sessionId, "Sheet.removeMerge", "write", (wb) => {
+            const handle = wb.sheet(sheetIndex);
+            const merges = handle.listMerges();
+            if (index >= merges.length) {
+              throw new Error(`merge index out of range: ${index} (${merges.length} merges)`);
+            }
+            handle.removeMerge(merges[index]);
+          });
         }
         if (!range) {
           throw new Error("range is required for add/remove");
         }
-        return methodOk(sessionId, operation === "add" ? "addMerge" : "removeMerge", [
-          sheetIndex,
-          range,
-        ]);
+        if (operation === "add") {
+          return labeledOk(sessionId, "Sheet.addMerge", "write", (wb) =>
+            wb.sheet(sheetIndex).addMerge(range),
+          );
+        }
+        return labeledOk(sessionId, "Sheet.removeMerge", "write", (wb) =>
+          wb.sheet(sheetIndex).removeMerge(range),
+        );
       } catch (error) {
         return fail(error);
       }
@@ -78,27 +98,35 @@ export function registerObjectTools(server: McpServer): void {
       try {
         const sheetIndex = resolveSessionSheet(sessionId, sheet);
         if (operation === "list") {
-          return methodOk(sessionId, "getComments", [sheetIndex]);
+          return labeledOk(sessionId, "Sheet.listComments", "read", (wb) =>
+            wb.sheet(sheetIndex).listComments(),
+          );
         }
         if (row === undefined || col === undefined) {
           throw new Error("row and col are required");
         }
         if (operation === "get") {
-          return methodOk(sessionId, "getCommentResult", [sheetIndex, row, col]);
+          return labeledOk(sessionId, "Sheet.getComment", "read", (wb) =>
+            wb.sheet(sheetIndex).getComment(row, col),
+          );
         }
         if (operation === "visibility") {
           if (visible === undefined) {
             throw new Error("visible is required for visibility");
           }
-          return methodOk(sessionId, "setCommentVisible", [sheetIndex, row, col, visible]);
+          return labeledOk(sessionId, "Sheet.setCommentVisible", "write", (wb) =>
+            wb.sheet(sheetIndex).setCommentVisible(row, col, visible),
+          );
         }
-        return methodOk(sessionId, "setComment", [
-          sheetIndex,
-          row,
-          col,
-          operation === "remove" ? "" : (author ?? ""),
-          operation === "remove" ? "" : (text ?? ""),
-        ]);
+        return labeledOk(sessionId, "Sheet.setComment", "write", (wb) =>
+          wb
+            .sheet(sheetIndex)
+            .setComment(
+              row,
+              col,
+              operation === "remove" ? null : { text: text ?? "", author: author ?? "" },
+            ),
+        );
       } catch (error) {
         return fail(error);
       }
@@ -158,45 +186,57 @@ export function registerObjectTools(server: McpServer): void {
       try {
         const sheetIndex = resolveSessionSheet(sessionId, sheet);
         if (operation === "list") {
-          return methodOk(sessionId, "getHyperlinks", [sheetIndex]);
+          return labeledOk(sessionId, "Sheet.listHyperlinks", "read", (wb) =>
+            wb.sheet(sheetIndex).listHyperlinks(),
+          );
         }
         if (operation === "clear") {
-          return methodOk(sessionId, "clearHyperlinks", [sheetIndex]);
+          return labeledOk(sessionId, "Sheet.clearHyperlinks", "write", (wb) =>
+            wb.sheet(sheetIndex).clearHyperlinks(),
+          );
         }
         if (operation === "removeAt") {
           if (index === undefined) {
             throw new Error("index is required for removeAt");
           }
-          return methodOk(sessionId, "removeHyperlinkAt", [sheetIndex, index]);
+          return labeledOk(sessionId, "Sheet.setHyperlink", "write", (wb) => {
+            const handle = wb.sheet(sheetIndex);
+            const links = handle.listHyperlinks();
+            if (index >= links.length) {
+              throw new Error(
+                `hyperlink index out of range: ${index} (${links.length} hyperlinks)`,
+              );
+            }
+            handle.setHyperlink(links[index].range.firstRow, links[index].range.firstCol, null);
+          });
         }
         if (row === undefined || col === undefined) {
           throw new Error("row and col are required");
         }
         if (operation === "remove") {
-          return methodOk(sessionId, "removeHyperlink", [sheetIndex, row, col]);
+          return labeledOk(sessionId, "Sheet.setHyperlink", "write", (wb) =>
+            wb.sheet(sheetIndex).setHyperlink(row, col, null),
+          );
         }
-        if (lastRow !== undefined || lastCol !== undefined) {
-          return methodOk(sessionId, "addHyperlinkRange", [
-            sheetIndex,
-            row,
-            col,
-            lastRow ?? row,
-            lastCol ?? col,
-            target ?? "",
-            display ?? "",
-            tooltip ?? "",
-            location ?? "",
-          ]);
-        }
-        return methodOk(sessionId, "addHyperlink", [
-          sheetIndex,
-          row,
-          col,
-          target ?? "",
-          display ?? "",
-          tooltip ?? "",
-          location ?? "",
-        ]);
+        const ranged = lastRow !== undefined || lastCol !== undefined;
+        return labeledOk(sessionId, "Sheet.setHyperlink", "write", (wb) =>
+          wb.sheet(sheetIndex).setHyperlink(row, col, {
+            target: target || null,
+            display: display || null,
+            tooltip: tooltip || null,
+            location: location || null,
+            ...(ranged
+              ? {
+                  range: {
+                    firstRow: row,
+                    firstCol: col,
+                    lastRow: lastRow ?? row,
+                    lastCol: lastCol ?? col,
+                  },
+                }
+              : {}),
+          }),
+        );
       } catch (error) {
         return fail(error);
       }
@@ -220,21 +260,30 @@ export function registerObjectTools(server: McpServer): void {
       try {
         const sheetIndex = resolveSessionSheet(sessionId, sheet);
         if (operation === "list") {
-          return methodOk(sessionId, "getValidations", [sheetIndex]);
+          return labeledOk(sessionId, "Sheet.listValidations", "read", (wb) =>
+            wb.sheet(sheetIndex).listValidations(),
+          );
         }
         if (operation === "clear") {
-          return methodOk(sessionId, "clearValidations", [sheetIndex]);
+          return labeledOk(sessionId, "Sheet.clearValidations", "write", (wb) =>
+            wb.sheet(sheetIndex).clearValidations(),
+          );
         }
         if (operation === "removeAt") {
           if (index === undefined) {
             throw new Error("index is required for removeAt");
           }
-          return methodOk(sessionId, "removeValidationAt", [sheetIndex, index]);
+          return labeledOk(sessionId, "Sheet.removeValidation", "write", (wb) =>
+            wb.sheet(sheetIndex).removeValidation(index),
+          );
         }
         if (!validation) {
           throw new Error("validation is required for add");
         }
-        return methodOk(sessionId, "addValidation", [sheetIndex, validation]);
+        const input = validationInput(validation);
+        return labeledOk(sessionId, "Sheet.addValidation", "write", (wb) =>
+          wb.sheet(sheetIndex).addValidation(input),
+        );
       } catch (error) {
         return fail(error);
       }
@@ -259,11 +308,11 @@ export function registerObjectTools(server: McpServer): void {
           .number()
           .optional()
           .describe(
-            "Excel date serial for time-period evaluation; omitted disables time-period rules.",
+            "Excel date serial in the workbook's date system that time-period rules compare with; omitted, the pinned clock, else today.",
           ),
       },
     },
-    ({
+    async ({
       sessionId,
       sheet,
       operation,
@@ -278,16 +327,22 @@ export function registerObjectTools(server: McpServer): void {
       try {
         const sheetIndex = resolveSessionSheet(sessionId, sheet);
         if (operation === "list") {
-          return methodOk(sessionId, "getConditionalFormats", [sheetIndex]);
+          return labeledOk(sessionId, "Sheet.listCfRules", "read", (wb) =>
+            wb.sheet(sheetIndex).listCfRules(),
+          );
         }
         if (operation === "clear") {
-          return methodOk(sessionId, "clearConditionalFormats", [sheetIndex]);
+          return labeledOk(sessionId, "Sheet.clearCfRules", "write", (wb) =>
+            wb.sheet(sheetIndex).clearCfRules(),
+          );
         }
         if (operation === "removeAt") {
           if (index === undefined) {
             throw new Error("index is required for removeAt");
           }
-          return methodOk(sessionId, "removeConditionalFormatAt", [sheetIndex, index]);
+          return labeledOk(sessionId, "Sheet.removeCfRule", "write", (wb) =>
+            wb.sheet(sheetIndex).removeCfRule(index),
+          );
         }
         if (operation === "evaluate") {
           if (
@@ -298,19 +353,27 @@ export function registerObjectTools(server: McpServer): void {
           ) {
             throw new Error("firstRow, firstCol, lastRow, and lastCol are required for evaluate");
           }
-          return methodOk(sessionId, "evaluateCfRange", [
-            sheetIndex,
-            firstRow,
-            firstCol,
-            lastRow,
-            lastCol,
-            todaySerial ?? Number.NaN,
-          ]);
+          const engine = await formulonModule();
+          return labeledOk(sessionId, "Sheet.evaluateCfRange", "read", (wb) =>
+            wb.sheet(sheetIndex).evaluateCfRange(
+              { firstRow, firstCol, lastRow, lastCol },
+              todaySerial === undefined
+                ? undefined
+                : {
+                    today: engine.convertSerialToCivil(todaySerial, {
+                      date1904: wb.getDate1904(),
+                    }),
+                  },
+            ),
+          );
         }
         if (!rule) {
           throw new Error("rule is required for add");
         }
-        return methodOk(sessionId, "addConditionalFormat", [sheetIndex, rule]);
+        const input = conditionalFormatInput(rule);
+        return labeledOk(sessionId, "Sheet.addCfRule", "write", (wb) =>
+          wb.sheet(sheetIndex).addCfRule(input),
+        );
       } catch (error) {
         return fail(error);
       }
@@ -362,7 +425,17 @@ export function registerObjectTools(server: McpServer): void {
         outputPath: z.string().optional().describe("For get: write the image bytes to this path."),
       },
     },
-    ({ sessionId, sheet, operation, objectId, path, anchor, outputPath, index, ...placement }) => {
+    async ({
+      sessionId,
+      sheet,
+      operation,
+      objectId,
+      path,
+      anchor,
+      outputPath,
+      index,
+      ...placement
+    }) => {
       try {
         if (operation === "list") {
           return ok(listSessionImages(sessionId, sheet));
@@ -371,7 +444,7 @@ export function registerObjectTools(server: McpServer): void {
           if (path === undefined || anchor === undefined) {
             throw new Error("path and anchor are required for insert");
           }
-          return ok(insertSessionImage(sessionId, sheet, { path, anchor, ...placement }));
+          return ok(await insertSessionImage(sessionId, sheet, { path, anchor, ...placement }));
         }
         if (objectId === undefined) {
           throw new Error(`objectId is required for ${operation}`);

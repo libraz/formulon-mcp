@@ -1,15 +1,12 @@
 import { parseCellRef } from "../a1.js";
 import {
-  assertStatus,
-  type ExcelProfileId,
   findSheetIndex,
+  formulonModule,
   GeometryMode,
-  requireListResult,
-  requireNumberResult,
+  okStatus,
+  type ProfileId,
   resultToJson,
   SheetVisibility,
-  type Status,
-  statusToJson,
   WORKBOOK_SCOPE,
   type Workbook,
 } from "../formulon.js";
@@ -37,9 +34,8 @@ import { getSession, publicInfo, touch } from "./state.js";
 export function recalcSession(id: string) {
   const session = getSession(id);
   touch(session, true);
-  const status = session.workbook.recalc();
-  assertStatus(status, "recalc workbook");
-  return { session: publicInfo(session), status: statusToJson(status) };
+  session.workbook.recalc();
+  return { session: publicInfo(session), status: okStatus() };
 }
 
 /** Applies a sheet add/remove/rename/move operation. */
@@ -56,29 +52,28 @@ export function applySheetOperation(
 ) {
   const session = getSession(id);
   const workbook = session.workbook;
-  let status: Status;
   if (operation === "add") {
     const name = requiredString(args.name, "name");
     touch(session, true);
-    status = workbook.addSheet(name);
+    workbook.addSheet(name);
   } else if (operation === "remove") {
     const index = requiredNumber(args.index, "index");
     touch(session, true);
-    status = workbook.removeSheet(index);
+    workbook.removeSheet(index);
   } else if (operation === "rename") {
     const index = requiredNumber(args.index, "index");
     const newName = requiredString(args.newName, "newName");
     touch(session, true);
-    status = workbook.renameSheet(index, newName);
+    workbook.sheet(index).rename(newName);
   } else {
     const fromIndex = requiredNumber(args.fromIndex, "fromIndex");
     const toIndex = requiredNumber(args.toIndex, "toIndex");
     touch(session, true);
-    status = workbook.moveSheet(fromIndex, toIndex);
+    // `toIndex` is the final position; `move` takes the position in the list as it is now.
+    workbook.sheet(fromIndex).move(toIndex > fromIndex ? toIndex + 1 : toIndex);
   }
-  assertStatus(status, `${operation} sheet`);
   touch(session, true);
-  return { session: publicInfo(session), status: statusToJson(status) };
+  return { session: publicInfo(session), status: okStatus() };
 }
 
 /**
@@ -107,20 +102,24 @@ export function setSessionDefinedName(
   const localSheetId =
     sheet === undefined ? WORKBOOK_SCOPE : findSheetIndex(session.workbook, sheet);
   touch(session, true);
-  const status =
-    localSheetId === WORKBOOK_SCOPE
-      ? session.workbook.setDefinedName(name, refersTo)
-      : session.workbook.setDefinedNameScoped(name, refersTo, localSheetId);
-  assertStatus(status, "set defined name");
-  if (hasAttrs) {
-    const attrsStatus = session.workbook.setDefinedNameAttrs(name, localSheetId, {
-      ...(attrs.comment !== undefined ? { comment: attrs.comment } : {}),
-      ...(attrs.hidden !== undefined ? { hidden: attrs.hidden } : {}),
+  const scope = localSheetId === WORKBOOK_SCOPE ? null : localSheetId;
+  if (refersTo === "") {
+    session.workbook.removeDefinedName(name, scope);
+  } else {
+    // The engine replaces every attribute of the name, so an omitted one keeps its stored value.
+    const existing = session.workbook.getDefinedName(name, scope);
+    const comment = attrs.comment ?? existing?.comment ?? undefined;
+    const hidden = attrs.hidden ?? existing?.hidden;
+    session.workbook.setDefinedName({
+      name,
+      formula: refersTo,
+      scope,
+      ...(comment !== undefined ? { comment } : {}),
+      ...(hidden !== undefined ? { hidden } : {}),
     });
-    assertStatus(attrsStatus, "set defined name attributes");
   }
   touch(session, true);
-  return { session: publicInfo(session), status: statusToJson(status), localSheetId };
+  return { session: publicInfo(session), status: okStatus(), localSheetId };
 }
 
 /** Inserts or deletes rows or columns while letting Formulon rewrite affected references. */
@@ -133,18 +132,19 @@ export function editSessionStructure(
 ) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
+  const handle = session.workbook.sheet(sheetIndex);
   touch(session, true);
-  const status =
-    operation === "insertRows"
-      ? session.workbook.insertRows(sheetIndex, start, count)
-      : operation === "deleteRows"
-        ? session.workbook.deleteRows(sheetIndex, start, count)
-        : operation === "insertCols"
-          ? session.workbook.insertCols(sheetIndex, start, count)
-          : session.workbook.deleteCols(sheetIndex, start, count);
-  assertStatus(status, operation);
+  if (operation === "insertRows") {
+    handle.insertRows(start, start + count - 1);
+  } else if (operation === "deleteRows") {
+    handle.deleteRows(start, start + count - 1);
+  } else if (operation === "insertCols") {
+    handle.insertColumns(start, start + count - 1);
+  } else {
+    handle.deleteColumns(start, start + count - 1);
+  }
   touch(session, true);
-  return { session: publicInfo(session), sheet: sheetIndex, status: statusToJson(status) };
+  return { session: publicInfo(session), sheet: sheetIndex, status: okStatus() };
 }
 
 export type SheetVisibilityName = "visible" | "hidden" | "veryHidden";
@@ -203,77 +203,68 @@ export function setSessionSheetView(
   if (topLeft) {
     assertInGrid(topLeft.row, topLeft.col);
   }
+  const handle = workbook.sheet(sheetIndex);
   // Visibility applies before activation, so one call can unhide and activate a sheet.
-  const steps: [boolean, () => Status, string][] = [
-    [
-      options.zoom !== undefined,
-      () => workbook.setSheetZoom(sheetIndex, options.zoom ?? 100),
-      "set sheet zoom",
-    ],
+  const steps: [boolean, () => void][] = [
+    [options.zoom !== undefined, () => handle.updateView({ zoomPct: options.zoom ?? 100 })],
     [
       options.freezeRows !== undefined || options.freezeCols !== undefined,
-      () => workbook.setSheetFreeze(sheetIndex, options.freezeRows ?? 0, options.freezeCols ?? 0),
-      "set sheet freeze",
+      () =>
+        handle.updateView({
+          freezeRows: options.freezeRows ?? 0,
+          freezeCols: options.freezeCols ?? 0,
+        }),
     ],
     [
       options.splitX !== undefined || options.splitY !== undefined,
       () =>
-        workbook.setSheetSplit(
-          sheetIndex,
-          Math.round((options.splitX ?? 0) * TWIPS_PER_POINT),
-          Math.round((options.splitY ?? 0) * TWIPS_PER_POINT),
-        ),
-      "set sheet split",
+        handle.updateView({
+          splitXTwips: Math.round((options.splitX ?? 0) * TWIPS_PER_POINT),
+          splitYTwips: Math.round((options.splitY ?? 0) * TWIPS_PER_POINT),
+        }),
     ],
     [
       topLeft !== undefined,
-      () => workbook.setSheetTopLeft(sheetIndex, topLeft?.row ?? 0, topLeft?.col ?? 0),
-      "set sheet top-left cell",
+      () => handle.updateView({ topLeft: { row: topLeft?.row ?? 0, col: topLeft?.col ?? 0 } }),
     ],
     [
       options.hidden !== undefined,
-      () => workbook.setSheetTabHidden(sheetIndex, options.hidden ?? false),
-      "set sheet tab hidden",
+      () => handle.setVisibility(options.hidden ? SheetVisibility.Hidden : SheetVisibility.Visible),
     ],
     [
       options.visibility !== undefined,
-      () =>
-        workbook.setSheetVisibility(sheetIndex, VISIBILITY_CODES[options.visibility ?? "visible"]),
-      "set sheet visibility",
+      () => handle.setVisibility(VISIBILITY_CODES[options.visibility ?? "visible"]),
     ],
     [
       options.showFormulas !== undefined,
-      () => workbook.setSheetShowFormulas(sheetIndex, options.showFormulas ?? false),
-      "set sheet show formulas",
+      () => handle.updateView({ showFormulas: options.showFormulas ?? false }),
     ],
     [
       options.showOutlineSymbols !== undefined,
-      () => workbook.setSheetShowOutlineSymbols(sheetIndex, options.showOutlineSymbols ?? true),
-      "set sheet show outline symbols",
+      () => handle.updateView({ showOutlineSymbols: options.showOutlineSymbols ?? true }),
     ],
-    [options.active === true, () => workbook.setActiveSheet(sheetIndex), "set active sheet"],
+    [options.active === true, () => workbook.setActiveSheet(sheetIndex)],
   ];
   const pending = steps.filter(([wanted]) => wanted);
   if (pending.length > 0) {
     touch(session, true);
   }
-  const statuses = pending.map(([, apply, action]) => {
-    const status = apply();
-    assertStatus(status, action);
-    return statusToJson(status);
+  const statuses = pending.map(([, apply]) => {
+    apply();
+    return okStatus();
   });
   touch(session, statuses.length > 0);
   return { session: publicInfo(session), sheet: sheetIndex, statuses };
 }
 
 /** Reads broad workbook metadata that does not require mutation. */
-export function getSessionMetadata(id: string, kind: "functions" | "externalLinks") {
+export async function getSessionMetadata(id: string, kind: "functions" | "externalLinks") {
   const session = getSession(id);
   touch(session, false);
   const value =
     kind === "functions"
-      ? requireListResult(session.workbook.functionNames(), "read function names")
-      : requireListResult(session.workbook.getExternalLinks(), "read external links");
+      ? (await formulonModule()).listFunctionNames()
+      : session.workbook.listExternalLinks();
   return {
     session: publicInfo(session),
     kind,
@@ -282,10 +273,8 @@ export function getSessionMetadata(id: string, kind: "functions" | "externalLink
 }
 
 /** Reads the Excel profile a session evaluates with. */
-export function sessionProfileId(id: string): ExcelProfileId {
-  const result = getSession(id).workbook.excelProfileId();
-  assertStatus(result.status, "read excel profile");
-  return result.value;
+export function sessionProfileId(id: string): ProfileId {
+  return getSession(id).workbook.getProfileId();
 }
 
 /** Resolves a sheet reference (zero-based index or name) to an index for a session. */
@@ -319,43 +308,39 @@ export function traceSession(
     ref: `${sheetName(session, s)}!${refA1(r, c)}`,
   });
   touch(session, false);
+  const handle = session.workbook.sheet(sheetIndex);
   if (operation === "spillInfo") {
-    const info = session.workbook.spillInfo(sheetIndex, row, col);
-    assertStatus(info.status, "trace spill info");
+    const info = handle.getSpill(row, col);
+    const engaged = info !== null && !info.blocked;
+    const rows = info === null ? 0 : info.range.lastRow - info.range.firstRow + 1;
+    const cols = info === null ? 0 : info.range.lastCol - info.range.firstCol + 1;
     return {
       session: publicInfo(session),
       operation,
       cell: cellRef(sheetIndex, row, col),
       spill: {
-        engaged: info.engaged,
-        anchor: info.engaged ? cellRef(sheetIndex, info.anchorRow, info.anchorCol) : null,
-        rows: info.rows,
-        cols: info.cols,
-        range: info.engaged
-          ? `${sheetName(session, sheetIndex)}!${rangeA1(
-              info.anchorRow,
-              info.anchorCol,
-              info.anchorRow + info.rows - 1,
-              info.anchorCol + info.cols - 1,
-            )}`
-          : null,
+        engaged,
+        anchor:
+          engaged && info ? cellRef(sheetIndex, info.range.firstRow, info.range.firstCol) : null,
+        rows,
+        cols,
+        range:
+          engaged && info
+            ? `${sheetName(session, sheetIndex)}!${rangeA1(
+                info.range.firstRow,
+                info.range.firstCol,
+                info.range.lastRow,
+                info.range.lastCol,
+              )}`
+            : null,
       },
     };
   }
   const nodes =
     operation === "precedents"
-      ? requireListResult(
-          session.workbook.precedents(sheetIndex, row, col, depth),
-          "trace precedents",
-        )
-      : requireListResult(
-          session.workbook.dependents(sheetIndex, row, col, depth),
-          "trace dependents",
-        );
-  const cells = Array.from({ length: nodes.length }, (_, index) => {
-    const node = nodes[index];
-    return cellRef(node.sheet, node.row, node.col);
-  });
+      ? handle.getPrecedents(row, col, depth)
+      : handle.getDependents(row, col, depth);
+  const cells = nodes.map((node) => cellRef(node.sheet, node.row, node.col));
   return {
     session: publicInfo(session),
     operation,
@@ -420,31 +405,24 @@ function dimensionList(
   axis: DimensionAxis,
   includeGeometry: boolean,
 ) {
+  const handle = workbook.sheet(sheet);
   if (axis === "column") {
-    const result = workbook.getSheetColumns(sheet);
-    assertStatus(result.status, "list column dimensions");
-    const columns = result.columns.map((column) => {
+    const columns = handle.listColumnOverrides().map((column) => {
       if (!includeGeometry) {
         return { ...column };
       }
-      const points = requireNumberResult(
-        workbook.getColumnWidthPt(sheet, column.first, GeometryMode.Display),
-        "read column width",
-      );
+      const points = handle.getColumnWidthPt(column.first, GeometryMode.Display);
       return { ...column, displayGeometry: displayGeometry(points) };
     });
-    return { status: statusToJson(result.status), columns };
+    return { status: okStatus(), columns };
   }
-  const result = workbook.getSheetRowOverrides(sheet);
-  assertStatus(result.status, "list row dimensions");
-  const rows = result.rows.map((row) => {
+  const rows = handle.listRowOverrides().map((row) => {
     if (!includeGeometry) {
       return { ...row };
     }
-    const points = requireNumberResult(workbook.getRowHeightPt(sheet, row.row), "read row height");
-    return { ...row, displayGeometry: displayGeometry(points) };
+    return { ...row, displayGeometry: displayGeometry(handle.getRowHeightPt(row.row)) };
   });
-  return { status: statusToJson(result.status), rows };
+  return { status: okStatus(), rows };
 }
 
 /**
@@ -477,7 +455,7 @@ export function sessionDimension(
     return { session: publicInfo(session), axis, operation, sheet: sheetIndex, value };
   }
 
-  let status: Status;
+  const handle = workbook.sheet(sheetIndex);
   if (axis === "column") {
     const first = requiredNumber(params.first, "first");
     const last = params.last ?? first;
@@ -491,34 +469,33 @@ export function sessionDimension(
       const unit = params.unit ?? "chars";
       const storedSize = columnStoredSize(workbook, sheetIndex, size, unit);
       touch(session, true);
-      status = workbook.setColumnWidth(sheetIndex, first, last, storedSize);
-      assertStatus(status, `${axis} ${operation}`);
+      handle.setColumnWidth(first, last, storedSize);
       touch(session, true);
       return {
         session: publicInfo(session),
         axis,
         operation,
         sheet: sheetIndex,
-        status: statusToJson(status),
+        status: okStatus(),
         storedUnits: "chars",
         storedSize,
         displayGeometry: displayGeometry(columnCharsToPoints(workbook, sheetIndex, storedSize)),
       };
     } else if (operation === "resetSize") {
       touch(session, true);
-      status = workbook.clearColumnWidth(sheetIndex, first, last);
+      handle.resetColumnWidth(first, last);
     } else if (operation === "hidden") {
       const hidden = requiredBoolean(params.hidden, "hidden");
       touch(session, true);
-      status = workbook.setColumnHidden(sheetIndex, first, last, hidden);
+      handle.setColumnHidden(first, last, hidden);
     } else if (operation === "collapsed") {
       const collapsed = requiredBoolean(params.collapsed, "collapsed");
       touch(session, true);
-      status = workbook.setColumnCollapsed(sheetIndex, first, last, collapsed);
+      handle.setColumnCollapsed(first, last, collapsed);
     } else {
       const level = requiredNumber(params.level, "level");
       touch(session, true);
-      status = workbook.setColumnOutline(sheetIndex, first, last, level);
+      handle.setColumnOutline(first, last, level);
     }
   } else {
     const rowIndex = requiredNumber(params.row, "row");
@@ -537,43 +514,41 @@ export function sessionDimension(
         );
       }
       touch(session, true);
-      status = workbook.setRowHeight(sheetIndex, rowIndex, storedSize);
-      assertStatus(status, `${axis} ${operation}`);
+      handle.setRowHeight(rowIndex, rowIndex, storedSize);
       touch(session, true);
       return {
         session: publicInfo(session),
         axis,
         operation,
         sheet: sheetIndex,
-        status: statusToJson(status),
+        status: okStatus(),
         storedUnits: "pt",
         storedSize,
         displayGeometry: displayGeometry(storedSize),
       };
     } else if (operation === "resetSize") {
       touch(session, true);
-      status = workbook.clearRowHeight(sheetIndex, rowIndex);
+      handle.resetRowHeight(rowIndex, rowIndex);
     } else if (operation === "hidden") {
       const hidden = requiredBoolean(params.hidden, "hidden");
       touch(session, true);
-      status = workbook.setRowHidden(sheetIndex, rowIndex, hidden);
+      handle.setRowHidden(rowIndex, rowIndex, hidden);
     } else if (operation === "collapsed") {
       const collapsed = requiredBoolean(params.collapsed, "collapsed");
       touch(session, true);
-      status = workbook.setRowCollapsed(sheetIndex, rowIndex, collapsed);
+      handle.setRowCollapsed(rowIndex, rowIndex, collapsed);
     } else {
       const level = requiredNumber(params.level, "level");
       touch(session, true);
-      status = workbook.setRowOutline(sheetIndex, rowIndex, level);
+      handle.setRowOutline(rowIndex, rowIndex, level);
     }
   }
-  assertStatus(status, `${axis} ${operation}`);
   touch(session, true);
   return {
     session: publicInfo(session),
     axis,
     operation,
     sheet: sheetIndex,
-    status: statusToJson(status),
+    status: okStatus(),
   };
 }

@@ -87,7 +87,9 @@ test("keeps completed writes dirty when iterative recalculation aborts", async (
   const workbook = getSession("iterative-abort").workbook;
   let callbacks = 0;
   try {
-    callWorkbookMethod("iterative-abort", "setIterative", [true, 100, 0.0001]);
+    callWorkbookMethod("iterative-abort", undefined, "updateIterative", [
+      { enabled: true, maxIterations: 100, maxChange: 0.0001 },
+    ]);
     applySessionMutations(
       "iterative-abort",
       [{ type: "formula", a1: "A1", formula: "=(A1+10)/2" }],
@@ -95,17 +97,23 @@ test("keeps completed writes dirty when iterative recalculation aborts", async (
     );
     await saveSession("iterative-abort", path.join(dir, "book.xlsx"));
     assert.equal(getSession("iterative-abort").dirty, false);
-    assert.equal(
-      workbook.setIterativeProgress(() => {
-        callbacks += 1;
-        throw new Error("stop iterative solve");
-      }).ok,
-      true,
-    );
+    // Manual mode: only the explicit recalculation iterates, so reads do not trip the callback.
+    workbook.setCalcMode(1);
+    workbook.setIterativeProgress(() => {
+      callbacks += 1;
+      throw new Error("stop iterative solve");
+    });
     assert.throws(
       () =>
-        applySessionMutations("iterative-abort", [{ type: "number", a1: "B1", value: 7 }], true),
-      /recalc workbook failed/,
+        applySessionMutations(
+          "iterative-abort",
+          [
+            { type: "formula", a1: "A1", formula: "=(A1+10)/2" },
+            { type: "number", a1: "B1", value: 7 },
+          ],
+          true,
+        ),
+      /stop iterative solve/,
     );
     assert.equal(callbacks, 1);
     assert.equal(getSessionCellByA1("iterative-abort", "B1").value.value, 7);
@@ -116,9 +124,16 @@ test("keeps completed writes dirty when iterative recalculation aborts", async (
       [{ type: "formula", a1: "A1", formula: "=(A1+20)/2" }],
       false,
     );
+    // Saving recalculates, so settle the formula before the aborting callback is installed.
+    workbook.setIterativeProgress(null);
     await saveSession("iterative-abort", path.join(dir, "book.xlsx"));
     assert.equal(getSession("iterative-abort").dirty, false);
-    assert.throws(() => recalcSession("iterative-abort"), /recalc workbook failed/);
+    workbook.sheet(0).setFormula("A1", "=(A1+20)/2");
+    workbook.setIterativeProgress(() => {
+      callbacks += 1;
+      throw new Error("stop iterative solve");
+    });
+    assert.throws(() => recalcSession("iterative-abort"), /stop iterative solve/);
     assert.equal(callbacks, 2);
     assert.equal(getSession("iterative-abort").dirty, true);
   } finally {
@@ -134,7 +149,9 @@ test("keeps completed replacements dirty when recalculation aborts", async () =>
   const workbook = getSession("replace-failure").workbook;
   let callbacks = 0;
   try {
-    callWorkbookMethod("replace-failure", "setIterative", [true, 100, 0.0001]);
+    callWorkbookMethod("replace-failure", undefined, "updateIterative", [
+      { enabled: true, maxIterations: 100, maxChange: 0.0001 },
+    ]);
     applySessionMutations(
       "replace-failure",
       [
@@ -145,13 +162,13 @@ test("keeps completed replacements dirty when recalculation aborts", async () =>
     );
     await saveSession("replace-failure", path.join(dir, "book.xlsx"));
     assert.equal(getSession("replace-failure").dirty, false);
-    assert.equal(
-      workbook.setIterativeProgress(() => {
-        callbacks += 1;
-        throw new Error("stop iterative solve");
-      }).ok,
-      true,
-    );
+    // The solved iterative cell is clean; dirty it so the recalculation iterates again.
+    workbook.sheet(0).setFormula("B1", "=(B1+10)/2");
+    workbook.setCalcMode(1);
+    workbook.setIterativeProgress(() => {
+      callbacks += 1;
+      throw new Error("stop iterative solve");
+    });
     const replacement = "Replaced";
     assert.throws(
       () =>
@@ -165,7 +182,7 @@ test("keeps completed replacements dirty when recalculation aborts", async () =>
           maxReplacements: 100,
           recalc: true,
         }),
-      /recalc workbook failed/,
+      /stop iterative solve/,
     );
     assert.equal(callbacks, 1);
     assert.equal(getSessionCellByA1("replace-failure", "A1").value.value, replacement);
@@ -203,15 +220,16 @@ test("cell and range reads mark recalculated cached values dirty", async () => {
       assert.equal(getSession("read-recalc").dirty, true);
       assert.equal(getSessionCellByA1("read-recalc", "A1").value.value, 3);
 
-      assert.equal(workbook.setIterative(true, 100, 0.0001).ok, true);
-      assert.equal(workbook.setFormula(0, 0, 0, "=(A1+10)/2").ok, true);
+      workbook.updateIterative({ enabled: true, maxIterations: 100, maxChange: 0.0001 });
+      workbook.sheet(0).setFormula(0, 0, "=(A1+10)/2");
       await saveSession("read-recalc", path.join(dir, "book.xlsx"));
+      workbook.sheet(0).setFormula(0, 0, "=(A1+10)/2");
       let callbacks = 0;
       workbook.setIterativeProgress(() => {
         callbacks += 1;
         throw new Error("abort read recalc");
       });
-      assert.throws(read, /recalc workbook failed/);
+      assert.throws(read, /abort read recalc/);
       assert.equal(callbacks, 1);
       assert.equal(getSession("read-recalc").dirty, true);
       workbook.setIterativeProgress(null);

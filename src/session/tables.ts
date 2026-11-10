@@ -1,15 +1,35 @@
-import type { TableInput, TableTotalsRowFunction, TableUpdateInput } from "@libraz/formulon";
+import {
+  type Table,
+  type TableInput,
+  type TableStyleOptionsPatch,
+  TableTotalsRowFunction,
+} from "@libraz/formulon";
 import { normalizeRange, parseRangeRef } from "../a1.js";
-import { assertStatus, findSheetIndex, resultToJson, statusToJson } from "../formulon.js";
+import { findSheetIndex, okStatus, rectA1, resultToJson, sheetAt } from "../formulon.js";
 import { assertInGrid, rangeA1, sheetName } from "./shared.js";
 import { getSession, publicInfo, touch } from "./state.js";
 
 export type TableOperation = "list" | "create" | "update" | "remove";
 
+const TOTALS_FUNCTIONS = {
+  none: TableTotalsRowFunction.None,
+  sum: TableTotalsRowFunction.Sum,
+  min: TableTotalsRowFunction.Min,
+  max: TableTotalsRowFunction.Max,
+  average: TableTotalsRowFunction.Average,
+  count: TableTotalsRowFunction.Count,
+  countNums: TableTotalsRowFunction.CountNumbers,
+  stdDev: TableTotalsRowFunction.StdDev,
+  var: TableTotalsRowFunction.Var,
+  custom: TableTotalsRowFunction.Custom,
+} as const;
+
+export type TableTotalsFunctionName = keyof typeof TOTALS_FUNCTIONS;
+
 /** One column's totals-row cell: a function, a text label, or a custom formula. */
 export type TableColumnTotals = {
   column: string | number;
-  function?: TableTotalsRowFunction;
+  function?: TableTotalsFunctionName;
   label?: string;
   formula?: string;
 };
@@ -68,27 +88,19 @@ function columnIndex(columns: string[], column: string | number): number {
 }
 
 /** Writes each column's totals cell; the table must already show its totals row. */
-function applyTotals(
-  session: ReturnType<typeof getSession>,
-  index: number,
-  totals: TableColumnTotals[],
-): void {
-  const entry = session.workbook.tableAt(index);
-  assertStatus(entry.status, `read table ${index}`);
-  if (!entry.totalsRowCount) {
+function applyTotals(table: Table, totals: TableColumnTotals[]): void {
+  const properties = table.getProperties();
+  if (!properties.totalsRow) {
     throw new Error("totals need the table's totals row; pass totalsRow: true");
   }
-  const columns = (entry.columns ?? []).map((column) => column.name);
+  const columns = properties.columns.map((column) => column.name);
   for (const { column, function: fn, label, formula } of totals) {
     const trimmed = formula?.trim();
-    const status = session.workbook.setTableColumnTotals(index, columnIndex(columns, column), {
-      ...(fn !== undefined ? { function: fn } : {}),
-      ...(label !== undefined ? { label } : {}),
-      ...(trimmed !== undefined
-        ? { formula: trimmed.startsWith("=") ? trimmed.slice(1) : trimmed }
-        : {}),
+    table.setColumnTotals(columnIndex(columns, column), {
+      ...(fn !== undefined ? { totalsRowFunction: TOTALS_FUNCTIONS[fn] } : {}),
+      ...(label !== undefined ? { totalsRowLabel: label } : {}),
+      ...(trimmed !== undefined ? { totalsRowFormula: trimmed } : {}),
     });
-    assertStatus(status, `set table ${index} totals for column ${JSON.stringify(column)}`);
   }
 }
 
@@ -182,50 +194,61 @@ function validateColumns(columns: string[], width: number): string[] {
 }
 
 function deriveColumns(session: ReturnType<typeof getSession>, range: TableRange): string[] {
+  const sheet = sheetAt(session.workbook, range.sheetIndex);
   const columns: string[] = [];
   for (let col = range.firstCol; col <= range.lastCol; col += 1) {
-    const result = session.workbook.getValue(range.sheetIndex, range.firstRow, col);
-    assertStatus(
-      result.status,
-      `read table header ${sheetName(session, range.sheetIndex)}!${rangeA1(range.firstRow, col, range.firstRow, col)}`,
-    );
-    const value = result.value;
-    if (value.kind !== 3 || !value.text.trim()) {
+    const value = sheet.getValue(range.firstRow, col);
+    if (typeof value !== "string" || !value.trim()) {
       throw new Error(
-        `table header ${sheetName(session, range.sheetIndex)}!${rangeA1(range.firstRow, col, range.firstRow, col)} must be non-empty text`,
+        `table header ${range.sheetName}!${rangeA1(range.firstRow, col, range.firstRow, col)} must be non-empty text`,
       );
     }
-    columns.push(value.text);
+    columns.push(value);
   }
   return validateColumns(columns, range.lastCol - range.firstCol + 1);
 }
 
-function readTable(session: ReturnType<typeof getSession>, index: number) {
-  const entry = session.workbook.tableAt(index);
-  assertStatus(entry.status, `read table ${index}`);
-  const sheetIndex = entry.sheetIndex;
+type IndexedTable = { index: number; table: Table };
+
+/** Every table in workbook order: sheets in order, each sheet's tables in order. */
+function workbookTables(session: ReturnType<typeof getSession>): IndexedTable[] {
+  const tables: IndexedTable[] = [];
+  for (const sheet of session.workbook.listSheets()) {
+    for (const table of sheet.listTables()) {
+      tables.push({ index: tables.length, table });
+    }
+  }
+  return tables;
+}
+
+function tableAtIndex(session: ReturnType<typeof getSession>, index: number): IndexedTable {
+  const found = workbookTables(session)[index];
+  if (found === undefined) {
+    throw new Error(`table index out of bounds: ${index}`);
+  }
+  return found;
+}
+
+function readTable(session: ReturnType<typeof getSession>, { index, table }: IndexedTable) {
+  const properties = table.getProperties();
+  const sheetIndex = properties.range.sheet;
   return {
     index,
-    name: entry.name ?? entry.displayName ?? "",
-    displayName: entry.displayName ?? entry.name ?? "",
-    ref: entry.ref ?? "",
-    sheet: sheetIndex ?? null,
-    sheetName: sheetIndex === undefined ? null : sheetName(session, sheetIndex),
-    raw: resultToJson(entry),
+    name: properties.name,
+    displayName: properties.name,
+    ref: rectA1(properties.range.rect),
+    sheet: sheetIndex,
+    sheetName: sheetName(session, sheetIndex),
+    // The engine's record, with the style toggles the table entry carried alongside it.
+    raw: resultToJson({ ...properties, ...table.getStyleOptions() }),
   };
 }
 
 function listTables(session: ReturnType<typeof getSession>, sheet?: number | string) {
   const selectedSheet = sheet === undefined ? undefined : findSheetIndex(session.workbook, sheet);
-  const countResult = session.workbook.tableCount();
-  assertStatus(countResult.status, "read table count");
-  const tables = [];
-  for (let index = 0; index < countResult.value; index += 1) {
-    const table = readTable(session, index);
-    if (selectedSheet === undefined || table.sheet === selectedSheet) {
-      tables.push(table);
-    }
-  }
+  const tables = workbookTables(session)
+    .map((entry) => readTable(session, entry))
+    .filter((table) => selectedSheet === undefined || table.sheet === selectedSheet);
   touch(session, false);
   return { session: publicInfo(session), count: tables.length, tables };
 }
@@ -246,8 +269,7 @@ function createTable(session: ReturnType<typeof getSession>, options: TableOpera
   const name = requiredText(options.name, "name");
   const styleName = options.styleName ?? options.style;
   const input: TableInput = {
-    sheetIndex: range.sheetIndex,
-    ref: range.ref,
+    range: range.ref,
     name,
     columns,
     headerRow,
@@ -258,18 +280,25 @@ function createTable(session: ReturnType<typeof getSession>, options: TableOpera
   // A native call can fail after changing part of the workbook. Record the
   // session as dirty before entering the engine and keep that state on error.
   touch(session, true);
-  const result = session.workbook.createTable(input);
-  assertStatus(result.status, "create table");
+  const created = sheetAt(session.workbook, range.sheetIndex).addTable(input);
   if (options.totals !== undefined) {
-    applyTotals(session, result.index, options.totals);
+    applyTotals(created, options.totals);
   }
-  const table = readTable(session, result.index);
-  return { session: publicInfo(session), table, status: statusToJson(result.status) };
+  const entry = workbookTables(session).find(({ table }) => table === created);
+  if (entry === undefined) {
+    throw new Error(`created table ${name} is not listed`);
+  }
+  return {
+    session: publicInfo(session),
+    table: readTable(session, entry),
+    status: okStatus(),
+  };
 }
 
 function updateTable(session: ReturnType<typeof getSession>, options: TableOperationOptions) {
   const index = requireIndex(options.index, "update");
-  const current = readTable(session, index);
+  const entry = tableAtIndex(session, index);
+  const current = readTable(session, entry);
   const hasRange = options.range !== undefined || options.ref !== undefined;
   const hasStyle = options.style !== undefined || options.styleName !== undefined;
   const toggles = styleToggles(options);
@@ -285,16 +314,9 @@ function updateTable(session: ReturnType<typeof getSession>, options: TableOpera
       "table update requires at least one of range, name, style, a style toggle, headerRow, totalsRow, or totals",
     );
   }
-  const input: TableUpdateInput = { ...toggles };
-  if (options.name !== undefined) {
-    const name = requiredText(options.name, "name");
-    input.name = name;
-    input.displayName = name;
-  }
+  const patch: { range?: string; headerRow?: boolean; totalsRow?: boolean } = {};
+  const name = options.name === undefined ? undefined : requiredText(options.name, "name");
   if (hasRange) {
-    if (current.sheet === null) {
-      throw new Error(`table ${index} has no worksheet index`);
-    }
     const range = resolveTableRange(session, tableRef(options), current.sheet);
     const oldRange = parseRangeRef(current.ref);
     const oldWidth = Math.abs(oldRange.end.col - oldRange.start.col) + 1;
@@ -302,34 +324,46 @@ function updateTable(session: ReturnType<typeof getSession>, options: TableOpera
     if (width !== oldWidth) {
       throw new Error(`updated table range must keep ${oldWidth} columns; received ${width}`);
     }
-    input.ref = range.ref;
-  }
-  if (hasStyle) {
-    input.styleName = options.styleName ?? options.style ?? "";
+    patch.range = range.ref;
   }
   if (options.headerRow !== undefined) {
-    input.headerRow = options.headerRow;
+    patch.headerRow = options.headerRow;
   }
   if (options.totalsRow !== undefined) {
-    input.totalsRow = options.totalsRow;
+    patch.totalsRow = options.totalsRow;
   }
+  const styleOptions: TableStyleOptionsPatch = {
+    ...toggles,
+    ...(hasStyle ? { styleName: options.styleName ?? options.style ?? "" } : {}),
+  };
   touch(session, true);
-  const status = session.workbook.updateTable(index, input);
-  assertStatus(status, `update table ${index}`);
-  if (options.totals !== undefined) {
-    applyTotals(session, index, options.totals);
+  const { table } = entry;
+  if (Object.keys(patch).length > 0) {
+    table.update(patch);
   }
-  const table = readTable(session, index);
-  return { session: publicInfo(session), table, status: statusToJson(status) };
+  if (Object.keys(styleOptions).length > 0) {
+    table.updateStyleOptions(styleOptions);
+  }
+  if (name !== undefined) {
+    table.rename(name);
+  }
+  if (options.totals !== undefined) {
+    applyTotals(table, options.totals);
+  }
+  return {
+    session: publicInfo(session),
+    table: readTable(session, entry),
+    status: okStatus(),
+  };
 }
 
 function removeTable(session: ReturnType<typeof getSession>, options: TableOperationOptions) {
   const index = requireIndex(options.index, "remove");
-  const table = readTable(session, index);
+  const entry = tableAtIndex(session, index);
+  const table = readTable(session, entry);
   touch(session, true);
-  const status = session.workbook.removeTable(index);
-  assertStatus(status, `remove table ${index}`);
-  return { session: publicInfo(session), removed: table, status: statusToJson(status) };
+  entry.table.sheet.removeTable(entry.table);
+  return { session: publicInfo(session), removed: table, status: okStatus() };
 }
 
 /** Lists and authors native worksheet tables, preserving the engine's global index. */

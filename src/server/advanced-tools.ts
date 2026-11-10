@@ -1,7 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { formulonModule, type ProfileId } from "../formulon.js";
 import { callWorkbookMethod, sessionProfileId } from "../sessions.js";
-import { fail, methodOk, ok, profileSchema } from "./shared.js";
+import { fail, labeledOk, ok, profileSchema } from "./shared.js";
 
 const jsonArgsSchema = z.array(z.unknown()).default([]);
 
@@ -36,31 +37,40 @@ export function registerAdvancedTools(server: McpServer): void {
           .describe("Profile to translate into or describe; defaults to the session's profile."),
       },
     },
-    ({ sessionId, operation, name, formula, profile }) => {
+    async ({ sessionId, operation, name, formula, profile }) => {
       try {
+        const engine = await formulonModule();
         if (operation === "names") {
-          return methodOk(sessionId, "functionNames", []);
+          return labeledOk(sessionId, "Formulon.listFunctionNames", "read", () =>
+            engine.listFunctionNames(),
+          );
         }
-        const profileId = profile ?? sessionProfileId(sessionId);
+        const profileId = (profile as ProfileId | undefined) ?? sessionProfileId(sessionId);
         if (operation === "localeFacts") {
-          return methodOk(sessionId, "localeFacts", [profileId]);
+          return labeledOk(sessionId, "Formulon.getLocaleFacts", "read", () =>
+            engine.getLocaleFacts(profileId),
+          );
         }
         if (operation === "localizeFormula" || operation === "canonicalizeFormula") {
           if (formula === undefined) {
             throw new Error(`formula is required for ${operation}`);
           }
-          return methodOk(sessionId, operation, [formula, profileId]);
+          return labeledOk(sessionId, `Formulon.${operation}`, "read", () =>
+            engine[operation](formula, profileId),
+          );
         }
         if (!name) {
           throw new Error("name is required");
         }
         if (operation === "metadata") {
-          return methodOk(sessionId, "functionMetadata", [name]);
+          return labeledOk(sessionId, "Formulon.getFunctionMetadata", "read", () =>
+            engine.getFunctionMetadata(name),
+          );
         }
-        return methodOk(
-          sessionId,
-          operation === "localize" ? "localizeFunctionName" : "canonicalizeFunctionName",
-          [name, profileId],
+        const method =
+          operation === "localize" ? "localizeFunctionName" : "canonicalizeFunctionName";
+        return labeledOk(sessionId, `Formulon.${method}`, "read", () =>
+          engine[method](name, profileId),
         );
       } catch (error) {
         return fail(error);
@@ -71,22 +81,27 @@ export function registerAdvancedTools(server: McpServer): void {
   server.registerTool(
     "formulon_workbook_call",
     {
-      title: "Call Formulon Workbook method",
+      title: "Call a Formulon engine method",
       description:
-        "Low-level allowlisted access to the Formulon Workbook API for advanced features. Use formulon_workbook_api first to discover method signatures, input records and enum values.",
+        'Low-level access to the installed Formulon engine for features no task tool covers. `target` names the object the method belongs to: a handle kind (Workbook, Sheet, Table, Pivot, PivotCache, Chart, ...) and the key of each accessor on the way, for example { kind: "Pivot", sheet: 0, pivot: "Sales" }. Use formulon_workbook_api first: each method it lists carries its target kind and keys, its signature, input records and enum values. Raw bytes, callbacks and saving are not available here.',
       inputSchema: {
         sessionId: z.string(),
+        target: z
+          .object({ kind: z.string() })
+          .catchall(z.union([z.number(), z.string()]))
+          .optional()
+          .describe(
+            "The handle the method belongs to: { kind } plus that kind's keys as formulon_workbook_api lists them. Omitted, the workbook.",
+          ),
         method: z
           .string()
-          .describe(
-            "Allowlisted Workbook method name, for example getMerges, addMerge, pivotLayout.",
-          ),
-        args: jsonArgsSchema.describe("Positional JSON arguments passed to the Workbook method."),
+          .describe("Method name on the target, for example listMerges on a Sheet."),
+        args: jsonArgsSchema.describe("Positional JSON arguments passed to the method."),
       },
     },
-    ({ sessionId, method, args }) => {
+    ({ sessionId, target, method, args }) => {
       try {
-        return ok(callWorkbookMethod(sessionId, method, args));
+        return ok(callWorkbookMethod(sessionId, target, method, args));
       } catch (error) {
         return fail(error);
       }

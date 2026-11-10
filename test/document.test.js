@@ -211,8 +211,13 @@ test("lays out blank ruled rows for a form to fill in", async () => {
     );
     assert.equal(built.range, "B2:C7");
     // The empty rows are materialized as styled blanks, so the ruling renders.
-    const { result } = callWorkbookMethod("doc-form", "getCellXfIndex", [0, 6, 1]);
-    assert.ok(result.xfIndex > 0);
+    const { result } = callWorkbookMethod(
+      "doc-form",
+      { kind: "SheetOoxml", sheet: 0 },
+      "getCellXfIndex",
+      [6, 1],
+    );
+    assert.ok(result !== null && result > 0);
   } finally {
     closeSession("doc-form");
   }

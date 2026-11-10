@@ -1,11 +1,10 @@
 import { cellToA1, normalizeRange, parseCellRef, parseRangeRef } from "../a1.js";
 import {
   applyMutation,
-  assertStatus,
   type CellMutation,
   errorName,
   findSheetIndex,
-  statusToJson,
+  okStatus,
   valueToJson,
 } from "../formulon.js";
 import {
@@ -84,17 +83,16 @@ export function applySessionMutations(
       const concrete = { ...mutation, ...address } as CellMutation;
       attemptedCount += 1;
       // A mutating engine call may fail after changing part of the workbook;
-      // mark dirty before entering it so thrown and failed statuses retain the
+      // mark dirty before entering it so a thrown error retains the
       // conservative state.
       touch(session, true);
-      const status = applyMutation(session.workbook, concrete);
-      assertStatus(status, `apply mutation ${idx}`);
+      applyMutation(session.workbook, concrete);
       appliedCount += 1;
       applied.push({
         index: idx,
         a1: cellToA1(address.row, address.col),
         sheet: address.sheet,
-        status: statusToJson(status),
+        status: okStatus(),
       });
     }
   } finally {
@@ -104,7 +102,7 @@ export function applySessionMutations(
       touch(session, true);
       if (recalc) {
         if (appliedCount > 0) {
-          assertStatus(session.workbook.recalc(), "recalc workbook");
+          session.workbook.recalc();
         }
       }
     }
@@ -117,9 +115,9 @@ export function applySessionMutations(
       continue;
     }
     const address = resolved[idx];
-    const result = session.workbook.getValue(address.sheet, address.row, address.col);
-    assertStatus(result.status, `read formula result ${idx}`);
-    const value = jsonCellValue(result.value);
+    const value = jsonCellValue(
+      session.workbook.sheet(address.sheet).getTypedValue(address.row, address.col),
+    );
     if (value.kind === "error") {
       errorCells.push({
         index: idx,
@@ -149,14 +147,14 @@ export function readWorkbookCell(
   const sheetIndex = findSheetIndex(owner.workbook, sheet);
   assertInGrid(row, col);
   if (recalc) {
-    assertStatus(owner.workbook.recalc(), "recalc workbook");
+    owner.workbook.recalc();
   }
-  const result = owner.workbook.getValue(sheetIndex, row, col);
-  assertStatus(result.status, "get cell");
-  const value = valueToJson(result.value) as PrimitiveCellValue;
+  const value = valueToJson(
+    owner.workbook.sheet(sheetIndex).getTypedValue(row, col),
+  ) as PrimitiveCellValue;
   return {
     address: { sheet: sheetIndex, row, col, a1: cellToA1(row, col) },
-    status: statusToJson(result.status),
+    status: okStatus(),
     value,
     formula: formulaAt(owner, sheetIndex, row, col),
     ...decodeNumberCell(owner, sheetIndex, row, col, value),
@@ -293,7 +291,7 @@ export function getSessionRange(id: string, ref: string, options: RangeReadOptio
   const sheetIndex = findSheetIndex(session.workbook, range.sheetName ?? options.sheet);
   if (options.recalc) {
     touch(session, true);
-    assertStatus(session.workbook.recalc(), "recalc workbook");
+    session.workbook.recalc();
   }
 
   const cells = [];

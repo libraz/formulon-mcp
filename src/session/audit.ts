@@ -1,5 +1,5 @@
 import type { Value } from "@libraz/formulon";
-import { cellToA1, normalizeRange, parseRangeRef } from "../a1.js";
+import { normalizeRange, parseRangeRef } from "../a1.js";
 import {
   blankValue,
   collectIssues,
@@ -17,14 +17,15 @@ import type {
   FormulaAuditResult,
   RawIssue,
 } from "../audit/types.js";
+import { findSheetIndex, valueToJson } from "../formulon.js";
 import {
-  assertStatus,
-  findSheetIndex,
-  requireCell,
-  requireNumberResult,
-  valueToJson,
-} from "../formulon.js";
-import { assertInGrid, type PrimitiveCellValue, rectCells, sheetName } from "./shared.js";
+  assertInGrid,
+  type PrimitiveCellValue,
+  rectCells,
+  safeRead,
+  sheetName,
+  taggedValue,
+} from "./shared.js";
 import { getSession, publicInfo, touch } from "./state.js";
 
 const MAX_AUDIT_INVENTORY_CELLS = 1_000_000;
@@ -118,24 +119,21 @@ function readStoredCells(
     };
     return Array.from(rectCells(session, sheet, rect), toCell);
   }
-  const count = requireNumberResult(
-    session.workbook.cellCount(sheet),
-    `read sheet ${sheet} cell count`,
-  );
-  if (count > MAX_AUDIT_INVENTORY_CELLS) {
+  const handle = session.workbook.sheet(sheet);
+  const stored = handle.listCells();
+  if (stored.length > MAX_AUDIT_INVENTORY_CELLS) {
     throw new Error(
-      `formula audit cannot inspect sheet ${sheet}: ${count} stored cells exceeds the inventory limit of ${MAX_AUDIT_INVENTORY_CELLS}; pass an explicit range`,
+      `formula audit cannot inspect sheet ${sheet}: ${stored.length} stored cells exceeds the inventory limit of ${MAX_AUDIT_INVENTORY_CELLS}; pass an explicit range`,
     );
   }
-  const cells: AuditCell[] = [];
-  for (let index = 0; index < count; index += 1) {
-    cells.push(
-      toCell(
-        requireCell(session.workbook.cellAt(sheet, index), `read sheet ${sheet} cell ${index}`),
-      ),
-    );
-  }
-  return cells;
+  return stored.map((cell) =>
+    toCell({
+      row: cell.row,
+      col: cell.col,
+      formula: cell.formula ?? "",
+      value: taggedValue(handle, cell),
+    }),
+  );
 }
 
 function usedRange(cells: AuditCell[]): AuditRange | undefined {
@@ -177,16 +175,17 @@ function refreshValues(
     for (let col = range.startCol; col <= range.endCol; col += 1) {
       const cell = byKey.get(key(row, col));
       if (recalc) {
-        const result = session.workbook.getValue(sheet, row, col);
-        assertStatus(result.status, `read audit cell ${cellToA1(row, col)}`);
+        const value = valueToJson(
+          session.workbook.sheet(sheet).getTypedValue(row, col),
+        ) as PrimitiveCellValue;
         if (cell) {
-          cell.value = valueToJson(result.value) as PrimitiveCellValue;
+          cell.value = value;
         } else {
           byKey.set(key(row, col), {
             row,
             col,
             formula: "",
-            value: valueToJson(result.value) as PrimitiveCellValue,
+            value,
           });
         }
       } else if (!cell) {
@@ -219,10 +218,9 @@ function formulaPatterns(
     if (!cell.formula) {
       continue;
     }
-    const result = session.workbook.getFormulaR1C1(sheet, cell.row, cell.col);
-    const supported = result.status.ok && result.formula !== null;
-    cell.pattern = supported ? foldCase(result.formula as string) : cell.formula;
-    cell.patternSupported = supported;
+    const r1c1 = safeRead(() => session.workbook.sheet(sheet).getFormulaR1C1(cell.row, cell.col));
+    cell.pattern = r1c1 === null ? cell.formula : foldCase(r1c1);
+    cell.patternSupported = r1c1 !== null;
   }
 }
 
@@ -273,7 +271,7 @@ export function auditSessionFormulas(
     // Recalculation changes cached formula values and may partially mutate
     // native state before reporting a failure; record dirty before invoking it.
     touch(session, true);
-    assertStatus(session.workbook.recalc(), "recalc workbook for formula audit");
+    session.workbook.recalc();
   }
 
   const cells = refreshValues(session, target.sheet, stored, range, Boolean(options.recalc));

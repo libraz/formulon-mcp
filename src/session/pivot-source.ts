@@ -1,6 +1,14 @@
-import { PivotAggregation, PivotAxis, PivotReportLayout, type Value } from "@libraz/formulon";
+import {
+  type ErrorValue,
+  ExcelError,
+  type NativeValue,
+  PivotAggregation,
+  PivotAxis,
+  PivotReportLayout,
+  ValueKind,
+} from "@libraz/formulon";
 import { normalizeRange, parseCellRef, parseRangeRef } from "../a1.js";
-import { assertStatus, findSheetIndex, type Workbook } from "../formulon.js";
+import { findSheetIndex, sheetAt } from "../formulon.js";
 import { assertInGrid, rangeA1, rectCells, sheetName } from "./shared.js";
 import type { WorkbookSession } from "./state.js";
 
@@ -57,12 +65,7 @@ export type PivotRange = {
   ref: string;
 };
 
-export type SourceValue =
-  | { kind: 0 }
-  | { kind: 1; number: number }
-  | { kind: 2; boolean: boolean }
-  | { kind: 3; text: string }
-  | { kind: 4; errorCode: number };
+export type SourceValue = null | number | boolean | string | ErrorValue;
 
 export type SourceData = {
   range: PivotRange;
@@ -178,26 +181,22 @@ export function cellRef(range: PivotRange, row: number, col: number): string {
   return `${range.sheetName}!${rangeA1(row, col, row, col)}`;
 }
 
-export function sourceValue(value: Value, ref: string): SourceValue {
-  switch (value.kind) {
-    case 0:
-      return { kind: 0 };
-    case 1:
-      if (!Number.isFinite(value.number)) {
-        throw new Error(`pivot source cell ${ref} is not a finite number`);
-      }
-      return { kind: 1, number: value.number };
-    case 2:
-      return { kind: 2, boolean: Boolean(value.boolean) };
-    case 3:
-      return { kind: 3, text: value.text };
-    case 4:
-      return { kind: 4, errorCode: value.errorCode };
-    default:
-      throw new Error(
-        `pivot source cell ${ref} has unsupported value kind ${value.kind}; resolve arrays, references, and lambdas before creating the pivot`,
-      );
+export function sourceValue(value: NativeValue, ref: string): SourceValue {
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return value;
   }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(`pivot source cell ${ref} is not a finite number`);
+    }
+    return value;
+  }
+  if (value instanceof ExcelError) {
+    return { kind: ValueKind.Error, errorCode: value.code };
+  }
+  throw new Error(
+    `pivot source cell ${ref} has an unsupported value; resolve arrays, references, and lambdas before creating the pivot`,
+  );
 }
 
 export function formulaInRange(session: WorkbookSession, range: PivotRange): boolean {
@@ -216,14 +215,12 @@ export function readSource(
 ): SourceData {
   validateRangeSize(range, sourceLimit);
   const headers = sourceHeaders(session, range);
+  const sheet = sheetAt(session.workbook, range.sheet);
   const records: SourceValue[][] = [];
   for (let row = range.firstRow + 1; row <= range.lastRow; row += 1) {
     const record: SourceValue[] = [];
     for (let col = range.firstCol; col <= range.lastCol; col += 1) {
-      const result = session.workbook.getValue(range.sheet, row, col);
-      const ref = cellRef(range, row, col);
-      assertStatus(result.status, `read pivot source ${ref}`);
-      record.push(sourceValue(result.value, ref));
+      record.push(sourceValue(sheet.getValue(row, col), cellRef(range, row, col)));
     }
     records.push(record);
   }
@@ -278,7 +275,7 @@ export function assignAxes(
     }
   };
   assign(rows, PivotAxis.Row, "rows");
-  assign(columns, PivotAxis.Col, "columns");
+  assign(columns, PivotAxis.Column, "columns");
   assign(pages, PivotAxis.Page, "pages");
 
   for (const value of values) {
@@ -305,7 +302,7 @@ export function axisName(axis: PivotAxis): string {
   switch (axis) {
     case PivotAxis.Row:
       return "rows";
-    case PivotAxis.Col:
+    case PivotAxis.Column:
       return "columns";
     case PivotAxis.Page:
       return "pages";
@@ -369,14 +366,14 @@ export function sourceHeadersForValidation(session: WorkbookSession, range: Pivo
 function sourceHeaders(session: WorkbookSession, range: PivotRange): string[] {
   const headers: string[] = [];
   const seen = new Set<string>();
+  const sheet = sheetAt(session.workbook, range.sheet);
   for (let col = range.firstCol; col <= range.lastCol; col += 1) {
-    const result = session.workbook.getValue(range.sheet, range.firstRow, col);
+    const value = sheet.getValue(range.firstRow, col);
     const ref = cellRef(range, range.firstRow, col);
-    assertStatus(result.status, `read pivot header ${ref}`);
-    if (result.value.kind !== 3 || !result.value.text.trim()) {
+    if (typeof value !== "string" || !value.trim()) {
       throw new Error(`pivot header ${ref} must be non-empty text`);
     }
-    const header = result.value.text.trim();
+    const header = value.trim();
     const key = header.toLocaleLowerCase();
     if (seen.has(key)) {
       throw new Error(
@@ -387,10 +384,4 @@ function sourceHeaders(session: WorkbookSession, range: PivotRange): string[] {
     headers.push(header);
   }
   return headers;
-}
-
-export function registerPivotNumberFormat(workbook: Workbook, format: string): number {
-  const result = workbook.addNumFmt(format);
-  assertStatus(result.status, `register pivot number format ${format}`);
-  return result.numFmtId;
 }

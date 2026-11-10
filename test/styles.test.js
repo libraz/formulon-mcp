@@ -8,6 +8,7 @@ import {
   applySessionLayout,
   callWorkbookMethod,
   closeSession,
+  getSession,
   listSessions,
   openSession,
   saveSession,
@@ -17,10 +18,53 @@ import {
 } from "../dist/sessions.js";
 import { parseColor, STYLE_VOCABULARY } from "../dist/styles.js";
 
-/** Reads the resolved xf record a cell carries. */
+/** Calls a method of the workbook's style tables (`wb.ooxml`). */
+function tables(id, method, ...args) {
+  return callWorkbookMethod(id, { kind: "WorkbookOoxml" }, method, args).result;
+}
+
+/** Calls a method of one sheet's style surface (`wb.sheet(i).ooxml`). */
+function cellStyles(id, sheet, method, ...args) {
+  return callWorkbookMethod(id, { kind: "SheetOoxml", sheet }, method, args).result;
+}
+
+/** Calls a method of one sheet handle (`wb.sheet(i)`). */
+function sheetCall(id, sheet, method, ...args) {
+  return callWorkbookMethod(id, { kind: "Sheet", sheet }, method, args).result;
+}
+
+/** Calls a method of the workbook itself. */
+function workbookCall(id, method, ...args) {
+  return callWorkbookMethod(id, undefined, method, args).result;
+}
+
+/**
+ * Counts the stored cells of the rows and columns from A1 down and right: a cell counts when it
+ * holds a value or a formula or carries an xf of its own. The engine reports no stored-cell
+ * count, so a materialized styled blank is observed through its own xf index.
+ */
+function storedCellCount(id, sheet, rows, cols) {
+  const handle = getSession(id).workbook.sheet(sheet);
+  const populated = new Set(
+    handle
+      .listCells({ firstRow: 0, firstCol: 0, lastRow: rows - 1, lastCol: cols - 1 })
+      .map((cell) => cell.row * cols + cell.col),
+  );
+  let count = 0;
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      if (populated.has(row * cols + col) || handle.ooxml.getCellXfIndex(row, col) !== null) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+/** Reads the xf record a cell carries; a cell with no xf of its own reads the default xf. */
 function cellXf(id, sheet, row, col) {
-  const { result } = callWorkbookMethod(id, "getCellXfIndex", [sheet, row, col]);
-  return callWorkbookMethod(id, "getCellXf", [result.xfIndex]).result;
+  const xfIndex = cellStyles(id, sheet, "getCellXfIndex", row, col);
+  return tables(id, "getCellXf", xfIndex ?? 0);
 }
 
 /**
@@ -30,7 +74,7 @@ function cellXf(id, sheet, row, col) {
  */
 function cellFormatCode(id, sheet, row, col) {
   const numFmtId = cellXf(id, sheet, row, col).numFmtId;
-  return callWorkbookMethod(id, "getNumFmt", [numFmtId]).result.formatCode;
+  return tables(id, "getNumberFormat", numFmtId);
 }
 
 test("parses hex colors into AARRGGBB", () => {
@@ -69,17 +113,17 @@ test("applies a font, fill, and number format across a range", async () => {
     assert.equal(applied.regions[0].range, "A1:B1");
 
     const xf = cellXf("style-basic", 0, 0, 1);
-    assert.equal(xf.horizontalAlign, STYLE_VOCABULARY.horizontalAlign.indexOf("center"));
-    assert.equal(xf.hasAlignment, true);
+    assert.equal(xf.horizontal, STYLE_VOCABULARY.horizontalAlign.indexOf("center"));
+    assert.equal(xf.applyAlignment, true);
 
-    const font = callWorkbookMethod("style-basic", "getFont", [xf.fontIndex]).result;
+    const font = tables("style-basic", "getFont", xf.fontIndex);
     assert.equal(font.bold, true);
-    assert.equal(font.size, 14);
-    assert.equal(font.colorArgb, parseColor("#1F4E79"));
+    assert.equal(font.sizePt, 14);
+    assert.equal(font.color.argb, parseColor("#1F4E79"));
 
-    const fill = callWorkbookMethod("style-basic", "getFill", [xf.fillIndex]).result;
+    const fill = tables("style-basic", "getFill", xf.fillIndex);
     assert.equal(fill.pattern, STYLE_VOCABULARY.fillPattern.indexOf("solid"));
-    assert.equal(fill.fgArgb, parseColor("#DCE6F1"));
+    assert.equal(fill.foreground.argb, parseColor("#DCE6F1"));
   } finally {
     closeSession("style-basic");
   }
@@ -97,7 +141,7 @@ test("keeps style a later pass did not state", async () => {
     styleSessionRange("style-delta", "A2", { font: { bold: true } }, undefined, "existing");
     const after = cellXf("style-delta", 0, 1, 0);
     assert.equal(cellFormatCode("style-delta", 0, 1, 0), '"¥"#,##0');
-    assert.equal(callWorkbookMethod("style-delta", "getFont", [after.fontIndex]).result.bold, true);
+    assert.equal(tables("style-delta", "getFont", after.fontIndex).bold, true);
   } finally {
     closeSession("style-delta");
   }
@@ -142,9 +186,7 @@ test("draws an outline around a range without ruling its interior", async () => 
     const thin = STYLE_VOCABULARY.borderStyle.indexOf("thin");
     const medium = STYLE_VOCABULARY.borderStyle.indexOf("medium");
     const borderOf = (row, col) =>
-      callWorkbookMethod("style-outline", "getBorder", [
-        cellXf("style-outline", 0, row, col).borderIndex,
-      ]).result;
+      tables("style-outline", "getBorder", cellXf("style-outline", 0, row, col).borderIndex);
 
     const topLeft = borderOf(1, 1);
     assert.equal(topLeft.top.style, medium);
@@ -220,7 +262,7 @@ test("redeclares the workbook default font in place", async () => {
     const seeded = sessionDefaultFont("default-font");
     assert.equal(seeded.font.name, "Calibri");
     assert.equal(seeded.font.size, 11);
-    const seededCount = callWorkbookMethod("default-font", "fontCount", []).result.value;
+    const seededCount = tables("default-font", "listFonts").length;
 
     const applied = sessionDefaultFont("default-font", { name: "Meiryo", size: 10 });
     assert.equal(applied.font.name, "Meiryo");
@@ -228,7 +270,7 @@ test("redeclares the workbook default font in place", async () => {
     assert.equal(sessionDefaultFont("default-font").font.name, "Meiryo");
     // The default occupies font 0, so redeclaring it overwrites the slot rather
     // than appending a font every unstyled cell would still not resolve to.
-    assert.equal(callWorkbookMethod("default-font", "fontCount", []).result.value, seededCount);
+    assert.equal(tables("default-font", "listFonts").length, seededCount);
   } finally {
     closeSession("default-font");
   }
@@ -239,9 +281,10 @@ test("cuts a font's theme link when a typeface is named", async () => {
   try {
     // A ja-JP workbook's base font is theme-linked, which makes Excel resolve
     // the typeface from the theme and discard whatever name was written.
-    callWorkbookMethod("font-scheme", "setDefaultFont", [
-      { ...callWorkbookMethod("font-scheme", "getFont", [0]).result, scheme: 2 },
-    ]);
+    workbookCall("font-scheme", "setDefaultFont", {
+      ...tables("font-scheme", "getFont", 0),
+      scheme: 2,
+    });
     assert.equal(sessionDefaultFont("font-scheme").font.themeLink, "minor");
 
     // Size alone leaves the link alone: only the typeface comes from the theme.
@@ -250,9 +293,7 @@ test("cuts a font's theme link when a typeface is named", async () => {
 
     setSessionRange("font-scheme", "A1", [["見出し"]], undefined, false);
     styleSessionRange("font-scheme", "A1", { font: { bold: true } }, undefined, "existing");
-    const bolded = callWorkbookMethod("font-scheme", "getFont", [
-      cellXf("font-scheme", 0, 0, 0).fontIndex,
-    ]).result;
+    const bolded = tables("font-scheme", "getFont", cellXf("font-scheme", 0, 0, 0).fontIndex);
     assert.equal(bolded.name, "Meiryo");
     assert.equal(bolded.scheme, 0);
   } finally {
@@ -292,24 +333,20 @@ test("styles whole columns and rows as columns and rows", async () => {
     );
     assert.equal(applied.range.end, "B1048576");
     // No blank cell of the column is materialized; the column carries the style.
-    assert.equal(callWorkbookMethod("style-lines", "cellCount", [0]).result.value, 1);
-    const columns = callWorkbookMethod("style-lines", "getSheetColumns", [0]).result.columns;
+    assert.equal(storedCellCount("style-lines", 0, 2000, 6), 1);
+    assert.equal(cellStyles("style-lines", 0, "getCellXfIndex", MAX_ROW, 1), null);
+    const columns = sheetCall("style-lines", 0, "listColumnOverrides");
     assert.equal(columns[0].first, 1);
-    assert.equal(columns[0].hasStyle, 1);
+    assert.notEqual(cellStyles("style-lines", 0, "getColumnXfIndex", 1), null);
     const fill = (row) =>
-      callWorkbookMethod("style-lines", "getFill", [cellXf("style-lines", 0, row, 1).fillIndex])
-        .result.fgArgb;
+      tables("style-lines", "getFill", cellXf("style-lines", 0, row, 1).fillIndex).foreground.argb;
     assert.equal(fill(1), parseColor("#FFFF00"));
     // A value written later into the column takes the column's style.
     setSessionRange("style-lines", "B500", [[1]], undefined, false);
     assert.equal(fill(499), parseColor("#FFFF00"));
 
     styleSessionRange("style-lines", "3:3", { font: { bold: true } }, undefined, "existing");
-    const rows = callWorkbookMethod("style-lines", "getSheetRowOverrides", [0]).result.rows;
-    assert.equal(
-      rows.some((row) => row.row === 2 && row.hasStyle === 1),
-      true,
-    );
+    assert.notEqual(cellStyles("style-lines", 0, "getRowXfIndex", 2), null);
 
     assert.throws(
       () =>
@@ -335,23 +372,22 @@ const ORANGE = parseColor("#FFC000");
 const MEDIUM = STYLE_VOCABULARY.borderStyle.indexOf("medium");
 const MAX_STYLED_CELLS = 100_000;
 
-/** Calls an engine method on a session and returns the unwrapped result. */
-function engine(id, method, ...args) {
-  return callWorkbookMethod(id, method, args).result;
-}
-
 function sessionDirty(id) {
   return listSessions().find((session) => session.id === id)?.dirty;
 }
 
 /** Builds a cell xf that differs from the default xf only by a number format. */
 function numberFormatXf(id, code) {
-  const numFmtId = engine(id, "addNumFmt", code).numFmtId;
-  const record = { ...engine(id, "getCellXf", 0), status: undefined };
-  return engine(id, "addXf", { ...record, numFmtId, applyNumberFormat: true }).index;
+  const numFmtId = tables(id, "addNumberFormat", code);
+  return tables(id, "addCellXf", {
+    ...tables(id, "getCellXf", 0),
+    numFmtId,
+    applyNumberFormat: true,
+  });
 }
 
-const effectiveAt = (id, row, col, sheet = 0) => engine(id, "getEffectiveStyle", sheet, row, col);
+const effectiveAt = (id, row, col, sheet = 0) =>
+  cellStyles(id, sheet, "getEffectiveStyle", row, col);
 
 const wholeColumns = (rect) => rect.firstRow === 0 && rect.lastRow === MAX_ROW;
 const wholeRows = (rect) => rect.firstCol === 0 && rect.lastCol === MAX_COL;
@@ -390,12 +426,12 @@ const PRIORS = {
       [2, 2],
       [4, 4],
     ]) {
-      engine(id, "setNumber", 0, row, col, 1000);
-      engine(id, "setCellXfIndex", 0, row, col, xf);
+      sheetCall(id, 0, "setNumber", row, col, 1000);
+      cellStyles(id, 0, "setCellXfIndex", row, col, xf);
     }
   },
-  colstyled: (id) => engine(id, "setColumnStyle", 0, 2, 2, numberFormatXf(id, "0.00%")),
-  rowstyled: (id) => engine(id, "setRowStyle", 0, 2, 2, numberFormatXf(id, "0.00%")),
+  colstyled: (id) => cellStyles(id, 0, "setColumnXfIndex", 2, 2, numberFormatXf(id, "0.00%")),
+  rowstyled: (id) => cellStyles(id, 0, "setRowXfIndex", 2, 2, numberFormatXf(id, "0.00%")),
 };
 
 const GRID_ROWS = 9;
@@ -409,15 +445,19 @@ function snapshot(id) {
       grid.push({ row, col, style: effectiveAt(id, row, col) });
     }
   }
+  const lineXfs = (method, count) =>
+    Array.from({ length: count }, (_, index) => cellStyles(id, 0, method, index));
   return {
-    cellCount: engine(id, "cellCount", 0).value,
-    columns: engine(id, "getSheetColumns", 0).columns,
-    rows: engine(id, "getSheetRowOverrides", 0).rows,
-    xfCount: engine(id, "xfCount").value,
-    fontCount: engine(id, "fontCount").value,
-    fillCount: engine(id, "fillCount").value,
-    borderCount: engine(id, "borderCount").value,
-    otherSheetCells: engine(id, "cellCount", 1).value,
+    cellCount: storedCellCount(id, 0, GRID_ROWS, GRID_COLS),
+    columns: sheetCall(id, 0, "listColumnOverrides"),
+    rows: sheetCall(id, 0, "listRowOverrides"),
+    columnXfs: lineXfs("getColumnXfIndex", GRID_COLS),
+    rowXfs: lineXfs("getRowXfIndex", GRID_ROWS),
+    xfCount: tables(id, "listCellXfs").length,
+    fontCount: tables(id, "listFonts").length,
+    fillCount: tables(id, "listFills").length,
+    borderCount: tables(id, "listBorders").length,
+    otherSheetCells: storedCellCount(id, 1, GRID_ROWS, GRID_COLS),
     otherSheetStyle: effectiveAt(id, 2, 2, 1),
     grid,
   };
@@ -449,15 +489,12 @@ function expectedRegions(id, rect, base, outline) {
   const expected = [];
   for (const rowBand of bandRows) {
     for (const colBand of bandCols) {
-      const bases = engine(
-        id,
-        "rangeStyleBases",
-        0,
-        rowBand.first,
-        colBand.first,
-        rowBand.last,
-        colBand.last,
-      ).xfIndices;
+      const bases = cellStyles(id, 0, "getRangeXfBases", {
+        firstRow: rowBand.first,
+        firstCol: colBand.first,
+        lastRow: rowBand.last,
+        lastCol: colBand.last,
+      });
       const range = `${cellToA1(rowBand.first, colBand.first)}:${cellToA1(rowBand.last, colBand.last)}`;
       for (const baseXfIndex of base === "default" ? [0] : bases) {
         expected.push({ range, baseXfIndex });
@@ -491,27 +528,35 @@ function expectedCellGrowth(priorName, base, rect) {
 
 function assertWholeLineMetadata(id, rect, before) {
   const fillOf = (xfIndex) => {
-    const xf = engine(id, "getCellXf", xfIndex);
-    return engine(id, "getFill", xf.fillIndex).fgArgb;
+    const xf = tables(id, "getCellXf", xfIndex);
+    return tables(id, "getFill", xf.fillIndex).foreground.argb;
   };
-  const columns = engine(id, "getSheetColumns", 0).columns;
-  const rows = engine(id, "getSheetRowOverrides", 0).rows;
+  const columns = sheetCall(id, 0, "listColumnOverrides");
+  const rows = sheetCall(id, 0, "listRowOverrides");
   if (wholeColumns(rect)) {
     for (let col = rect.firstCol; col <= rect.lastCol; col += 1) {
-      const entry = columns.find((item) => item.first <= col && col <= item.last);
-      assert.ok(entry, `column ${col} carries a style entry`);
-      assert.equal(entry.hasStyle, 1);
-      assert.equal(fillOf(entry.styleXf), ORANGE);
+      const styleXf = cellStyles(id, 0, "getColumnXfIndex", col);
+      assert.notEqual(styleXf, null, `column ${col} carries a style entry`);
+      assert.equal(fillOf(styleXf), ORANGE);
     }
     assert.deepEqual(rows, before.rows, "a column pass leaves row overrides alone");
+    assert.deepEqual(
+      Array.from({ length: GRID_ROWS }, (_, row) => cellStyles(id, 0, "getRowXfIndex", row)),
+      before.rowXfs,
+      "a column pass leaves row styles alone",
+    );
   } else {
     for (let row = rect.firstRow; row <= rect.lastRow; row += 1) {
-      const entry = rows.find((item) => item.row === row);
-      assert.ok(entry, `row ${row} carries a style entry`);
-      assert.equal(entry.hasStyle, 1);
-      assert.equal(fillOf(entry.styleXf), ORANGE);
+      const styleXf = cellStyles(id, 0, "getRowXfIndex", row);
+      assert.notEqual(styleXf, null, `row ${row} carries a style entry`);
+      assert.equal(fillOf(styleXf), ORANGE);
     }
     assert.deepEqual(columns, before.columns, "a row pass leaves column entries alone");
+    assert.deepEqual(
+      Array.from({ length: GRID_COLS }, (_, col) => cellStyles(id, 0, "getColumnXfIndex", col)),
+      before.columnXfs,
+      "a row pass leaves column styles alone",
+    );
   }
 }
 
@@ -569,7 +614,7 @@ async function runStyleCase(entryName, [shapeName, base, outlineFlag, priorName]
   };
   await openSession(undefined, id);
   try {
-    engine(id, "addSheet", "Sheet2");
+    workbookCall(id, "addSheet", "Sheet2");
     PRIORS[priorName](id);
     // Start from a clean session so a refused pass can be shown not to dirty it.
     await saveSession(id, path.join(dir, "prior.xlsx"));
@@ -618,11 +663,11 @@ async function runStyleCase(entryName, [shapeName, base, outlineFlag, priorName]
         continue;
       }
       assert.equal(cell.style.fillForeground.argb, ORANGE, `r${cell.row}c${cell.col} fill`);
-      assert.equal(engine(id, "getFont", cell.style.fontIndex).italic, true);
+      assert.equal(tables(id, "getFont", cell.style.fontIndex).italic, true);
       // "existing" is a delta over what the cell showed; "default" starts from xf 0.
       assert.equal(
-        cell.style.numFmtCode,
-        base === "existing" ? beforeCell.style.numFmtCode : "General",
+        cell.style.numberFormat,
+        base === "existing" ? beforeCell.style.numberFormat : "General",
         `r${cell.row}c${cell.col} number format`,
       );
       if (bounded) {
@@ -630,7 +675,7 @@ async function runStyleCase(entryName, [shapeName, base, outlineFlag, priorName]
         assert.equal(cell.style.source, 0, `r${cell.row}c${cell.col} is a styled cell`);
       }
       if (outline) {
-        const border = engine(id, "getBorder", cell.style.borderIndex);
+        const border = tables(id, "getBorder", cell.style.borderIndex);
         const onEdge = {
           top: cell.row === rect.firstRow,
           bottom: cell.row === rect.lastRow,
@@ -655,11 +700,14 @@ async function runStyleCase(entryName, [shapeName, base, outlineFlag, priorName]
       // A value written later into the styled line inherits the new style.
       const [row, col] = wholeColumns(rect) ? [40, rect.firstCol] : [rect.firstRow, 30];
       const blankBefore = effectiveAt(id, row, col);
-      engine(id, "setNumber", 0, row, col, 7);
+      sheetCall(id, 0, "setNumber", row, col, 7);
       const written = effectiveAt(id, row, col);
       assert.equal(written.fillForeground.argb, ORANGE);
-      assert.equal(written.numFmtCode, base === "existing" ? blankBefore.numFmtCode : "General");
-      assert.equal(engine(id, "getFont", written.fontIndex).italic, true);
+      assert.equal(
+        written.numberFormat,
+        base === "existing" ? blankBefore.numberFormat : "General",
+      );
+      assert.equal(tables(id, "getFont", written.fontIndex).italic, true);
     }
   } finally {
     closeSession(id);
@@ -690,23 +738,23 @@ for (const [entryName, run] of Object.entries(runStyle)) {
         setSessionRange(id, "A1", [[0.5], [2000], ["text"]], undefined, false);
         styleSessionRange(id, "A1", { numberFormat: "0.0%", font: { bold: true } }, 0, "existing");
         styleSessionRange(id, "A2", { numberFormat: '"¥"#,##0' }, 0, "existing");
-        const priorFormats = [0, 1, 2].map((row) => effectiveAt(id, row, 0).numFmtCode);
+        const priorFormats = [0, 1, 2].map((row) => effectiveAt(id, row, 0).numberFormat);
         assert.deepEqual(priorFormats, ["0.0%", '"¥"#,##0', "General"]);
 
         run(id, ref, { fill: { color: "#FFC000" } }, "existing");
         for (const row of [0, 1, 2]) {
           const style = effectiveAt(id, row, 0);
           assert.equal(style.fillForeground.argb, ORANGE);
-          assert.equal(style.numFmtCode, priorFormats[row]);
-          assert.equal(engine(id, "getFont", style.fontIndex).bold, row === 0);
+          assert.equal(style.numberFormat, priorFormats[row]);
+          assert.equal(tables(id, "getFont", style.fontIndex).bold ?? false, row === 0);
         }
 
         run(id, ref, { fill: { color: "#00B050" } }, "default");
         for (const row of [0, 1, 2]) {
           const style = effectiveAt(id, row, 0);
           assert.equal(style.fillForeground.argb, parseColor("#00B050"));
-          assert.equal(style.numFmtCode, "General");
-          assert.equal(engine(id, "getFont", style.fontIndex).bold, false);
+          assert.equal(style.numberFormat, "General");
+          assert.equal(tables(id, "getFont", style.fontIndex).bold ?? false, false);
         }
       } finally {
         closeSession(id);
@@ -722,13 +770,13 @@ for (const [entryName, run] of Object.entries(runStyle)) {
         const applied = run(id, ref, { font: { bold: true } }, "existing");
         assert.equal(applied.regions.length, 1);
         assert.equal(applied.regions[0].range, "A1:XFD1048576");
-        assert.equal(engine(id, "cellCount", 0).value, 0);
+        assert.equal(storedCellCount(id, 0, 1000, 8), 0);
         for (const [row, col] of [
           [0, 0],
           [500, 700],
           [MAX_ROW, MAX_COL],
         ]) {
-          assert.equal(engine(id, "getFont", effectiveAt(id, row, col).fontIndex).bold, true);
+          assert.equal(tables(id, "getFont", effectiveAt(id, row, col).fontIndex).bold, true);
         }
       } finally {
         closeSession(id);
@@ -759,7 +807,7 @@ for (const [entryName, run] of Object.entries(runStyle)) {
 test("applies a qualified whole column to the named sheet only", async () => {
   await openSession(undefined, "style-qualified");
   try {
-    engine("style-qualified", "addSheet", "Data Sheet");
+    workbookCall("style-qualified", "addSheet", "Data Sheet");
     const applied = styleSessionRange(
       "style-qualified",
       "'Data Sheet'!B:C",
@@ -769,8 +817,8 @@ test("applies a qualified whole column to the named sheet only", async () => {
     );
     assert.equal(applied.range.sheet, 1);
     assert.equal(applied.range.sheetName, "Data Sheet");
-    assert.equal(engine("style-qualified", "getSheetColumns", 1).columns.length, 1);
-    assert.equal(engine("style-qualified", "getSheetColumns", 0).columns.length, 0);
+    assert.equal(sheetCall("style-qualified", 1, "listColumnOverrides").length, 1);
+    assert.equal(sheetCall("style-qualified", 0, "listColumnOverrides").length, 0);
 
     // The layout route only styles the selected sheet; a qualifier elsewhere is refused.
     assert.throws(
@@ -784,8 +832,8 @@ test("applies a qualified whole column to the named sheet only", async () => {
       { type: "style", range: "'Data Sheet'!D:D", style: { font: { bold: true } } },
     ]);
     assert.equal(viaLayout.sheetName, "Data Sheet");
-    assert.equal(engine("style-qualified", "getSheetColumns", 1).columns.length, 2);
-    assert.equal(engine("style-qualified", "getSheetColumns", 0).columns.length, 0);
+    assert.equal(sheetCall("style-qualified", 1, "listColumnOverrides").length, 2);
+    assert.equal(sheetCall("style-qualified", 0, "listColumnOverrides").length, 0);
   } finally {
     closeSession("style-qualified");
   }
@@ -845,11 +893,12 @@ test("caps a bounded style pass at the cell limit and leaves the session clean",
       /spans 100001 cells/,
     );
     assert.equal(sessionDirty("style-cap"), false);
-    assert.equal(engine("style-cap", "cellCount", 0).value, 0);
+    assert.equal(storedCellCount("style-cap", 0, 1001, 100), 0);
+    assert.equal(storedCellCount("style-cap", 0, 100_001, 1), 0);
 
     // Exactly at the limit is allowed and every cell is materialized.
     styleSessionRange("style-cap", "A1:CV1000", { font: { bold: true } }, 0, "default");
-    assert.equal(engine("style-cap", "cellCount", 0).value, MAX_STYLED_CELLS);
+    assert.equal(storedCellCount("style-cap", 0, 1001, 100), MAX_STYLED_CELLS);
     assert.equal(effectiveAt("style-cap", 999, 99).source, 0);
   } finally {
     closeSession("style-cap");
@@ -871,7 +920,7 @@ test("counts bounded cells cumulatively across layout style operations", async (
       /style operations exceed the 100000-cell limit/,
     );
     assert.equal(sessionDirty("layout-cap"), false);
-    assert.equal(engine("layout-cap", "cellCount", 0).value, 0);
+    assert.equal(storedCellCount("layout-cap", 0, 10_001, 23), 0);
 
     // Whole rows and columns count as zero, so they fit beside a full allotment.
     // The two blocks are adjacent because the engine stores a row densely
@@ -883,7 +932,7 @@ test("counts bounded cells cumulatively across layout style operations", async (
       half("1:1048576"),
     ]);
     assert.equal(applied.operations.length, 4);
-    assert.equal(engine("layout-cap", "cellCount", 0).value, MAX_STYLED_CELLS);
+    assert.equal(storedCellCount("layout-cap", 0, 5001, 21), MAX_STYLED_CELLS);
     assert.equal(sessionDirty("layout-cap"), true);
   } finally {
     closeSession("layout-cap");
@@ -902,14 +951,14 @@ test("refuses an outline on whole lines in a batch before applying any operation
       /outline border needs a bounded range/,
     );
     // The first operation was valid, but preflight rejects the batch as a whole.
-    assert.equal(engine("layout-outline-batch", "cellCount", 0).value, 0);
+    assert.equal(storedCellCount("layout-outline-batch", 0, 10, 10), 0);
     assert.equal(sessionDirty("layout-outline-batch"), false);
 
     // "all" on whole lines is fine: only an outline needs edges.
     applySessionLayout("layout-outline-batch", 0, [
       { type: "style", range: "C:D", style: { border: { all: "thin" } } },
     ]);
-    assert.equal(engine("layout-outline-batch", "getSheetColumns", 0).columns.length, 1);
+    assert.equal(sheetCall("layout-outline-batch", 0, "listColumnOverrides").length, 1);
   } finally {
     closeSession("layout-outline-batch");
   }
@@ -928,9 +977,22 @@ test("styles far-apart columns over many rows without dense row storage", async 
         "existing",
       );
     }
-    assert.equal(callWorkbookMethod("style-far-columns", "cellCount", [0]).result.value, 100_000);
-    const last = callWorkbookMethod("style-far-columns", "cellAt", [0, 99_999]).result;
-    assert.deepEqual([last.row, last.col], [49_999, 16_383]);
+    const handle = getSession("style-far-columns").workbook.sheet(0);
+    let styled = 0;
+    for (let row = 0; row < 50_001; row += 1) {
+      for (const col of [0, 8000, 16_383]) {
+        if (handle.ooxml.getCellXfIndex(row, col) !== null) {
+          styled += 1;
+        }
+      }
+    }
+    // Only the two stated columns carry cells; the gap between them stays empty.
+    assert.equal(styled, 100_000);
+    assert.notEqual(handle.ooxml.getCellXfIndex(49_999, 16_383), null);
+    assert.equal(handle.ooxml.getCellXfIndex(50_000, 16_383), null);
+    // Dense rows would store 16,384 cells per row (about 800 million): the engine reports no
+    // stored-cell count, so memory use stands in for it.
+    assert.ok(getSession("style-far-columns").workbook.getMemoryUsage() < 64 * 1024 * 1024);
 
     // A fill-only pass over a cell carrying its own style reports only that base.
     const applied = styleSessionRange(

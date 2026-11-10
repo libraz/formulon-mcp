@@ -3,8 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { test } from "vitest";
+import { afterAll, beforeAll, test } from "vitest";
 import { formulonModule, loadWorkbook } from "../dist/formulon.js";
+import { getSession } from "../dist/session/state.js";
 import {
   applySessionMutations,
   callWorkbookMethod,
@@ -18,18 +19,19 @@ import {
   setSessionDefinedName,
   setSessionRange,
   setSessionSheetView,
-  WORKBOOK_METHODS,
 } from "../dist/sessions.js";
+import { getWorkbookApiCatalog } from "../dist/workbook-api.js";
+import { buildCallFixture, SHEET } from "./helpers/call-fixture.js";
 
 const FORMULON_VERSION = createRequire(import.meta.url)("@libraz/formulon/package.json").version;
 
 test("evaluates a formula through Formulon", async () => {
   const module = await formulonModule();
-  const result = module.evalFormula("=SUM(1,2,3)");
-  assert.equal(module.versionString(), FORMULON_VERSION);
-  assert.equal(result.status.ok, true);
-  assert.equal(result.value.kind, 1);
-  assert.equal(result.value.number, 6);
+  assert.equal(module.getVersion(), FORMULON_VERSION);
+  assert.equal(module.evaluateFormula("=SUM(1,2,3)"), 6);
+  const typed = module.evaluateTypedFormula("=SUM(1,2,3)");
+  assert.equal(typed.kind, module.ValueKind.Number);
+  assert.equal(typed.number, 6);
 });
 
 test("saves and reloads a workbook", async () => {
@@ -50,14 +52,11 @@ test("saves and reloads a workbook", async () => {
 
   const wb = await loadWorkbook(file);
   try {
-    const status = wb.recalc();
-    assert.equal(status.ok, true);
-    const a1 = wb.getValue(0, 0, 0);
-    assert.equal(a1.status.ok, true);
-    assert.equal(a1.value.kind, 1);
-    assert.equal(a1.value.number, 30);
+    wb.recalc();
+    assert.equal(wb.sheet(0).getValue(0, 0), 30);
+    assert.equal(wb.sheet(0).getTypedValue(0, 0).kind, (await formulonModule()).ValueKind.Number);
   } finally {
-    wb.delete();
+    wb.dispose();
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -65,13 +64,12 @@ test("saves and reloads a workbook", async () => {
 test("names error codes outside the classic seven", async () => {
   await openSession(undefined, "error-names");
   try {
-    assert.equal(
-      callWorkbookMethod("error-names", "addMerge", [
-        0,
-        { firstRow: 0, firstCol: 0, lastRow: 0, lastCol: 1 },
-      ]).result.ok,
-      true,
-    );
+    assert.deepEqual(callWorkbookMethod("error-names", SHEET, "addMerge", ["A1:B1"]).result, {
+      firstRow: 0,
+      firstCol: 0,
+      lastRow: 0,
+      lastCol: 1,
+    });
     const written = applySessionMutations(
       "error-names",
       [{ type: "formula", a1: "Sheet1!A1", formula: "=SEQUENCE(2)" }],
@@ -86,14 +84,119 @@ test("names error codes outside the classic seven", async () => {
   }
 });
 
-test("keeps the workbook method allowlist callable on the engine", async () => {
-  const module = await formulonModule();
-  const wb = module.Workbook.createDefault();
+/** Every function member of an engine handle, own and inherited, without `Object.prototype`'s. */
+function functionMembers(handle) {
+  const names = new Set();
+  for (
+    let proto = Object.getPrototypeOf(handle);
+    proto && proto !== Object.prototype;
+    proto = Object.getPrototypeOf(proto)
+  ) {
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (typeof handle[name] === "function") {
+        names.add(name);
+      }
+    }
+  }
+  return names;
+}
+
+/** Walks a catalog kind's hops from `workbook`, the way the dispatcher does, with the fixture's keys. */
+function resolveReceiver(workbook, kind, target) {
+  let receiver = workbook;
+  for (const hop of kind.hops) {
+    receiver = "property" in hop ? receiver[hop.property] : receiver[hop.method](target[hop.key]);
+  }
+  return receiver;
+}
+
+/**
+ * Members the catalog leaves out on purpose: the session owns closing and saving, the iterative
+ * hook takes a JS callback, and snapshots, restores, image bytes and the row iterator cannot travel as JSON.
+ */
+const UNEXPOSED_MEMBERS = new Set([
+  "constructor",
+  "dispose",
+  "save",
+  "saveWithDiagnostics",
+  "setIterativeProgress",
+  "snapshotRangeXfs",
+  "restoreRangeXfs",
+  "remapRangeXfs",
+  "snapshot",
+  "iterRows",
+  "addPicture",
+  "restoreDrawing",
+]);
+
+let fixtureDir;
+let fixtureTargets;
+
+beforeAll(async () => {
+  fixtureDir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-engine-"));
+  await openSession(undefined, "engine-fixture");
   try {
-    const missing = Array.from(WORKBOOK_METHODS).filter((name) => typeof wb[name] !== "function");
+    fixtureTargets = await buildCallFixture(
+      "engine-fixture",
+      fixtureDir,
+      path.join(fixtureDir, "fixture.xlsx"),
+    );
+  } finally {
+    closeSession("engine-fixture");
+  }
+});
+
+afterAll(async () => {
+  await rm(fixtureDir, { recursive: true, force: true });
+});
+
+test("keeps the method catalog callable on the engine", async () => {
+  const catalog = getWorkbookApiCatalog();
+  await openSession(path.join(fixtureDir, "fixture.xlsx"), "engine-callable");
+  try {
+    const { workbook } = getSession("engine-callable");
+    const missing = [];
+    for (const kind of catalog.kinds) {
+      const receiver = resolveReceiver(workbook, kind, fixtureTargets[kind.kind]);
+      for (const method of catalog.methods) {
+        if (method.target.kind === kind.kind && typeof receiver[method.name] !== "function") {
+          missing.push(`${kind.kind}.${method.name}`);
+        }
+      }
+    }
     assert.deepEqual(missing, []);
   } finally {
-    wb.delete();
+    closeSession("engine-callable");
+  }
+});
+
+test("exposes every engine handle method that is not deliberately withheld", async () => {
+  // The complementary direction of the guard above: that test catches a renamed or dropped
+  // method, this one catches an engine release adding methods that silently stay unreachable
+  // through formulon_workbook_call.
+  const catalog = getWorkbookApiCatalog();
+  await openSession(path.join(fixtureDir, "fixture.xlsx"), "engine-reachable");
+  try {
+    const { workbook } = getSession("engine-reachable");
+    const unreachable = [];
+    for (const kind of catalog.kinds) {
+      // `Sheet.drawing(id)` returns the object's own class, so a Drawing receiver has its members.
+      if (kind.kind === "Drawing") {
+        continue;
+      }
+      const receiver = resolveReceiver(workbook, kind, fixtureTargets[kind.kind]);
+      const cataloged = new Set(
+        catalog.methods.filter((m) => m.target.kind === kind.kind).map((m) => m.name),
+      );
+      for (const name of functionMembers(receiver)) {
+        if (!(cataloged.has(name) || UNEXPOSED_MEMBERS.has(name))) {
+          unreachable.push(`${kind.kind}.${name}`);
+        }
+      }
+    }
+    assert.deepEqual(unreachable, []);
+  } finally {
+    closeSession("engine-reachable");
   }
 });
 
@@ -132,20 +235,16 @@ test("reports the written container and its loss counters", async () => {
 test("pins the workbook clock so NOW and TODAY are reproducible", async () => {
   await openSession(undefined, "clock");
   try {
-    assert.equal(
-      callWorkbookMethod("clock", "setPinnedNow", [2026, 8, 18, 9, 30, 0]).result.ok,
-      true,
-    );
-    assert.deepEqual(callWorkbookMethod("clock", "pinnedNow", []).result, {
-      status: { ok: true, status: 0, message: "", context: "" },
-      now: {
-        year: 2026,
-        month: 8,
-        day: 18,
-        hour: 9,
-        minute: 30,
-        second: 0,
-      },
+    callWorkbookMethod("clock", undefined, "setPinnedNow", [
+      { year: 2026, month: 8, day: 18, hour: 9, minute: 30, second: 0 },
+    ]);
+    assert.deepEqual(callWorkbookMethod("clock", undefined, "getPinnedNow", []).result, {
+      year: 2026,
+      month: 8,
+      day: 18,
+      hour: 9,
+      minute: 30,
+      second: 0,
     });
     applySessionMutations(
       "clock",
@@ -156,11 +255,8 @@ test("pins the workbook clock so NOW and TODAY are reproducible", async () => {
     const expected = (Date.UTC(2026, 7, 18) - Date.UTC(1970, 0, 1)) / 86_400_000 + 25569;
     assert.equal(getSessionCell("clock", 0, 0, 0).value.value, expected);
 
-    assert.equal(callWorkbookMethod("clock", "clearPinnedNow", []).result.ok, true);
-    assert.deepEqual(callWorkbookMethod("clock", "pinnedNow", []).result, {
-      status: { ok: true, status: 0, message: "", context: "" },
-      now: null,
-    });
+    callWorkbookMethod("clock", undefined, "setPinnedNow", [null]);
+    assert.equal(callWorkbookMethod("clock", undefined, "getPinnedNow", []).result, null);
   } finally {
     closeSession("clock");
   }
@@ -179,20 +275,24 @@ test("creates, updates, and removes a worksheet table", async () => {
       0,
       false,
     );
-    const created = callWorkbookMethod("tables", "createTable", [
-      { sheetIndex: 0, ref: "A1:B2", name: "Items", columns: ["item", "qty"] },
+    const call = (target, method, args = []) =>
+      callWorkbookMethod("tables", target, method, args).result;
+    const table = { kind: "Table", table: "Items" };
+    const created = call(SHEET, "addTable", [
+      { range: "A1:B2", name: "Items", columns: ["item", "qty"] },
     ]);
-    assert.equal(created.result.status.ok, true);
-    assert.equal(callWorkbookMethod("tables", "tableCount", []).result.value, 1);
-    assert.equal(callWorkbookMethod("tables", "tableAt", [0]).result.ref, "A1:B2");
+    assert.equal(created.handle, "Table");
+    assert.equal(created.properties.name, "Items");
+    assert.equal(call(SHEET, "listTables").length, 1);
+    assert.deepEqual(call(table, "getProperties").range, {
+      sheet: 0,
+      rect: { firstRow: 0, firstCol: 0, lastRow: 1, lastCol: 1 },
+    });
 
-    assert.equal(
-      callWorkbookMethod("tables", "updateTable", [0, { ref: "A1:B3" }]).result.ok,
-      true,
-    );
-    assert.equal(callWorkbookMethod("tables", "tableAt", [0]).result.ref, "A1:B3");
-    assert.equal(callWorkbookMethod("tables", "removeTable", [0]).result.ok, true);
-    assert.equal(callWorkbookMethod("tables", "tableCount", []).result.value, 0);
+    call(table, "update", [{ range: "A1:B3" }]);
+    assert.equal(call(table, "getProperties").range.rect.lastRow, 2);
+    call(SHEET, "removeTable", ["Items"]);
+    assert.equal(call(SHEET, "listTables").length, 0);
   } finally {
     closeSession("tables");
   }
@@ -202,13 +302,8 @@ test("round-trips a cell phonetic guide", async () => {
   await openSession(undefined, "phonetic");
   try {
     applySessionMutations("phonetic", [{ type: "text", a1: "Sheet1!A1", value: "山田" }], false);
-    assert.equal(
-      callWorkbookMethod("phonetic", "setCellPhonetic", [0, 0, 0, "ヤマダ"]).result.ok,
-      true,
-    );
-    const read = callWorkbookMethod("phonetic", "getCellPhonetic", [0, 0, 0]).result;
-    assert.equal(read.status.ok, true);
-    assert.equal(read.value, "ヤマダ");
+    callWorkbookMethod("phonetic", SHEET, "setCellPhonetic", [0, 0, "ヤマダ"]);
+    assert.equal(callWorkbookMethod("phonetic", SHEET, "getCellPhonetic", [0, 0]).result, "ヤマダ");
   } finally {
     closeSession("phonetic");
   }
@@ -222,44 +317,23 @@ test("round-trips phonetic guides span by span", async () => {
       [{ type: "text", a1: "Sheet1!A1", value: "山田太郎" }],
       false,
     );
+    const call = (method, args) => callWorkbookMethod("phonetic-runs", SHEET, method, args).result;
     const runs = [
-      { sb: 0, eb: 2, text: "ヤマダ" },
-      { sb: 2, eb: 4, text: "タロウ" },
+      { start: 0, end: 2, text: "ヤマダ" },
+      { start: 2, end: 4, text: "タロウ" },
     ];
-    assert.equal(
-      callWorkbookMethod("phonetic-runs", "setCellPhoneticRuns", [0, 0, 0, runs]).result.ok,
-      true,
-    );
-    const read = callWorkbookMethod("phonetic-runs", "getCellPhoneticRuns", [0, 0, 0]).result;
-    assert.equal(read.status.ok, true);
-    assert.deepEqual(read.runs, runs);
+    call("setCellPhoneticRuns", [0, 0, runs]);
+    assert.deepEqual(call("getCellPhoneticRuns", [0, 0]), runs);
     // The flattening read concatenates the readings rather than reporting spans.
-    assert.equal(
-      callWorkbookMethod("phonetic-runs", "getCellPhonetic", [0, 0, 0]).result.value,
-      "ヤマダタロウ",
-    );
+    assert.equal(call("getCellPhonetic", [0, 0]), "ヤマダタロウ");
 
     // Rendering is set apart from the readings, and setting it leaves them be.
-    assert.equal(
-      callWorkbookMethod("phonetic-runs", "setCellPhoneticProperties", [
-        0,
-        0,
-        0,
-        { fontId: 0, type: 2, alignment: 1 },
-      ]).result.ok,
-      true,
-    );
-    const properties = callWorkbookMethod(
-      "phonetic-runs",
-      "getCellPhoneticProperties",
-      [0, 0, 0],
-    ).result;
+    call("setCellPhoneticProperties", [0, 0, { fontIndex: 0, type: 2, alignment: 1 }]);
+    const properties = call("getCellPhoneticProperties", [0, 0]);
     assert.equal(properties.type, 2);
     assert.equal(properties.alignment, 1);
-    assert.deepEqual(
-      callWorkbookMethod("phonetic-runs", "getCellPhoneticRuns", [0, 0, 0]).result.runs,
-      runs,
-    );
+    assert.equal(properties.stated, true);
+    assert.deepEqual(call("getCellPhoneticRuns", [0, 0]), runs);
   } finally {
     closeSession("phonetic-runs");
   }
@@ -291,7 +365,7 @@ test("supports workbook structure and metadata helpers", async () => {
       true,
     );
 
-    const metadata = getSessionMetadata("helpers", "functions");
+    const metadata = await getSessionMetadata("helpers", "functions");
     assert.equal(Array.isArray(metadata.value), true);
     assert.equal(metadata.value.includes("SUM"), true);
   } finally {
@@ -299,68 +373,31 @@ test("supports workbook structure and metadata helpers", async () => {
   }
 });
 
-test("supports allowlisted low-level workbook calls and rejects unknown methods", async () => {
+test("supports catalog-listed workbook calls and rejects unknown methods", async () => {
   await openSession(undefined, "low-level");
   try {
-    const sheetCount = callWorkbookMethod("low-level", "sheetCount", []);
-    assert.equal(sheetCount.result.value, 1);
+    const sheets = callWorkbookMethod("low-level", undefined, "listSheets", []);
+    assert.equal(sheets.result.length, 1);
+    assert.equal(sheets.method, "listSheets");
+    assert.deepEqual(sheets.target, { kind: "Workbook" });
 
-    const merge = callWorkbookMethod("low-level", "addMerge", [
-      0,
-      { firstRow: 0, firstCol: 0, lastRow: 0, lastCol: 1 },
-    ]);
-    assert.equal(merge.result.ok, true);
+    const merge = callWorkbookMethod("low-level", SHEET, "addMerge", ["A1:B1"]);
+    assert.deepEqual(merge.result, { firstRow: 0, firstCol: 0, lastRow: 0, lastCol: 1 });
+    assert.equal(merge.session.dirty, true);
 
-    const merges = callWorkbookMethod("low-level", "getMerges", [0]);
-    assert.deepEqual(merges.result.items, [{ firstRow: 0, firstCol: 0, lastRow: 0, lastCol: 1 }]);
+    const merges = callWorkbookMethod("low-level", SHEET, "listMerges", []);
+    assert.deepEqual(merges.result, [{ firstRow: 0, firstCol: 0, lastRow: 0, lastCol: 1 }]);
 
-    assert.throws(() => callWorkbookMethod("low-level", "constructor", []), /not allowlisted/);
     assert.throws(
-      () => callWorkbookMethod("low-level", "pivotFieldAddAggregation", [0, 0, 0, 0]),
-      /not allowlisted/,
+      () => callWorkbookMethod("low-level", undefined, "constructor", []),
+      /not a callable method/,
+    );
+    // A method of another kind is not callable on the workbook.
+    assert.throws(
+      () => callWorkbookMethod("low-level", undefined, "addDataField", []),
+      /Workbook\.addDataField is not a callable method/,
     );
   } finally {
     closeSession("low-level");
-  }
-});
-
-/**
- * Engine methods deliberately kept out of `WORKBOOK_METHODS`. Saving is routed
- * through `formulon_save_session` so a session keeps its bookkeeping, the
- * iterative-progress hook takes a JS callback no JSON argument can express,
- * image insertion and probing take raw bytes and go through the image tool,
- * image and range-style snapshots round-trip opaque bytes, and the rest are
- * handle lifecycle rather than workbook operations.
- */
-const UNEXPOSED_WORKBOOK_METHODS = new Set([
-  "constructor",
-  "delete",
-  "deleteLater",
-  "insertImage",
-  "isValid",
-  "probeImage",
-  "restoreDrawing",
-  "restoreRangeStyle",
-  "save",
-  "saveAs",
-  "saveWithDiagnostics",
-  "setIterativeProgress",
-  "snapshotDrawing",
-  "snapshotRangeStyle",
-]);
-
-test("exposes every engine workbook method that is not deliberately withheld", async () => {
-  const module = await formulonModule();
-  const wb = module.Workbook.createDefault();
-  try {
-    // The complementary direction of the guard above: that test catches a
-    // renamed or dropped method, this one catches an engine release adding
-    // methods that silently stay unreachable through formulon_workbook_call.
-    const unreachable = Object.getOwnPropertyNames(Object.getPrototypeOf(wb))
-      .filter((name) => typeof wb[name] === "function")
-      .filter((name) => !(WORKBOOK_METHODS.has(name) || UNEXPOSED_WORKBOOK_METHODS.has(name)));
-    assert.deepEqual(unreachable, []);
-  } finally {
-    wb.delete();
   }
 });

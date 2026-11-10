@@ -1,5 +1,5 @@
 import { cellToA1 } from "../a1.js";
-import { assertStatus, isDate1904, normalizeFormula, type Workbook } from "../formulon.js";
+import { isDate1904, normalizeFormula, type Workbook } from "../formulon.js";
 import { classifyNumberFormat, isoToExcelSerial } from "../numfmt.js";
 import { applyRangeStyle, type StyleInput } from "../styles.js";
 import type {
@@ -127,29 +127,25 @@ function writeValue(layout: Layout, rowIndex: number, col: number, value: CellLi
   if (value === null) {
     return;
   }
-  const { wb, sheet } = layout;
-  const where = `write ${ref(rowIndex, col)}`;
+  const handle = layout.wb.sheet(layout.sheet);
   if (typeof value === "number") {
-    assertStatus(wb.setNumber(sheet, rowIndex, col, value), where);
+    handle.setNumber(rowIndex, col, value);
   } else if (typeof value === "boolean") {
-    assertStatus(wb.setBool(sheet, rowIndex, col, value), where);
+    handle.setBool(rowIndex, col, value);
   } else {
-    assertStatus(wb.setText(sheet, rowIndex, col, value), where);
+    handle.setText(rowIndex, col, value);
   }
 }
 
 function writeFormula(layout: Layout, rowIndex: number, col: number, formula: string): void {
-  assertStatus(
-    layout.wb.setFormula(layout.sheet, rowIndex, col, normalizeFormula(formula)),
-    `write formula at ${ref(rowIndex, col)}`,
-  );
+  layout.wb.sheet(layout.sheet).setFormula(rowIndex, col, normalizeFormula(formula));
 }
 
 function mergeRect(layout: Layout, rect: Rect): void {
   if (rect.lastCol <= rect.firstCol && rect.lastRow <= rect.firstRow) {
     return;
   }
-  assertStatus(layout.wb.addMerge(layout.sheet, rect), `merge ${rectRef(rect)}`);
+  layout.wb.sheet(layout.sheet).addMerge(rect);
 }
 
 function style(layout: Layout, rect: Rect, input: StyleInput): void {
@@ -375,10 +371,7 @@ export function placeTable(layout: Layout, block: TableBlock, top: number): Plac
   block.columns.forEach((column, index) => {
     const col = layout.firstCol + index;
     if (column.width !== undefined) {
-      assertStatus(
-        layout.wb.setColumnWidth(layout.sheet, col, col, column.width),
-        `set width of column ${column.header}`,
-      );
+      layout.wb.sheet(layout.sheet).setColumnWidth(col, col, column.width);
     }
     if (bodyRows === 0) {
       return;

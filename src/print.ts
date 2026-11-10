@@ -1,15 +1,19 @@
+import { indexToCol } from "./a1.js";
 import {
-  assertStatus,
   type HeaderFooterInput,
-  type PageMarginsInput,
+  okStatus,
   type PageSetupInput,
   type PrintOptionsInput,
+  rectA1,
   resultToJson,
-  type Status,
-  statusToJson,
+  type Sheet,
+  type StatusJson,
+  sheetAt,
   type Workbook,
 } from "./formulon.js";
 import { rangeA1 } from "./session/shared.js";
+
+const POINTS_PER_INCH = 72;
 
 /**
  * Worksheet print settings: page setup, margins, print options, header/footer,
@@ -23,10 +27,8 @@ import { rangeA1 } from "./session/shared.js";
  */
 
 /**
- * `<pageSetup orientation>` as the engine encodes it: leaving the attribute off
- * (the printer default), portrait, or landscape. Declared here rather than
- * imported because the engine keeps `Orientation` a compile-time-only union
- * with no runtime table to defer to.
+ * `<pageSetup orientation>` as a tool states it: leaving the attribute off
+ * (the printer default), portrait, or landscape.
  */
 const ORIENTATION = ["default", "portrait", "landscape"] as const;
 
@@ -41,6 +43,15 @@ export type PageSetupSpec = {
   fitToPage?: boolean;
 };
 
+export type PageMarginsSpec = {
+  left?: number;
+  right?: number;
+  top?: number;
+  bottom?: number;
+  header?: number;
+  footer?: number;
+};
+
 export type PrintTitlesSpec = {
   repeatRows?: string;
   repeatCols?: string;
@@ -48,9 +59,9 @@ export type PrintTitlesSpec = {
 
 export type PrintSettingsInput = {
   pageSetup?: PageSetupSpec;
-  margins?: PageMarginsInput;
-  printOptions?: PrintOptionsInput;
-  headerFooter?: HeaderFooterInput;
+  margins?: PageMarginsSpec;
+  printOptions?: Partial<PrintOptionsInput>;
+  headerFooter?: Partial<HeaderFooterInput>;
   /** Comma-separated A1 ranges, for example `A1:F40` or `A1:B10,D5:E20`. Empty removes it. */
   printArea?: string;
   printTitles?: PrintTitlesSpec;
@@ -135,68 +146,124 @@ export const PRINT_PRESETS: Record<string, PrintSettingsInput> = Object.freeze({
 
 export const PRINT_PRESET_NAMES = Object.keys(PRINT_PRESETS) as [string, ...string[]];
 
-function orientationCode(name: OrientationName): number {
-  const code = ORIENTATION.indexOf(name);
-  if (code < 0) {
-    throw new Error(`unknown orientation: ${name} (expected ${ORIENTATION.join(", ")})`);
-  }
-  return code;
+const PAGE_ORIENTATION = { portrait: 0, landscape: 1 } as const;
+
+function orientationCode(name: OrientationName): PageSetupInput["orientation"] | null {
+  return name === "default" ? null : PAGE_ORIENTATION[name];
 }
 
-function orientationName(code: number): string {
-  return ORIENTATION[code] ?? `unknown(${code})`;
+function orientationName(code: number | null): string {
+  if (code === null) {
+    return "default";
+  }
+  return ORIENTATION[code + 1] ?? `unknown(${code})`;
 }
 
 /** Pages listed individually in a print-settings read; the count is always complete. */
 const MAX_REPORTED_PAGES = 50;
 
-function pageBreaks(indices: number[], manual: boolean[]) {
-  return indices.map((index, i) => ({ index, manual: manual[i] === true }));
+function pageBreaks(breaks: readonly { index: number; manual: boolean }[]) {
+  return breaks.map(({ index, manual }) => ({ index, manual }));
+}
+
+function spanText(span: { first: number; last: number } | null | undefined, axis: "row" | "col") {
+  if (!span) {
+    return "";
+  }
+  const name = (index: number) => (axis === "row" ? `${index + 1}` : indexToCol(index));
+  return `${name(span.first)}:${name(span.last)}`;
 }
 
 /** Reads every print setting a sheet carries, plus the page count they produce. */
-export function readPrintSettings(wb: Workbook, sheet: number) {
-  const pageSetup = wb.getSheetPageSetup(sheet);
-  assertStatus(pageSetup.status, "read page setup");
-  const margins = wb.getSheetPageMargins(sheet);
-  assertStatus(margins.status, "read page margins");
-  const printArea = wb.getSheetPrintArea(sheet);
-  assertStatus(printArea.status, "read print area");
-  const printTitles = wb.getSheetPrintTitles(sheet);
-  assertStatus(printTitles.status, "read print titles");
-  const rowBreaks = wb.getSheetRowBreaks(sheet);
-  assertStatus(rowBreaks.status, "read row breaks");
-  const colBreaks = wb.getSheetColBreaks(sheet);
-  assertStatus(colBreaks.status, "read column breaks");
-  const pagination = wb.paginate(sheet);
-  assertStatus(pagination.status, "paginate sheet");
+export function readPrintSettings(wb: Workbook, sheetIndex: number) {
+  const sheet = sheetAt(wb, sheetIndex);
+  const pageSetup = sheet.getPageSetup();
+  const margins = sheet.getPageMargins();
+  const printArea = sheet.getPrintArea();
+  const printTitles = sheet.getPrintTitles();
+  const rowBreaks = sheet.listRowBreaks();
+  const colBreaks = sheet.listColumnBreaks();
+  const pagination = sheet.getPagination();
 
-  const { status: _setupStatus, orientation, ...setupRest } = pageSetup;
-  const { status: _marginStatus, ...marginRest } = margins;
   return {
-    pageSetup: { orientation: orientationName(orientation), ...setupRest },
-    margins: marginRest,
-    printArea: printArea.ranges,
-    printTitles: { repeatRows: printTitles.repeatRows, repeatCols: printTitles.repeatCols },
-    rowBreaks: resultToJson(rowBreaks.breaks),
-    colBreaks: resultToJson(colBreaks.breaks),
+    pageSetup: {
+      orientation: orientationName(pageSetup.orientation),
+      paperSize: pageSetup.paperSize,
+      scale: pageSetup.scalePct,
+      fitToWidth: pageSetup.fitToWidth,
+      fitToHeight: pageSetup.fitToHeight,
+      fitToPage: pageSetup.fitToPage,
+      orientationStated: pageSetup.orientation !== null,
+      paperSizeStated: pageSetup.paperSizeStated,
+      scaleStated: pageSetup.scalePctStated,
+      fitToWidthStated: pageSetup.fitToWidthStated,
+      fitToHeightStated: pageSetup.fitToHeightStated,
+      fitToPageStated: pageSetup.fitToPageStated,
+    },
+    margins: {
+      left: margins.leftIn,
+      right: margins.rightIn,
+      top: margins.topIn,
+      bottom: margins.bottomIn,
+      header: margins.headerIn,
+      footer: margins.footerIn,
+      leftStated: margins.leftInStated,
+      rightStated: margins.rightInStated,
+      topStated: margins.topInStated,
+      bottomStated: margins.bottomInStated,
+      headerStated: margins.headerInStated,
+      footerStated: margins.footerInStated,
+    },
+    printArea: (printArea ?? []).map(rectA1).join(","),
+    printTitles: {
+      repeatRows: spanText(printTitles?.rows, "row"),
+      repeatCols: spanText(printTitles?.columns, "col"),
+    },
+    rowBreaks: resultToJson(
+      rowBreaks.map((b) => ({ id: b.row, min: b.first, max: b.last, manual: b.manual })),
+    ),
+    colBreaks: resultToJson(
+      colBreaks.map((b) => ({ id: b.col, min: b.first, max: b.last, manual: b.manual })),
+    ),
     // Neither of these has a structured getter, so the stored fragment is the
     // only way to read back what a typed setter wrote.
-    printOptionsXml: wb.getSheetPrintOptionsXml(sheet).xml,
-    headerFooterXml: wb.getSheetHeaderFooterXml(sheet).xml,
-    sheetPrXml: wb.getSheetSheetPrXml(sheet).xml,
+    printOptionsXml: sheet.ooxml.getPrintOptionsXml() ?? "",
+    headerFooterXml: sheet.ooxml.getHeaderFooterXml() ?? "",
+    sheetPrXml: sheet.ooxml.getSheetPrXml() ?? "",
     pageCount: pagination.pageCount,
     // The layout the engine actually resolves: paper and margins in points.
     layout: {
       paper: pagination.paper,
-      marginsPt: pagination.margins,
-      printable: pagination.printable,
-      scale: pagination.scale,
+      marginsPt: {
+        left: pagination.margins.leftIn * POINTS_PER_INCH,
+        right: pagination.margins.rightIn * POINTS_PER_INCH,
+        top: pagination.margins.topIn * POINTS_PER_INCH,
+        bottom: pagination.margins.bottomIn * POINTS_PER_INCH,
+        header: pagination.margins.headerIn * POINTS_PER_INCH,
+        footer: pagination.margins.footerIn * POINTS_PER_INCH,
+      },
+      printable: {
+        x: pagination.printable.x,
+        y: pagination.printable.y,
+        width: pagination.printable.widthPt,
+        height: pagination.printable.heightPt,
+      },
+      // The effective scale as a factor (1 is 100%).
+      scale: pagination.scalePct / 100,
       pageOrder: pagination.pageOrder === 0 ? "downThenOver" : "overThenDown",
-      rowPageBreaks: pageBreaks(pagination.horizontalBreaks, pagination.horizontalBreakManual),
-      colPageBreaks: pageBreaks(pagination.verticalBreaks, pagination.verticalBreakManual),
+      rowPageBreaks: pageBreaks(
+        pagination.rowBreaks.map((b) => ({ index: b.row, manual: b.manual })),
+      ),
+      colPageBreaks: pageBreaks(
+        pagination.columnBreaks.map((b) => ({ index: b.col, manual: b.manual })),
+      ),
       pages: pagination.pages.slice(0, MAX_REPORTED_PAGES).map((page) => ({
-        ref: rangeA1(page.firstRow, page.firstCol, page.lastRow, page.lastCol),
+        ref: rangeA1(
+          page.range.firstRow,
+          page.range.firstCol,
+          page.range.lastRow,
+          page.range.lastCol,
+        ),
         ...(pagination.printArea.length > 1 ? { areaIndex: page.areaIndex } : {}),
       })),
       pagesTruncated: pagination.pages.length > MAX_REPORTED_PAGES,
@@ -204,72 +271,86 @@ export function readPrintSettings(wb: Workbook, sheet: number) {
   };
 }
 
-type AppliedStep = { setting: string; status: ReturnType<typeof statusToJson> };
+type AppliedStep = { setting: string; status: StatusJson };
+
+const XML_SETTERS = [
+  ["pageSetupXml", "setPageSetupXml"],
+  ["pageMarginsXml", "setPageMarginsXml"],
+  ["printOptionsXml", "setPrintOptionsXml"],
+  ["headerFooterXml", "setHeaderFooterXml"],
+  ["sheetPrXml", "setSheetPrXml"],
+] as const satisfies readonly (readonly [keyof PrintSettingsInput, keyof Sheet["ooxml"]])[];
 
 /**
  * Applies the print settings present in `input`, leaving every other setting
  * alone. Each group is a partial update at the engine level too, so stating one
  * margin does not reset the rest.
  */
-export function writePrintSettings(wb: Workbook, sheet: number, input: PrintSettingsInput) {
+export function writePrintSettings(wb: Workbook, sheetIndex: number, input: PrintSettingsInput) {
+  const sheet = sheetAt(wb, sheetIndex);
   const applied: AppliedStep[] = [];
-  const step = (setting: string, status: Status) => {
-    assertStatus(status, `set ${setting}`);
-    applied.push({ setting, status: statusToJson(status) });
+  const step = (setting: string, apply: () => void) => {
+    apply();
+    applied.push({ setting, status: okStatus() });
   };
 
   if (input.pageSetup) {
-    const { orientation, ...rest } = input.pageSetup;
-    const setup: PageSetupInput = { ...rest };
-    if (orientation !== undefined) {
-      setup.orientation = orientationCode(orientation) as PageSetupInput["orientation"];
-    }
-    step("pageSetup", wb.setSheetPageSetup(sheet, setup));
+    const { orientation, scale, ...rest } = input.pageSetup;
+    const patch: Parameters<Sheet["updatePageSetup"]>[0] = {
+      ...rest,
+      ...(orientation !== undefined && { orientation: orientationCode(orientation) }),
+      ...(scale !== undefined && { scalePct: scale }),
+    };
+    step("pageSetup", () => sheet.updatePageSetup(patch));
   }
   if (input.margins) {
-    step("margins", wb.setSheetPageMargins(sheet, input.margins));
+    const { left, right, top, bottom, header, footer } = input.margins;
+    const patch: Parameters<Sheet["updatePageMargins"]>[0] = {
+      ...(left !== undefined && { leftIn: left }),
+      ...(right !== undefined && { rightIn: right }),
+      ...(top !== undefined && { topIn: top }),
+      ...(bottom !== undefined && { bottomIn: bottom }),
+      ...(header !== undefined && { headerIn: header }),
+      ...(footer !== undefined && { footerIn: footer }),
+    };
+    step("margins", () => sheet.updatePageMargins(patch));
   }
   if (input.printOptions) {
-    step("printOptions", wb.setSheetPrintOptions(sheet, input.printOptions));
+    const options = input.printOptions;
+    step("printOptions", () => sheet.updatePrintOptions(options));
   }
   if (input.headerFooter) {
-    step("headerFooter", wb.setSheetHeaderFooter(sheet, input.headerFooter));
+    const headerFooter = input.headerFooter;
+    step("headerFooter", () => sheet.updateHeaderFooter(headerFooter));
   }
   if (input.printArea !== undefined) {
-    step("printArea", wb.setSheetPrintArea(sheet, input.printArea));
+    const ranges = input.printArea
+      .split(",")
+      .map((range) => range.trim())
+      .filter((range) => range !== "");
+    step("printArea", () => sheet.setPrintArea(ranges.length > 0 ? ranges : null));
   }
   if (input.printTitles) {
-    step(
-      "printTitles",
-      wb.setSheetPrintTitles(
-        sheet,
-        input.printTitles.repeatRows ?? "",
-        input.printTitles.repeatCols ?? "",
-      ),
+    const { repeatRows, repeatCols } = input.printTitles;
+    step("printTitles", () =>
+      sheet.setPrintTitles({ rows: repeatRows || null, columns: repeatCols || null }),
     );
   }
   if (input.rowBreaks !== undefined || input.colBreaks !== undefined) {
-    // The engine upserts one break at a time and has no per-axis clear, so a
-    // stated break list replaces both axes rather than accumulating onto what
-    // a loaded file already carried.
-    step("clearBreaks", wb.clearSheetBreaks(sheet));
+    // A stated break list replaces both axes rather than accumulating onto
+    // what a loaded file already carried.
+    step("clearBreaks", () => sheet.clearBreaks());
     for (const row of input.rowBreaks ?? []) {
-      step(`rowBreak:${row}`, wb.addSheetRowBreak(sheet, row, true));
+      step(`rowBreak:${row}`, () => sheet.setRowBreak(row, { manual: true }));
     }
     for (const col of input.colBreaks ?? []) {
-      step(`colBreak:${col}`, wb.addSheetColBreak(sheet, col, true));
+      step(`colBreak:${col}`, () => sheet.setColumnBreak(col, { manual: true }));
     }
   }
-  for (const [key, setter] of [
-    ["pageSetupXml", wb.setSheetPageSetupXml],
-    ["pageMarginsXml", wb.setSheetPageMarginsXml],
-    ["printOptionsXml", wb.setSheetPrintOptionsXml],
-    ["headerFooterXml", wb.setSheetHeaderFooterXml],
-    ["sheetPrXml", wb.setSheetSheetPrXml],
-  ] as const) {
+  for (const [key, setter] of XML_SETTERS) {
     const xml = input[key];
     if (xml !== undefined) {
-      step(key, setter.call(wb, sheet, xml));
+      step(key, () => sheet.ooxml[setter](xml));
     }
   }
 

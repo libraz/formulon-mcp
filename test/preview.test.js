@@ -49,14 +49,15 @@ function makeInvoice(id) {
   styleSessionRange(id, "B2:B2", { numberFormat: "yyyy-mm-dd" }, undefined, "existing");
   styleSessionRange(id, "C2:C3", { numberFormat: '"¥"#,##0.00' }, undefined, "existing");
 
-  callWorkbookMethod(id, "setColumnWidth", [0, 0, 0, 4]);
-  callWorkbookMethod(id, "setColumnWidth", [0, 1, 1, 8]);
-  callWorkbookMethod(id, "setColumnWidth", [0, 2, 2, 22]);
-  callWorkbookMethod(id, "setColumnWidth", [0, 3, 3, 5]);
-  callWorkbookMethod(id, "setRowHeight", [0, 0, 30]);
-  callWorkbookMethod(id, "addMerge", [0, { firstRow: 2, firstCol: 2, lastRow: 2, lastCol: 3 }]);
-  callWorkbookMethod(id, "setSheetPrintArea", [0, "A1:D4"]);
-  callWorkbookMethod(id, "addSheetRowBreak", [0, 2, true]);
+  const sheet = { kind: "Sheet", sheet: 0 };
+  callWorkbookMethod(id, sheet, "setColumnWidth", [0, 0, 4]);
+  callWorkbookMethod(id, sheet, "setColumnWidth", [1, 1, 8]);
+  callWorkbookMethod(id, sheet, "setColumnWidth", [2, 2, 22]);
+  callWorkbookMethod(id, sheet, "setColumnWidth", [3, 3, 5]);
+  callWorkbookMethod(id, sheet, "setRowHeight", [0, 0, 30]);
+  callWorkbookMethod(id, sheet, "addMerge", [{ firstRow: 2, firstCol: 2, lastRow: 2, lastCol: 3 }]);
+  callWorkbookMethod(id, sheet, "setPrintArea", ["A1:D4"]);
+  callWorkbookMethod(id, sheet, "setRowBreak", [2, { manual: true }]);
 }
 
 function crc32(buffer) {
@@ -238,18 +239,16 @@ test("a theme-coloured fill renders with the colour the engine resolves", async 
   try {
     const { workbook } = getSession("preview-theme");
     setSessionRange("preview-theme", "A1", [["x"]], undefined, false);
-    const none = { kind: 0, rgb: 0, theme: 0, tint: 0, indexed: 0 };
-    const fill = workbook.addFill({
+    const sheet = workbook.sheet(0);
+    // ColorKind.Theme is 2.
+    const fill = workbook.ooxml.addFill({
       pattern: 1,
-      fgArgb: 0,
-      bgArgb: 0,
-      fg: { ...none, kind: 2, theme: 4, tint: 0.4 },
-      bg: none,
+      foreground: { kind: 2, argb: 0, theme: 4, tint: 0.4, indexed: 0 },
     });
-    const base = workbook.getCellXf(0);
-    const xf = workbook.addXf({ ...base, fillIndex: fill.index, applyFill: true });
-    workbook.setCellXfIndex(0, 0, 0, xf.index);
-    const expected = hex(workbook.getEffectiveStyle(0, 0, 0).fillForeground.argb);
+    const base = workbook.ooxml.getCellXf(0);
+    const xf = workbook.ooxml.addCellXf({ ...base, fillIndex: fill, applyFill: true });
+    sheet.ooxml.setCellXfIndex(0, 0, xf);
+    const expected = hex(sheet.ooxml.getEffectiveStyle(0, 0).fillForeground.argb);
     const result = previewSessionRange("preview-theme", { range: "A1:A1" });
     assert.ok(result.svg.includes(`fill="${expected}"`));
     assert.notEqual(expected, "#000000");
@@ -278,7 +277,7 @@ test("cell text is the engine display text for date, percent, and fraction forma
     styleSessionRange("preview-display", "A3", { numberFormat: "# ?/?" }, undefined, "existing");
     const result = previewSessionRange("preview-display", { range: "A1:A3" });
     for (const row of [0, 1, 2]) {
-      const text = workbook.getDisplayText(0, row, 0).text;
+      const text = workbook.sheet(0).getDisplayText(row, 0).text;
       assert.ok(text.length > 0);
       assert.equal(result.metadata.cells[row].text, text);
       assert.ok(result.svg.includes(`>${text}</tspan>`));
@@ -295,16 +294,13 @@ test("sheet default row height drives preview geometry", async () => {
     const { workbook } = getSession("preview-defaults");
     setSessionRange("preview-defaults", "A1", [["a"], ["b"]], undefined, false);
     const before = previewSessionRange("preview-defaults", { range: "A1:A2" });
-    const status = workbook.setSheetFormatDefaults(0, {
-      defaultRowHeight: 40,
-      hasDefaultRowHeight: true,
-    });
-    assert.equal(status.ok, true);
+    const sheet = workbook.sheet(0);
+    sheet.updateFormatDefaults({ defaultRowHeightPt: 40 });
     const result = previewSessionRange("preview-defaults", { range: "A1:A2" });
-    const expected = workbook.getRowHeightPt(0, 0).value + workbook.getRowHeightPt(0, 1).value;
+    const expected = sheet.getRowHeightPt(0) + sheet.getRowHeightPt(1);
     assert.equal(result.metadata.logicalHeight, expected);
     assert.ok(result.metadata.logicalHeight > before.metadata.logicalHeight);
-    const width = workbook.getColumnWidthPt(0, 0, GeometryMode.Display).value;
+    const width = workbook.sheet(0).getColumnWidthPt(0, GeometryMode.Display);
     assert.equal(result.metadata.logicalWidth, width);
   } finally {
     closeSession("preview-defaults");
@@ -315,16 +311,15 @@ test("merges are read per range and a cutting range is rejected", async () => {
   await openSession(undefined, "preview-merge");
   try {
     setSessionRange("preview-merge", "A1", [["wide", null, "c"]], undefined, false);
-    callWorkbookMethod("preview-merge", "addMerge", [
-      0,
+    callWorkbookMethod("preview-merge", { kind: "Sheet", sheet: 0 }, "addMerge", [
       { firstRow: 0, firstCol: 0, lastRow: 0, lastCol: 1 },
     ]);
     const result = previewSessionRange("preview-merge", { range: "A1:C2" });
     const covered = result.metadata.cells.filter((cell) => cell.text === "wide");
     assert.equal(covered.length, 1);
     const { workbook } = getSession("preview-merge");
-    const first = workbook.getColumnWidthPt(0, 0, GeometryMode.Display).value;
-    const second = workbook.getColumnWidthPt(0, 1, GeometryMode.Display).value;
+    const first = workbook.sheet(0).getColumnWidthPt(0, GeometryMode.Display);
+    const second = workbook.sheet(0).getColumnWidthPt(1, GeometryMode.Display);
     assert.equal(covered[0].width, first + second);
     assert.throws(() => previewSessionRange("preview-merge", { range: "B1:C2" }), /cuts merged/);
     const away = previewSessionRange("preview-merge", { range: "C1:C2" });
@@ -348,22 +343,22 @@ test("pictures render as embedded images and other objects as placeholders", asy
       undefined,
       false,
     );
-    const inserted = workbook.insertImage(0, solidPng(4, 4, [255, 0, 0]), {
-      row: 1,
-      col: 1,
-      rowOffEmu: 12700 * 2,
-      colOffEmu: 12700 * 3,
-      widthEmu: 12700 * 20,
-      heightEmu: 12700 * 10,
+    const sheet = workbook.sheet(0);
+    sheet.addPicture(solidPng(4, 4, [255, 0, 0]), {
+      anchor: {
+        fromRow: 1,
+        fromCol: 1,
+        fromRowOffsetEmu: 12700 * 2,
+        fromColOffsetEmu: 12700 * 3,
+        widthEmu: 12700 * 20,
+        heightEmu: 12700 * 10,
+      },
     });
-    assert.equal(inserted.status.ok, true);
-    const cell = workbook.getCellRectPt(
-      0,
+    const cell = sheet.getCellRectPt(
       { firstRow: 1, firstCol: 1, lastRow: 1, lastCol: 1 },
       GeometryMode.Display,
     );
-    const range = workbook.getCellRectPt(
-      0,
+    const range = sheet.getCellRectPt(
       { firstRow: 0, firstCol: 0, lastRow: 2, lastCol: 2 },
       GeometryMode.Display,
     );
@@ -380,7 +375,7 @@ test("pictures render as embedded images and other objects as placeholders", asy
     assert.ok(Math.abs(Number(match[4]) - pt(10)) < 0.01);
     assert.equal(result.metadata.objects.length, 1);
     assert.equal(result.metadata.objects[0].rendered, true);
-    assert.ok(range.width > 0);
+    assert.ok(range.widthPt > 0);
 
     // The raster must actually carry the picture's pixels.
     const { Resvg } = await import("@resvg/resvg-js");

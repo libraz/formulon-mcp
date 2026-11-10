@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
 
 import {
-  assertStatus,
   createOrLoadWorkbook,
-  type ExcelProfileId,
   type LossCounters,
+  type ProfileId,
   readLosses,
   saveWorkbook,
   type Workbook,
@@ -59,7 +58,7 @@ export function publicInfo(session: WorkbookSession): SessionInfo {
 export async function openSession(
   inputPath?: string,
   id: string = randomUUID(),
-  profile?: ExcelProfileId,
+  profile?: ProfileId,
 ): Promise<SessionInfo> {
   if (sessions.has(id)) {
     throw new Error(`session already exists: ${id}`);
@@ -76,7 +75,7 @@ export async function openSession(
     // Excel caches formula results, but the engine leaves formula cells blank
     // until recalculated. Recalc once on open so the first read of a formula
     // cell returns its computed value rather than a stale blank.
-    assertStatus(workbook.recalc(), "recalc workbook on open");
+    workbook.recalc();
     const createdAt = nowIso();
     const session: WorkbookSession = {
       id,
@@ -94,8 +93,8 @@ export async function openSession(
     registered = true;
     return publicInfo(session);
   } finally {
-    if (!registered && workbook.isValid()) {
-      workbook.delete();
+    if (!(registered || workbook.disposed)) {
+      workbook.dispose();
     }
   }
 }
@@ -118,7 +117,7 @@ export function getSession(id: string): WorkbookSession {
 export function closeSession(id: string): SessionInfo {
   const session = getSession(id);
   sessions.delete(id);
-  session.workbook.delete();
+  session.workbook.dispose();
   return publicInfo(session);
 }
 

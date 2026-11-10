@@ -1,4 +1,4 @@
-import { assertStatus, type Workbook } from "../formulon.js";
+import type { Workbook } from "../formulon.js";
 import { PRINT_PRESETS, type PrintSettingsInput, writePrintSettings } from "../print.js";
 import {
   documentWidth,
@@ -113,12 +113,10 @@ export function buildDocument(
       settings.printTitles = { repeatRows: `${line}:${line}` };
     }
     writePrintSettings(wb, sheet, settings);
-    const pagination = wb.paginate(sheet);
-    assertStatus(pagination.status, "paginate document");
-    pageCount = pagination.pageCount;
+    pageCount = wb.sheet(sheet).getPagination().pageCount;
   }
 
-  assertStatus(wb.recalc(), "recalc document");
+  wb.recalc();
   return {
     start: ref(anchor.row, anchor.col),
     range,

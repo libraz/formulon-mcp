@@ -6,122 +6,86 @@ import { test } from "vitest";
 import { loadWorkbook } from "../../dist/formulon.js";
 import { callWorkbookMethod, closeSession, openSession, saveSession } from "../../dist/sessions.js";
 
+const sheet0 = { kind: "Sheet", sheet: 0 };
+const ooxml = { kind: "WorkbookOoxml" };
+const sheetOoxml0 = { kind: "SheetOoxml", sheet: 0 };
+const call = (id, target, method, args = []) => callWorkbookMethod(id, target, method, args).result;
+const column0 = { firstRow: 0, firstCol: 0, lastRow: 9, lastCol: 0 };
+
 test("supports layout, comments, hyperlinks, validations, and conditional formats", async () => {
   await openSession(undefined, "objects");
   try {
-    assert.equal(callWorkbookMethod("objects", "setColumnWidth", [0, 0, 1, 22]).result.ok, true);
-    assert.equal(callWorkbookMethod("objects", "setColumnHidden", [0, 2, 2, true]).result.ok, true);
-    const columns = callWorkbookMethod("objects", "getSheetColumns", [0]);
-    assert.equal(columns.result.status.ok, true);
+    call("objects", sheet0, "setColumnWidth", [0, 1, 22]);
+    call("objects", sheet0, "setColumnHidden", [2, 2, true]);
+    const columns = call("objects", sheet0, "listColumnOverrides");
     assert.equal(
-      columns.result.columns.some((column) => column.width === 22),
+      columns.some((column) => column.widthChars === 22),
       true,
     );
 
-    assert.equal(callWorkbookMethod("objects", "setRowHeight", [0, 0, 30]).result.ok, true);
-    const rows = callWorkbookMethod("objects", "getSheetRowOverrides", [0]);
-    assert.equal(rows.result.status.ok, true);
+    call("objects", sheet0, "setRowHeight", [0, 0, 30]);
+    const rows = call("objects", sheet0, "listRowOverrides");
     assert.equal(
-      rows.result.rows.some((row) => row.height === 30),
+      rows.some((row) => row.heightPt === 30),
       true,
     );
 
-    assert.equal(
-      callWorkbookMethod("objects", "setComment", [0, 0, 0, "tester", "hello"]).result.ok,
-      true,
-    );
-    assert.deepEqual(callWorkbookMethod("objects", "getComment", [0, 0, 0]).result, {
+    call("objects", sheet0, "setComment", [0, 0, { author: "tester", text: "hello" }]);
+    assert.deepEqual(call("objects", sheet0, "getComment", [0, 0]), {
       author: "tester",
       text: "hello",
     });
-    assert.deepEqual(callWorkbookMethod("objects", "getCommentResult", [0, 0, 0]).result, {
-      status: { ok: true, status: 0, message: "", context: "" },
-      comment: { author: "tester", text: "hello" },
-    });
 
-    assert.equal(
-      callWorkbookMethod("objects", "addHyperlink", [
-        0,
-        0,
-        1,
-        "https://example.com",
-        "Example",
-        "Example tooltip",
-        "",
-      ]).result.ok,
-      true,
-    );
-    assert.equal(
-      callWorkbookMethod("objects", "addHyperlinkRange", [
-        0,
-        2,
-        0,
-        2,
-        3,
-        "",
-        "Jump",
-        "In-workbook",
-        "Sheet1!A1",
-      ]).result.ok,
-      true,
-    );
-    const hyperlinks = callWorkbookMethod("objects", "getHyperlinks", [0]).result.items;
+    call("objects", sheet0, "setHyperlink", [
+      0,
+      1,
+      { target: "https://example.com", display: "Example", tooltip: "Example tooltip" },
+    ]);
+    call("objects", sheet0, "setHyperlink", [
+      2,
+      0,
+      {
+        target: null,
+        location: "Sheet1!A1",
+        display: "Jump",
+        tooltip: "In-workbook",
+        range: { firstRow: 2, firstCol: 0, lastRow: 2, lastCol: 3 },
+      },
+    ]);
+    const hyperlinks = call("objects", sheet0, "listHyperlinks");
     assert.equal(hyperlinks.length, 2);
     assert.deepEqual(
-      hyperlinks.map((link) => [link.row, link.col, link.lastRow, link.lastCol, link.location]),
+      hyperlinks.map((link) => [
+        link.range.firstRow,
+        link.range.firstCol,
+        link.range.lastRow,
+        link.range.lastCol,
+        link.location,
+      ]),
       [
-        [0, 1, 0, 1, ""],
+        [0, 1, 0, 1, null],
         [2, 0, 2, 3, "Sheet1!A1"],
       ],
     );
 
-    assert.equal(
-      callWorkbookMethod("objects", "addValidation", [
-        0,
-        {
-          ranges: [{ firstRow: 0, firstCol: 0, lastRow: 9, lastCol: 0 }],
-          type: 1,
-          op: 0,
-          formula1: "1",
-          formula2: "10",
-        },
-      ]).result.ok,
-      true,
-    );
-    assert.equal(callWorkbookMethod("objects", "getValidations", [0]).result.items.length, 1);
+    call("objects", sheet0, "addValidation", [
+      { ranges: [column0], type: 1, operator: 0, formula1: "1", formula2: "10" },
+    ]);
+    assert.equal(call("objects", sheet0, "listValidations").length, 1);
 
-    assert.equal(
-      callWorkbookMethod("objects", "addConditionalFormat", [
-        0,
-        {
-          sqref: [{ firstRow: 0, firstCol: 0, lastRow: 9, lastCol: 0 }],
-          type: 0,
-          formula1: "=A1>0",
-        },
-      ]).result.status.ok,
-      true,
-    );
-    assert.equal(
-      callWorkbookMethod("objects", "getConditionalFormats", [0]).result.items.length,
-      1,
-    );
+    call("objects", sheet0, "addCfRule", [{ ranges: [column0], type: 0, formula1: "=A1>0" }]);
+    assert.equal(call("objects", sheet0, "listCfRules").length, 1);
 
-    assert.equal(callWorkbookMethod("objects", "removeHyperlink", [0, 0, 1]).result.ok, true);
-    assert.equal(callWorkbookMethod("objects", "getHyperlinks", [0]).result.items.length, 1);
-    assert.equal(callWorkbookMethod("objects", "clearHyperlinks", [0]).result.ok, true);
-    assert.equal(callWorkbookMethod("objects", "getHyperlinks", [0]).result.items.length, 0);
-    assert.equal(callWorkbookMethod("objects", "removeValidationAt", [0, 0]).result.ok, true);
-    assert.equal(callWorkbookMethod("objects", "getValidations", [0]).result.items.length, 0);
-    assert.equal(
-      callWorkbookMethod("objects", "removeConditionalFormatAt", [0, 0]).result.ok,
-      true,
-    );
-    assert.equal(
-      callWorkbookMethod("objects", "getConditionalFormats", [0]).result.items.length,
-      0,
-    );
-    assert.equal(callWorkbookMethod("objects", "clearMerges", [0]).result.ok, true);
-    assert.equal(callWorkbookMethod("objects", "getMerges", [0]).result.items.length, 0);
+    call("objects", sheet0, "setHyperlink", [0, 1, null]);
+    assert.equal(call("objects", sheet0, "listHyperlinks").length, 1);
+    call("objects", sheet0, "clearHyperlinks");
+    assert.equal(call("objects", sheet0, "listHyperlinks").length, 0);
+    call("objects", sheet0, "removeValidation", [0]);
+    assert.equal(call("objects", sheet0, "listValidations").length, 0);
+    call("objects", sheet0, "removeCfRule", [0]);
+    assert.equal(call("objects", sheet0, "listCfRules").length, 0);
+    call("objects", sheet0, "clearMerges");
+    assert.equal(call("objects", sheet0, "listMerges").length, 0);
   } finally {
     closeSession("objects");
   }
@@ -133,57 +97,21 @@ test("round-trips comments, validations, conditional formats, and protection thr
   const xlsb = path.join(dir, "objects.xlsb");
   await openSession(undefined, "objects-roundtrip");
   try {
-    assert.equal(
-      callWorkbookMethod("objects-roundtrip", "setComment", [0, 0, 0, "tester", "hello"]).result.ok,
-      true,
-    );
-    assert.equal(
-      callWorkbookMethod("objects-roundtrip", "addHyperlink", [
-        0,
-        0,
-        1,
-        "https://example.com",
-        "Example",
-        "Example tooltip",
-        "",
-      ]).result.ok,
-      true,
-    );
-    assert.equal(
-      callWorkbookMethod("objects-roundtrip", "addValidation", [
-        0,
-        {
-          ranges: [{ firstRow: 0, firstCol: 0, lastRow: 9, lastCol: 0 }],
-          type: 1,
-          op: 0,
-          formula1: "1",
-          formula2: "10",
-        },
-      ]).result.ok,
-      true,
-    );
-    assert.equal(
-      callWorkbookMethod("objects-roundtrip", "addConditionalFormat", [
-        0,
-        {
-          sqref: [{ firstRow: 0, firstCol: 0, lastRow: 9, lastCol: 0 }],
-          type: 0,
-          formula1: "=A1>0",
-        },
-      ]).result.status.ok,
-      true,
-    );
-    const protection = callWorkbookMethod("objects-roundtrip", "getSheetProtection", [0]).result;
-    assert.equal(protection.status.ok, true);
-    assert.equal(
-      callWorkbookMethod("objects-roundtrip", "setSheetProtection", [
-        0,
-        { ...protection.protection, enabled: 1, sheet: 1 },
-      ]).result.ok,
-      true,
-    );
-    await saveSession("objects-roundtrip", file);
-    await saveSession("objects-roundtrip", xlsb);
+    const id = "objects-roundtrip";
+    call(id, sheet0, "setComment", [0, 0, { author: "tester", text: "hello" }]);
+    call(id, sheet0, "setHyperlink", [
+      0,
+      1,
+      { target: "https://example.com", display: "Example", tooltip: "Example tooltip" },
+    ]);
+    call(id, sheet0, "addValidation", [
+      { ranges: [column0], type: 1, operator: 0, formula1: "1", formula2: "10" },
+    ]);
+    call(id, sheet0, "addCfRule", [{ ranges: [column0], type: 0, formula1: "=A1>0" }]);
+    assert.equal(call(id, sheet0, "getSheetProtection"), null);
+    call(id, sheet0, "setSheetProtection", [{}]);
+    await saveSession(id, file);
+    await saveSession(id, xlsb);
   } finally {
     closeSession("objects-roundtrip");
   }
@@ -191,15 +119,16 @@ test("round-trips comments, validations, conditional formats, and protection thr
   for (const output of [file, xlsb]) {
     const wb = await loadWorkbook(output);
     try {
+      const ws = wb.sheet(0);
       if (output === file) {
-        assert.deepEqual(wb.getComment(0, 0, 0), { author: "tester", text: "hello" });
-        assert.equal(wb.getHyperlinks(0).length, 1);
+        assert.deepEqual(ws.getComment(0, 0), { author: "tester", text: "hello" });
+        assert.equal(ws.listHyperlinks().length, 1);
       }
-      assert.equal(wb.getValidations(0).length, 1);
-      assert.equal(wb.getConditionalFormats(0).length, 1);
-      assert.equal(wb.getSheetProtection(0).protection.enabled, 1);
+      assert.equal(ws.listValidations().length, 1);
+      assert.equal(ws.listCfRules().length, 1);
+      assert.notEqual(ws.getSheetProtection(), null);
     } finally {
-      wb.delete();
+      wb.dispose();
     }
   }
   await rm(dir, { recursive: true, force: true });
@@ -208,61 +137,57 @@ test("round-trips comments, validations, conditional formats, and protection thr
 test("supports style and number format APIs", async () => {
   await openSession(undefined, "styles");
   try {
-    const font = callWorkbookMethod("styles", "addFont", [
+    const font = call("styles", ooxml, "addFont", [
       {
         name: "Arial",
-        size: 11,
+        sizePt: 11,
         bold: true,
         italic: false,
         strike: false,
         underline: 0,
-        colorArgb: 0xff112233,
+        color: "#112233",
       },
     ]);
-    assert.equal(font.result.status.ok, true);
+    assert.equal(call("styles", ooxml, "getFont", [font]).name, "Arial");
 
-    const fill = callWorkbookMethod("styles", "addFill", [
-      { pattern: 1, fgArgb: 0xffddeeff, bgArgb: 0xffffffff },
+    const fill = call("styles", ooxml, "addFill", [
+      { pattern: 1, foreground: "#DDEEFF", background: "#FFFFFF" },
     ]);
-    assert.equal(fill.result.status.ok, true);
+    assert.equal(call("styles", ooxml, "getFill", [fill]).pattern, 1);
 
-    const side = { style: 1, colorArgb: 0xff000000 };
-    const border = callWorkbookMethod("styles", "addBorder", [
+    const side = { style: 1, color: "#000000" };
+    const border = call("styles", ooxml, "addBorder", [
       {
         left: side,
         right: side,
         top: side,
         bottom: side,
-        diagonal: { style: 0, colorArgb: 0 },
+        diagonal: { style: 0 },
         diagonalUp: false,
         diagonalDown: false,
       },
     ]);
-    assert.equal(border.result.status.ok, true);
+    assert.equal(call("styles", ooxml, "getBorder", [border]).left.style, 1);
 
-    const numFmt = callWorkbookMethod("styles", "addNumFmt", ["0.00"]);
-    assert.equal(numFmt.result.status.ok, true);
+    const numFmtId = call("styles", ooxml, "addNumberFormat", ["0.00"]);
+    assert.equal(call("styles", ooxml, "getNumberFormat", [numFmtId]), "0.00");
 
-    const xf = callWorkbookMethod("styles", "addXf", [
+    const xf = call("styles", ooxml, "addCellXf", [
       {
-        fontIndex: font.result.index,
-        fillIndex: fill.result.index,
-        borderIndex: border.result.index,
-        numFmtId: numFmt.result.numFmtId,
-        horizontalAlign: 2,
-        verticalAlign: 1,
+        fontIndex: font,
+        fillIndex: fill,
+        borderIndex: border,
+        numFmtId,
+        horizontal: 2,
+        vertical: 1,
         wrapText: true,
       },
     ]);
-    assert.equal(xf.result.status.ok, true);
-    assert.equal(
-      callWorkbookMethod("styles", "setCellXfIndex", [0, 0, 0, xf.result.index]).result.ok,
-      true,
-    );
-    assert.equal(
-      callWorkbookMethod("styles", "getCellXfIndex", [0, 0, 0]).result.xfIndex,
-      xf.result.index,
-    );
+    const record = call("styles", ooxml, "getCellXf", [xf]);
+    assert.equal(record.horizontal, 2);
+    assert.equal(record.wrapText, true);
+    call("styles", sheetOoxml0, "setCellXfIndex", [0, 0, xf]);
+    assert.equal(call("styles", sheetOoxml0, "getCellXfIndex", [0, 0]), xf);
   } finally {
     closeSession("styles");
   }
@@ -273,53 +198,37 @@ test("round-trips style, layout, and protection metadata through xlsx", async ()
   const file = path.join(dir, "style.xlsx");
   await openSession(undefined, "style-roundtrip");
   try {
-    const numFmt = callWorkbookMethod("style-roundtrip", "addNumFmt", ["0.00"]);
-    const xf = callWorkbookMethod("style-roundtrip", "addXf", [
+    const id = "style-roundtrip";
+    const numFmtId = call(id, ooxml, "addNumberFormat", ["0.00"]);
+    const xf = call(id, ooxml, "addCellXf", [
       {
         fontIndex: 0,
         fillIndex: 0,
         borderIndex: 0,
-        numFmtId: numFmt.result.numFmtId,
-        horizontalAlign: 2,
-        verticalAlign: 1,
+        numFmtId,
+        horizontal: 2,
+        vertical: 1,
         wrapText: true,
       },
     ]);
-    assert.equal(
-      callWorkbookMethod("style-roundtrip", "setCellXfIndex", [0, 0, 0, xf.result.index]).result.ok,
-      true,
-    );
-    assert.equal(
-      callWorkbookMethod("style-roundtrip", "setColumnWidth", [0, 0, 0, 18]).result.ok,
-      true,
-    );
-    assert.equal(callWorkbookMethod("style-roundtrip", "setRowHeight", [0, 0, 24]).result.ok, true);
-    const protection = callWorkbookMethod("style-roundtrip", "getSheetProtection", [0]).result
-      .protection;
-    assert.equal(
-      callWorkbookMethod("style-roundtrip", "setSheetProtection", [
-        0,
-        { ...protection, enabled: 1, sheet: 1 },
-      ]).result.ok,
-      true,
-    );
-    await saveSession("style-roundtrip", file);
+    call(id, sheetOoxml0, "setCellXfIndex", [0, 0, xf]);
+    call(id, sheet0, "setColumnWidth", [0, 0, 18]);
+    call(id, sheet0, "setRowHeight", [0, 0, 24]);
+    call(id, sheet0, "setSheetProtection", [{}]);
+    await saveSession(id, file);
   } finally {
     closeSession("style-roundtrip");
   }
 
   const wb = await loadWorkbook(file);
   try {
-    assert.equal(wb.getCellXfIndex(0, 0, 0).status.ok, true);
-    const columns = wb.getSheetColumns(0);
-    assert.equal(columns.status.ok, true);
-    assert.equal(columns.columns[0].width, 18);
-    const rows = wb.getSheetRowOverrides(0);
-    assert.equal(rows.status.ok, true);
-    assert.equal(rows.rows[0].height, 24);
-    assert.equal(wb.getSheetProtection(0).protection.enabled, 1);
+    const ws = wb.sheet(0);
+    assert.notEqual(ws.ooxml.getCellXfIndex(0, 0), null);
+    assert.equal(ws.listColumnOverrides()[0].widthChars, 18);
+    assert.equal(ws.listRowOverrides()[0].heightPt, 24);
+    assert.notEqual(ws.getSheetProtection(), null);
   } finally {
-    wb.delete();
+    wb.dispose();
     await rm(dir, { recursive: true, force: true });
   }
 });

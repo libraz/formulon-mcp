@@ -15,6 +15,11 @@ import {
   saveSession,
 } from "../../dist/sessions.js";
 
+const profileIdOf = (id) => callWorkbookMethod(id, undefined, "getProfileId", []).result;
+const firstSheetName = (id) => callWorkbookMethod(id, undefined, "listSheets", []).result[0].name;
+const fontOf = (id, index) =>
+  callWorkbookMethod(id, { kind: "WorkbookOoxml" }, "getFont", [index]).result;
+
 test("manages session lifecycle", async () => {
   const session = await openSession(undefined, "lifecycle");
   assert.equal(session.id, "lifecycle");
@@ -84,7 +89,7 @@ test("recalculates sessions explicitly", async () => {
       false,
     );
     const result = recalcSession("recalc");
-    assert.equal(result.status.ok, true);
+    assert.deepEqual(result.status, { ok: true, status: 0, message: "", context: "" });
     assert.deepEqual(getSessionCellByA1("recalc", "Sheet1!B1").value, {
       kind: "number",
       value: 10,
@@ -128,7 +133,7 @@ test("recalculates formulas on open so the first read is not blank", async () =>
 test("opens a session under an Excel profile", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-profile-"));
   const file = path.join(dir, "profile.xlsx");
-  const profileOf = (id) => callWorkbookMethod(id, "excelProfileId", []).result.value;
+  const profileOf = profileIdOf;
   const ascOf = (id) => {
     applySessionMutations(id, [{ type: "formula", a1: "A1", formula: '=ASC("ＡＢ")' }], true);
     return getSessionCellByA1(id, "A1").value.value;
@@ -170,17 +175,11 @@ test("falls back to FORMULON_MCP_PROFILE when no profile is requested", async ()
   try {
     process.env.FORMULON_MCP_PROFILE = "win-365-ja_JP";
     await openSession(undefined, "profile-env");
-    assert.equal(
-      callWorkbookMethod("profile-env", "excelProfileId", []).result.value,
-      "win-365-ja_JP",
-    );
+    assert.equal(profileIdOf("profile-env"), "win-365-ja_JP");
     closeSession("profile-env");
     // An explicit profile still wins over the environment.
     await openSession(undefined, "profile-env-explicit", "mac-365-de_DE");
-    assert.equal(
-      callWorkbookMethod("profile-env-explicit", "excelProfileId", []).result.value,
-      "mac-365-de_DE",
-    );
+    assert.equal(profileIdOf("profile-env-explicit"), "mac-365-de_DE");
     closeSession("profile-env-explicit");
 
     process.env.FORMULON_MCP_PROFILE = "win-365-xx_XX";
@@ -309,7 +308,7 @@ async function writeAscWorkbook(file) {
 function assertNewWorkbookFacts({ sheet, font }, chosen) {
   const facts = NEW_WORKBOOK_FACTS[chosen ?? "default"];
   assert.equal(sheet, facts.sheet);
-  assert.equal(font.size, facts.fontSize);
+  assert.equal(font.sizePt, facts.fontSize);
   if (facts.fontName) {
     assert.equal(font.name, facts.fontName);
   }
@@ -373,7 +372,7 @@ for (const row of PROFILE_CASES) {
           const session = await openSession(input, id, requested);
           assert.equal(session.id, id);
           try {
-            assert.equal(callWorkbookMethod(id, "excelProfileId", []).result.value, expected.id);
+            assert.equal(profileIdOf(id), expected.id);
             if (source === "new") {
               applySessionMutations(
                 id,
@@ -382,8 +381,8 @@ for (const row of PROFILE_CASES) {
               );
               assertNewWorkbookFacts(
                 {
-                  sheet: callWorkbookMethod(id, "sheetName", [0]).result.value,
-                  font: callWorkbookMethod(id, "getFont", [0]).result,
+                  sheet: firstSheetName(id),
+                  font: fontOf(id, 0),
                 },
                 expected.chosen,
               );
@@ -398,18 +397,19 @@ for (const row of PROFILE_CASES) {
 
         const workbook = await open();
         try {
-          assert.equal(workbook.excelProfileId().value, expected.id);
+          assert.equal(workbook.getProfileId(), expected.id);
+          const sheet = workbook.sheet(0);
           if (source === "new") {
-            assert.equal(workbook.setFormula(0, 0, 0, ASC_FORMULA).ok, true);
+            sheet.setFormula(0, 0, ASC_FORMULA);
             assertNewWorkbookFacts(
-              { sheet: workbook.sheetName(0).value, font: workbook.getFont(0) },
+              { sheet: sheet.name, font: workbook.ooxml.getFont(0) },
               expected.chosen,
             );
           }
-          assert.equal(workbook.recalc().ok, true);
-          assert.equal(valueToJson(workbook.getValue(0, 0, 0).value).value, folds ? "AB" : "ＡＢ");
+          workbook.recalc();
+          assert.equal(valueToJson(sheet.getTypedValue(0, 0)).value, folds ? "AB" : "ＡＢ");
         } finally {
-          workbook.delete();
+          workbook.dispose();
         }
       });
     } finally {
@@ -422,11 +422,8 @@ test("trims the environment profile and treats a blank one as unset", async () =
   await withProfileEnv("  win-365-fr_FR\t", async () => {
     await openSession(undefined, "profile-env-trim");
     try {
-      assert.equal(
-        callWorkbookMethod("profile-env-trim", "excelProfileId", []).result.value,
-        "win-365-fr_FR",
-      );
-      assert.equal(callWorkbookMethod("profile-env-trim", "sheetName", [0]).result.value, "Feuil1");
+      assert.equal(profileIdOf("profile-env-trim"), "win-365-fr_FR");
+      assert.equal(firstSheetName("profile-env-trim"), "Feuil1");
     } finally {
       closeSession("profile-env-trim");
     }
@@ -435,14 +432,8 @@ test("trims the environment profile and treats a blank one as unset", async () =
     await withProfileEnv(blank, async () => {
       await openSession(undefined, "profile-env-blank");
       try {
-        assert.equal(
-          callWorkbookMethod("profile-env-blank", "excelProfileId", []).result.value,
-          DEFAULT_PROFILE,
-        );
-        assert.equal(
-          callWorkbookMethod("profile-env-blank", "getFont", [0]).result.name,
-          "Calibri",
-        );
+        assert.equal(profileIdOf("profile-env-blank"), DEFAULT_PROFILE);
+        assert.equal(fontOf("profile-env-blank", 0).name, "Calibri");
       } finally {
         closeSession("profile-env-blank");
       }
@@ -458,10 +449,7 @@ test("reports a malformed environment profile as unknown rather than ignoring it
     );
     // An explicit well-formed profile still wins over the broken value.
     await openSession(undefined, "profile-env-malformed", "win-365-de_DE");
-    assert.equal(
-      callWorkbookMethod("profile-env-malformed", "excelProfileId", []).result.value,
-      "win-365-de_DE",
-    );
+    assert.equal(profileIdOf("profile-env-malformed"), "win-365-de_DE");
     closeSession("profile-env-malformed");
   });
 });
@@ -477,10 +465,7 @@ test("does not persist the profile in a saved workbook", async () => {
       closeSession("profile-persist");
 
       await openSession(file, "profile-persist-reopen");
-      assert.equal(
-        callWorkbookMethod("profile-persist-reopen", "excelProfileId", []).result.value,
-        DEFAULT_PROFILE,
-      );
+      assert.equal(profileIdOf("profile-persist-reopen"), DEFAULT_PROFILE);
       closeSession("profile-persist-reopen");
     });
   } finally {

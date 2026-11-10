@@ -18,29 +18,27 @@ test("MCP stdio preserves accessor results and surfaces engine failures", async 
       arguments: { sessionId: "status-results" },
     });
     try {
-      const call = (method, args = []) =>
+      const call = (target, method, args = []) =>
         client.callTool({
           name: "formulon_workbook_call",
-          arguments: { sessionId: "status-results", method, args },
+          arguments: { sessionId: "status-results", target, method, args },
         });
+      const sheet = (index) => ({ kind: "Sheet", sheet: index });
 
-      const count = textPayload(await call("cellCount", [0]));
-      assert.equal(count.result.status.ok, true);
-      assert.equal(count.result.value, 0);
-      const empty = textPayload(await call("getMerges", [0]));
-      assert.equal(empty.result.status.ok, true);
-      assert.deepEqual(empty.result.items, []);
-      const clock = textPayload(await call("pinnedNow"));
-      assert.equal(clock.result.status.ok, true);
-      assert.equal(clock.result.now, null);
+      const cells = textPayload(await call(sheet(0), "listCells"));
+      assert.deepEqual(cells.result, []);
+      const empty = textPayload(await call(sheet(0), "listMerges"));
+      assert.deepEqual(empty.result, []);
+      const clock = textPayload(await call(undefined, "getPinnedNow"));
+      assert.equal(clock.result, null);
 
-      for (const [method, args] of [
-        ["cellCount", [9]],
-        ["getMerges", [9]],
-        ["getValue", [0, 1_048_576, 0]],
-        ["setNumber", [9, 0, 0, 1]],
+      for (const [target, method, args, expected] of [
+        [sheet(9), "listCells", [], /^SheetIndexOutOfRange: /],
+        [sheet(9), "listMerges", [], /^SheetIndexOutOfRange: /],
+        [sheet(0), "getValue", [1_048_576, 0], /^InvalidArgument: /],
+        [sheet(9), "setNumber", [0, 0, 1], /^SheetIndexOutOfRange: /],
       ]) {
-        assert.match(errorPayload(await call(method, args)), /failed/i);
+        assert.match(errorPayload(await call(target, method, args)), expected);
       }
 
       for (const operation of ["precedents", "dependents", "spillInfo"]) {
@@ -62,16 +60,16 @@ test("MCP stdio preserves accessor results and surfaces engine failures", async 
           arguments: { sessionId: "status-results", operation: "names" },
         }),
       );
-      assert.equal(names.result.status.ok, true);
-      assert.equal(names.result.items.includes("USDOLLAR"), true);
+      assert.equal(names.method, "Formulon.listFunctionNames");
+      assert.equal(names.result.includes("USDOLLAR"), true);
       const localized = textPayload(
         await client.callTool({
           name: "formulon_function_lookup",
           arguments: { sessionId: "status-results", operation: "localize", name: "SUM" },
         }),
       );
-      assert.equal(localized.result.status.ok, true);
-      assert.equal(localized.result.value, "SUM");
+      assert.equal(localized.method, "Formulon.localizeFunctionName");
+      assert.equal(localized.result, "SUM");
       const lookup = async (args) =>
         textPayload(
           await client.callTool({
@@ -80,35 +78,30 @@ test("MCP stdio preserves accessor results and surfaces engine failures", async 
           }),
         ).result;
       assert.equal(
-        (await lookup({ operation: "localize", name: "SUM", profile: "win-365-de_DE" })).value,
+        await lookup({ operation: "localize", name: "SUM", profile: "win-365-de_DE" }),
         "SUMME",
       );
       assert.equal(
-        (
-          await lookup({
-            operation: "localizeFormula",
-            formula: "=SUM(A1,1.5)",
-            profile: "win-365-de_DE",
-          })
-        ).value,
+        await lookup({
+          operation: "localizeFormula",
+          formula: "=SUM(A1,1.5)",
+          profile: "win-365-de_DE",
+        }),
         "=SUMME(A1;1,5)",
       );
       assert.equal(
-        (
-          await lookup({
-            operation: "canonicalizeFormula",
-            formula: "=SUMME(A1;1,5)",
-            profile: "win-365-de_DE",
-          })
-        ).value,
+        await lookup({
+          operation: "canonicalizeFormula",
+          formula: "=SUMME(A1;1,5)",
+          profile: "win-365-de_DE",
+        }),
         "=SUM(A1,1.5)",
       );
       // Without a profile the session's own profile is described.
       const facts = await lookup({ operation: "localeFacts" });
-      assert.equal(facts.facts.listSeparator, ",");
+      assert.equal(facts.listSeparator, ",");
       assert.equal(
-        (await lookup({ operation: "localeFacts", profile: "win-365-de_DE" })).facts
-          .decimalSeparator,
+        (await lookup({ operation: "localeFacts", profile: "win-365-de_DE" })).decimalSeparator,
         ",",
       );
       assert.match(
@@ -121,13 +114,15 @@ test("MCP stdio preserves accessor results and surfaces engine failures", async 
         /formula is required/,
       );
 
-      const absent = errorPayload(
+      // An absent comment reads null rather than failing.
+      const absent = textPayload(
         await client.callTool({
           name: "formulon_comment_operation",
           arguments: { sessionId: "status-results", operation: "get", row: 0, col: 0 },
         }),
       );
-      assert.match(absent, /no comment at cell/);
+      assert.equal(absent.method, "Sheet.getComment");
+      assert.equal(absent.result, null);
 
       const currency = textPayload(
         await client.callTool({
@@ -226,7 +221,7 @@ test("MCP stdio edits, reads, saves, and closes a workbook session", async () =>
           arguments: { sessionId: "mcp-session", formula: "=A1+B1" },
         }),
       );
-      assert.deepEqual(sessionEval.result.value, { kind: "number", value: 49 });
+      assert.deepEqual(sessionEval.result, { kind: "number", value: 49 });
 
       await client.callTool({
         name: "formulon_set_cells",
@@ -270,11 +265,11 @@ test("MCP stdio edits, reads, saves, and closes a workbook session", async () =>
       const sheetCall = textPayload(
         await client.callTool({
           name: "formulon_workbook_call",
-          arguments: { sessionId: "mcp-session", method: "sheetCount", args: [] },
+          arguments: { sessionId: "mcp-session", method: "listSheets", args: [] },
         }),
       );
-      assert.equal(sheetCall.result.status.ok, true);
-      assert.equal(sheetCall.result.value, 1);
+      assert.equal(sheetCall.result.length, 1);
+      assert.equal(sheetCall.result[0].name, "Sheet1");
 
       const saved = textPayload(
         await client.callTool({
@@ -551,7 +546,8 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           },
         }),
       );
-      assert.equal(mergeAdd.result.ok, true);
+      assert.equal(mergeAdd.method, "Sheet.addMerge");
+      assert.deepEqual(mergeAdd.result, { firstRow: 0, firstCol: 0, lastRow: 0, lastCol: 1 });
 
       const merges = textPayload(
         await client.callTool({
@@ -559,8 +555,8 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "list" },
         }),
       );
-      assert.equal(merges.result.status.ok, true);
-      assert.deepEqual(merges.result.items, [{ firstRow: 0, firstCol: 0, lastRow: 0, lastCol: 1 }]);
+      assert.equal(merges.method, "Sheet.listMerges");
+      assert.deepEqual(merges.result, [{ firstRow: 0, firstCol: 0, lastRow: 0, lastCol: 1 }]);
 
       const commentSet = textPayload(
         await client.callTool({
@@ -575,7 +571,7 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           },
         }),
       );
-      assert.equal(commentSet.result.ok, true);
+      assert.equal(commentSet.method, "Sheet.setComment");
 
       const comment = textPayload(
         await client.callTool({
@@ -583,8 +579,7 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "get", row: 1, col: 0 },
         }),
       );
-      assert.equal(comment.result.status.ok, true);
-      assert.deepEqual(comment.result.comment, { author: "tester", text: "note" });
+      assert.deepEqual(comment.result, { author: "tester", text: "note" });
 
       const commentList = textPayload(
         await client.callTool({
@@ -592,9 +587,8 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "list" },
         }),
       );
-      assert.equal(commentList.result.status.ok, true);
-      assert.deepEqual(commentList.result.items, [
-        { row: 1, col: 0, author: "tester", text: "note" },
+      assert.deepEqual(commentList.result, [
+        { cell: { row: 1, col: 0 }, author: "tester", text: "note" },
       ]);
 
       const hyperlinkAdd = textPayload(
@@ -610,7 +604,7 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           },
         }),
       );
-      assert.equal(hyperlinkAdd.result.ok, true);
+      assert.equal(hyperlinkAdd.method, "Sheet.setHyperlink");
 
       const hyperlinkRangeAdd = textPayload(
         await client.callTool({
@@ -627,7 +621,7 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           },
         }),
       );
-      assert.equal(hyperlinkRangeAdd.result.ok, true);
+      assert.equal(hyperlinkRangeAdd.method, "Sheet.setHyperlink");
 
       const hyperlinks = textPayload(
         await client.callTool({
@@ -635,17 +629,16 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "list" },
         }),
       );
-      assert.equal(hyperlinks.result.status.ok, true);
-      assert.equal(hyperlinks.result.items.length, 2);
+      assert.equal(hyperlinks.result.length, 2);
       assert.deepEqual(
-        hyperlinks.result.items.map((link) => [
-          link.row,
-          link.lastRow,
-          link.lastCol,
+        hyperlinks.result.map((link) => [
+          link.range.firstRow,
+          link.range.lastRow,
+          link.range.lastCol,
           link.location,
         ]),
         [
-          [2, 2, 0, ""],
+          [2, 2, 0, null],
           [3, 3, 2, "Sheet1!A1"],
         ],
       );
@@ -658,15 +651,16 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
             operation: "add",
             validation: {
               ranges: [{ firstRow: 0, firstCol: 2, lastRow: 9, lastCol: 2 }],
-              type: 1,
-              op: 0,
+              type: "Whole",
+              operator: "Between",
               formula1: "1",
               formula2: "10",
             },
           },
         }),
       );
-      assert.equal(validationAdd.result.ok, true);
+      assert.equal(validationAdd.method, "Sheet.addValidation");
+      assert.equal(typeof validationAdd.result, "string");
 
       const validations = textPayload(
         await client.callTool({
@@ -674,8 +668,8 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "list" },
         }),
       );
-      assert.equal(validations.result.status.ok, true);
-      assert.equal(validations.result.items.length, 1);
+      assert.equal(validations.result.length, 1);
+      assert.equal(validations.result[0].id, validationAdd.result);
 
       const cfAdd = textPayload(
         await client.callTool({
@@ -684,15 +678,15 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
             sessionId: "advanced-session",
             operation: "add",
             rule: {
-              sqref: [{ firstRow: 0, firstCol: 0, lastRow: 9, lastCol: 0 }],
-              type: 0,
+              ranges: [{ firstRow: 0, firstCol: 0, lastRow: 9, lastCol: 0 }],
+              type: "Expression",
               formula1: "=A1>0",
             },
           },
         }),
       );
-      assert.equal(cfAdd.result.status.ok, true);
-      assert.equal(cfAdd.result.index, 0);
+      assert.equal(cfAdd.method, "Sheet.addCfRule");
+      assert.match(cfAdd.result, /^\{[0-9A-F-]+\}$/);
 
       const cfs = textPayload(
         await client.callTool({
@@ -700,8 +694,8 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "list" },
         }),
       );
-      assert.equal(cfs.result.status.ok, true);
-      assert.equal(cfs.result.items.length, 1);
+      assert.equal(cfs.result.length, 1);
+      assert.equal(cfs.result[0].id, cfAdd.result);
 
       await client.callTool({
         name: "formulon_set_cells",
@@ -738,7 +732,6 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "metadata", name: "SUM" },
         }),
       );
-      assert.equal(metadata.result.ok, true);
       assert.equal(metadata.result.name, "SUM");
 
       const mergeClear = textPayload(
@@ -747,7 +740,7 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "clear" },
         }),
       );
-      assert.equal(mergeClear.result.ok, true);
+      assert.equal(mergeClear.method, "Sheet.clearMerges");
 
       const hyperlinkClear = textPayload(
         await client.callTool({
@@ -755,7 +748,7 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "clear" },
         }),
       );
-      assert.equal(hyperlinkClear.result.ok, true);
+      assert.equal(hyperlinkClear.method, "Sheet.clearHyperlinks");
 
       const validationClear = textPayload(
         await client.callTool({
@@ -763,7 +756,7 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "clear" },
         }),
       );
-      assert.equal(validationClear.result.ok, true);
+      assert.equal(validationClear.method, "Sheet.clearValidations");
 
       const cfClear = textPayload(
         await client.callTool({
@@ -771,7 +764,7 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
           arguments: { sessionId: "advanced-session", operation: "clear" },
         }),
       );
-      assert.equal(cfClear.result.ok, true);
+      assert.equal(cfClear.method, "Sheet.clearCfRules");
     } finally {
       await client.callTool({
         name: "formulon_close_workbook",
@@ -873,8 +866,8 @@ test("MCP stdio supports dimensions and sheet-name references", async () => {
           arguments: { sessionId: "dim-session", sheet: "Data", operation: "list" },
         }),
       );
-      assert.equal(merges.result.status.ok, true);
-      assert.equal(Array.isArray(merges.result.items), true);
+      assert.equal(merges.method, "Sheet.listMerges");
+      assert.equal(Array.isArray(merges.result), true);
 
       const badSheet = await client.callTool({
         name: "formulon_merge_operation",
@@ -906,7 +899,7 @@ test("MCP stdio reports tool errors without crashing the server", async () => {
       name: "formulon_workbook_call",
       arguments: { sessionId: "error-session", method: "constructor", args: [] },
     });
-    assert.match(errorPayload(rejected), /not allowlisted/);
+    assert.match(errorPayload(rejected), /is not a callable method/);
 
     await client.callTool({
       name: "formulon_close_workbook",
@@ -1032,16 +1025,21 @@ async function runMcpProfileCase(client, file, [tool, requestedKey, envKey, sour
     }
     textPayload(opened);
     try {
-      const call = async (method, args) =>
-        textPayload(await callTool(client, "formulon_workbook_call", { sessionId, method, args }))
-          .result;
-      assert.equal((await call("excelProfileId", [])).value, expected.id);
+      const call = async (target, method, args) =>
+        textPayload(
+          await callTool(client, "formulon_workbook_call", { sessionId, target, method, args }),
+        ).result;
+      const sheet = { kind: "Sheet", sheet: 0 };
+      assert.equal(await call(undefined, "getProfileId", []), expected.id);
       if (source === "new") {
-        assert.equal((await call("sheetName", [0])).value, NEW_SHEET_NAME[expected.id] ?? "Sheet1");
-        await call("setFormula", [0, 0, 0, ASC_FORMULA]);
-        await call("recalc", []);
+        assert.equal(
+          (await call(undefined, "listSheets", []))[0].name,
+          NEW_SHEET_NAME[expected.id] ?? "Sheet1",
+        );
+        await call(sheet, "setFormula", [0, 0, ASC_FORMULA]);
+        await call(undefined, "recalc", []);
       }
-      assert.equal((await call("getValue", [0, 0, 0])).value.value, folds ? "AB" : "ＡＢ");
+      assert.equal(await call(sheet, "getValue", [0, 0]), folds ? "AB" : "ＡＢ");
     } finally {
       await callTool(client, "formulon_close_workbook", { sessionId });
     }
@@ -1253,10 +1251,10 @@ async function runLookupCase(client, sessionId, [operation, nameKey, formulaKey,
   const sessionProfile = textPayload(
     await callTool(client, "formulon_workbook_call", {
       sessionId,
-      method: "excelProfileId",
+      method: "getProfileId",
       args: [],
     }),
-  ).result.value;
+  ).result;
   const effective =
     profileKey === "valid"
       ? VALID_PROFILE
@@ -1289,7 +1287,7 @@ async function runLookupCase(client, sessionId, [operation, nameKey, formulaKey,
     return;
   }
   if (usesProfile && profileKey === "unknown") {
-    assert.match(errorPayload(result), /unknown profile/);
+    assert.match(errorPayload(result), /^InvalidArgument: .*is not a profile id/);
     assert.match(errorPayload(result), new RegExp(UNKNOWN_PROFILE));
     return;
   }
@@ -1297,31 +1295,30 @@ async function runLookupCase(client, sessionId, [operation, nameKey, formulaKey,
   const { result: payload } = textPayload(result);
   switch (operation) {
     case "names":
-      assert.equal(payload.items.includes("SUM"), true);
+      assert.equal(payload.includes("SUM"), true);
       break;
     case "metadata":
-      assert.equal(payload.ok, true);
       assert.equal(payload.name, "SUM");
       assert.equal(payload.minArity, 1);
       break;
     case "localize":
-      assert.equal(payload.value, LOCAL_SUM[effective]);
+      assert.equal(payload, LOCAL_SUM[effective]);
       break;
     case "canonicalize":
-      assert.equal(payload.value, "SUM");
+      assert.equal(payload, "SUM");
       break;
     case "localizeFormula":
       assert.equal(
-        payload.value,
+        payload,
         effective === "win-365-en_US" ? "=SUM(A1,1.5)" : `=${LOCAL_SUM[effective]}(A1;1,5)`,
       );
       break;
     case "canonicalizeFormula":
-      assert.equal(payload.value, "=SUM(A1,1.5)");
+      assert.equal(payload, "=SUM(A1,1.5)");
       break;
     case "localeFacts":
-      assert.equal(payload.facts.decimalSeparator, effective === "win-365-en_US" ? "." : ",");
-      assert.equal(payload.facts.listSeparator, effective === "win-365-en_US" ? "," : ";");
+      assert.equal(payload.decimalSeparator, effective === "win-365-en_US" ? "." : ",");
+      assert.equal(payload.listSeparator, effective === "win-365-en_US" ? "," : ";");
       break;
     default:
       assert.fail(`unhandled operation ${operation}`);
@@ -1362,41 +1359,41 @@ test("function lookup defaults to the session profile and follows a profile swit
       const lookup = async (args) =>
         textPayload(await callTool(client, "formulon_function_lookup", { sessionId, ...args }))
           .result;
-      assert.equal((await lookup({ operation: "localize", name: "SUM" })).value, "SUM");
+      assert.equal(await lookup({ operation: "localize", name: "SUM" }), "SUM");
 
       textPayload(
         await callTool(client, "formulon_workbook_call", {
           sessionId,
-          method: "setExcelProfileId",
+          method: "setProfileId",
           args: ["win-365-de_DE"],
         }),
       );
-      assert.equal((await lookup({ operation: "localize", name: "SUM" })).value, "SUMME");
-      assert.equal((await lookup({ operation: "canonicalize", name: "SUMME" })).value, "SUM");
+      assert.equal(await lookup({ operation: "localize", name: "SUM" }), "SUMME");
+      assert.equal(await lookup({ operation: "canonicalize", name: "SUMME" }), "SUM");
       assert.equal(
-        (await lookup({ operation: "localizeFormula", formula: "=SUM(1.5,2)" })).value,
+        await lookup({ operation: "localizeFormula", formula: "=SUM(1.5,2)" }),
         "=SUMME(1,5;2)",
       );
-      assert.equal((await lookup({ operation: "localeFacts" })).facts.decimalSeparator, ",");
+      assert.equal((await lookup({ operation: "localeFacts" })).decimalSeparator, ",");
       // An explicit profile overrides the session's.
       assert.equal(
-        (await lookup({ operation: "localize", name: "SUM", profile: "win-365-en_US" })).value,
+        await lookup({ operation: "localize", name: "SUM", profile: "win-365-en_US" }),
         "SUM",
       );
       assert.equal(
-        (await lookup({ operation: "localize", name: "SUM", profile: "win-365-ru_RU" })).value,
+        await lookup({ operation: "localize", name: "SUM", profile: "win-365-ru_RU" }),
         "СУММ",
       );
 
       textPayload(
         await callTool(client, "formulon_workbook_call", {
           sessionId,
-          method: "setExcelProfileId",
+          method: "setProfileId",
           args: ["win-365-ja_JP"],
         }),
       );
-      assert.equal((await lookup({ operation: "localize", name: "SUM" })).value, "SUM");
-      assert.equal((await lookup({ operation: "localeFacts" })).facts.decimalSeparator, ".");
+      assert.equal(await lookup({ operation: "localize", name: "SUM" }), "SUM");
+      assert.equal((await lookup({ operation: "localeFacts" })).decimalSeparator, ".");
     } finally {
       await callTool(client, "formulon_close_workbook", { sessionId });
     }
@@ -1442,7 +1439,7 @@ test("localizing then canonicalizing a formula returns the original", async () =
     try {
       const lookup = async (args) =>
         textPayload(await callTool(client, "formulon_function_lookup", { sessionId, ...args }))
-          .result.value;
+          .result;
       for (const profile of ROUND_TRIP_PROFILES) {
         for (const formula of ROUND_TRIP_FORMULAS) {
           const local = await lookup({ operation: "localizeFormula", formula, profile });
@@ -1488,7 +1485,7 @@ test("localizes formulas to the spelling each locale uses", async () => {
             formula: canonical,
             profile,
           }),
-        ).result.value;
+        ).result;
         assert.equal(localized, local, `${profile} ${canonical}`);
       }
     } finally {
@@ -1504,10 +1501,7 @@ test("function lookup reports unknown functions and sessions", async () => {
     try {
       const call = (args) => callTool(client, "formulon_function_lookup", { sessionId, ...args });
       // Metadata for an unknown function is a negative answer, not a failure.
-      assert.equal(
-        textPayload(await call({ operation: "metadata", name: "NOPE" })).result.ok,
-        false,
-      );
+      assert.equal(textPayload(await call({ operation: "metadata", name: "NOPE" })).result, null);
       assert.match(
         errorPayload(await call({ operation: "localize", name: "NOPE", profile: "win-365-de_DE" })),
         /unknown function/,
@@ -1540,53 +1534,67 @@ test("function lookup reports unknown functions and sessions", async () => {
 });
 
 test("MCP workbook_call serializes typed-array results as plain arrays and stays clean", async () => {
-  await withClient(async (client) => {
-    const sessionId = "call-typed-arrays";
-    textPayload(await callTool(client, "formulon_open_workbook", { sessionId }));
-    try {
-      const call = async (method, args) =>
-        textPayload(await callTool(client, "formulon_workbook_call", { sessionId, method, args }));
-      const text = (value) => ({ kind: 3, text: value });
+  const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-typed-arrays-"));
+  try {
+    await withClient(async (client) => {
+      const sessionId = "call-typed-arrays";
+      textPayload(await callTool(client, "formulon_open_workbook", { sessionId }));
+      try {
+        const call = async (target, method, args) =>
+          textPayload(
+            await callTool(client, "formulon_workbook_call", { sessionId, target, method, args }),
+          );
+        const sheet = { kind: "Sheet", sheet: 0 };
+        textPayload(
+          await callTool(client, "formulon_set_range", {
+            sessionId,
+            start: "A1",
+            values: [
+              ["k", "v"],
+              ["a", 1],
+              ["b", 2],
+              ["c", 3],
+            ],
+          }),
+        );
+        const added = await call(sheet, "addChart", [{ type: 0, range: "A1:B4" }]);
+        const chart = { kind: "Chart", sheet: 0, chart: added.result.properties.objectId };
+        // Saving settles the session so the read below shows whether it dirties anything.
+        textPayload(
+          await callTool(client, "formulon_save_session", {
+            sessionId,
+            outputPath: path.join(dir, "chart.xlsx"),
+          }),
+        );
 
-      const classes = await call("collationClasses", [
-        [text("a"), text("b"), text("A"), { kind: 1, number: 1 }, text("a")],
-        0,
-        "mac-365-en_US",
-      ]);
-      assert.equal(Array.isArray(classes.result.classIds), true);
-      // Class ids follow collation order, so the number sorts before the text.
-      assert.deepEqual(classes.result.classIds, [1, 2, 1, 0, 1]);
-      assert.equal(classes.result.classCount, 3);
-      assert.equal(classes.session.dirty, false);
+        const data = await call(chart, "getData", []);
+        assert.equal(Array.isArray(data.result.series[0].values), true);
+        assert.deepEqual(data.result.series[0].values, [1, 2, 3]);
+        // Byte buffers are summarised by length rather than expanded.
+        assert.deepEqual(data.result.series[0].states, { byteLength: 3 });
+        assert.equal(data.session.dirty, false);
 
-      const empty = await call("collationClasses", [[], 0, "mac-365-en_US"]);
-      assert.deepEqual(empty.result.classIds, []);
-      assert.equal(empty.result.classCount, 0);
-
-      // Case-insensitive equality under a mac profile.
-      const equal = await call("compareText", ["a", "A", 0, "mac-365-en_US"]);
-      assert.equal(equal.result.order, 0);
-      assert.equal(equal.session.dirty, false);
-      assert.equal((await call("compareText", ["a", "b", 0, "mac-365-en_US"])).result.order, -1);
-      assert.equal((await call("compareText", ["b", "a", 0, "mac-365-en_US"])).result.order, 1);
-
-      for (const method of [
-        "snapshotDrawing",
-        "restoreDrawing",
-        "snapshotRangeStyle",
-        "restoreRangeStyle",
-      ]) {
-        const rejected = await callTool(client, "formulon_workbook_call", {
-          sessionId,
-          method,
-          args: [],
-        });
-        assert.match(errorPayload(rejected), /not allowlisted/);
+        for (const [target, method, args] of [
+          [sheet, "snapshotRangeXfs", ["A1"]],
+          [sheet, "restoreRangeXfs", []],
+          [sheet, "restoreDrawing", []],
+          [chart, "snapshot", []],
+        ]) {
+          const rejected = await callTool(client, "formulon_workbook_call", {
+            sessionId,
+            target,
+            method,
+            args,
+          });
+          assert.match(errorPayload(rejected), /is not a callable method/);
+        }
+        const { sessions } = textPayload(await callTool(client, "formulon_list_sessions"));
+        assert.equal(sessions.find((session) => session.id === sessionId).dirty, false);
+      } finally {
+        await callTool(client, "formulon_close_workbook", { sessionId });
       }
-      const { sessions } = textPayload(await callTool(client, "formulon_list_sessions"));
-      assert.equal(sessions.find((session) => session.id === sessionId).dirty, false);
-    } finally {
-      await callTool(client, "formulon_close_workbook", { sessionId });
-    }
-  });
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

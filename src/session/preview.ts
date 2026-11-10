@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
-import { ValueKind } from "@libraz/formulon";
+import { type Pagination, ValueKind } from "@libraz/formulon";
 import { cellToA1, normalizeRange, parseRangeRef } from "../a1.js";
-import { assertStatus, findSheetIndex, type Workbook } from "../formulon.js";
+import { findSheetIndex } from "../formulon.js";
 import { pointsToPixels } from "../preview/geometry.js";
 import { readObjects } from "../preview/objects.js";
 import {
@@ -84,18 +84,19 @@ function rangeCutsMerge(rect: Rect, merges: MergeRange[]): MergeRange | undefine
   return undefined;
 }
 
-function pageSummary(pagination: ReturnType<Workbook["paginate"]>): PreviewPages {
+function pageSummary(pagination: Pagination): PreviewPages {
   return {
     count: pagination.pageCount,
-    scale: pagination.scale,
+    // The effective scale as a factor (1 is 100%).
+    scale: pagination.scalePct / 100,
     paperWidthPt: pagination.paper.widthPt,
     paperHeightPt: pagination.paper.heightPt,
     landscape: pagination.paper.landscape,
     ranges: pagination.pages
       .slice(0, MAX_PAGE_RANGES)
       .map(
-        (page) =>
-          `${cellToA1(page.firstRow, page.firstCol)}:${cellToA1(page.lastRow, page.lastCol)}`,
+        ({ range }) =>
+          `${cellToA1(range.firstRow, range.firstCol)}:${cellToA1(range.lastRow, range.lastCol)}`,
       ),
     rangesTruncated: pagination.pages.length > MAX_PAGE_RANGES,
   };
@@ -127,8 +128,7 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
     throw new Error("range sheet and sheet argument refer to different worksheets");
   }
   const sheet = qualifiedSheetIndex ?? requestedSheet ?? 0;
-  const sheetNameResult = workbook.sheetName(sheet);
-  assertStatus(sheetNameResult.status, "read preview sheet name");
+  const name = workbook.sheet(sheet).name;
 
   const warnings: WarningState = { values: new Set(BASE_WARNINGS), truncated: false };
   const chosen = chooseRect(workbook, sheet, options.range);
@@ -170,11 +170,10 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
   // Inventory formulas before the optional recalc so an oversized sparse
   // workbook is rejected while the session is still clean.
   const formulas = formulaMap(workbook, sheet, chosen.rect);
-  const pagination = workbook.paginate(sheet);
-  assertStatus(pagination.status, "paginate preview sheet");
+  const pagination = workbook.sheet(sheet).getPagination();
   if (options.recalc) {
     touch(session, true);
-    assertStatus(workbook.recalc(), "recalc preview workbook");
+    workbook.recalc();
   }
 
   const rowOffsets = [0];
@@ -197,16 +196,16 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
     }
   }
 
+  const sheetHandle = workbook.sheet(sheet);
   const styleCache = new Map<number, PreviewStyle>();
   const cells: PreviewCell[] = [];
   const fonts = new Set<string>();
   for (let row = chosen.rect.firstRow; row <= chosen.rect.lastRow; row += 1) {
     for (let col = chosen.rect.firstCol; col <= chosen.rect.lastCol; col += 1) {
       const style = styleFor(workbook, sheet, row, col, metrics, warnings, styleCache);
-      const value = workbook.getValue(sheet, row, col);
-      assertStatus(value.status, `read preview cell ${cellToA1(row, col)}`);
+      const value = sheetHandle.getTypedValue(row, col);
       const text =
-        value.value.kind === ValueKind.Blank ? "" : cellText(workbook, sheet, row, col, warnings);
+        value.kind === ValueKind.Blank ? "" : cellText(workbook, sheet, row, col, warnings);
       const formula = formulas.get(`${row},${col}`) ?? "";
       fonts.add(style.fontFamily);
       cells.push({
@@ -218,7 +217,7 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
         height: size.rows[row - chosen.rect.firstRow],
         text,
         formula,
-        numeric: value.value.kind === ValueKind.Number,
+        numeric: value.kind === ValueKind.Number,
         style,
         merge: mergeByCell.get(`${row},${col}`),
       });
@@ -237,8 +236,8 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
     rows: size.rows,
     cells,
     objects: drawn.objects,
-    rowBreaks: pagination.horizontalBreaks,
-    colBreaks: pagination.verticalBreaks,
+    rowBreaks: pagination.rowBreaks.map((rowBreak) => rowBreak.row),
+    colBreaks: pagination.columnBreaks.map((columnBreak) => columnBreak.col),
     showGridLines: options.showGridLines ?? false,
     showPageBreaks: options.showPageBreaks ?? true,
   };
@@ -253,8 +252,8 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
   const warningList = Array.from(warnings.values);
   const metadata: PreviewMetadata = {
     sheet,
-    sheetName: sheetNameResult.value,
-    range: `${sheetNameResult.value}!${chosen.rangeLabel}`,
+    sheetName: name,
+    range: `${name}!${chosen.rangeLabel}`,
     logicalWidth,
     logicalHeight,
     logicalUnit: "pt",
@@ -265,8 +264,8 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
     pageCount: pagination.pageCount,
     pages,
     objects: drawn.metadata,
-    rowBreaks: pagination.horizontalBreaks,
-    colBreaks: pagination.verticalBreaks,
+    rowBreaks: pagination.rowBreaks.map((rowBreak) => rowBreak.row),
+    colBreaks: pagination.columnBreaks.map((columnBreak) => columnBreak.col),
     warnings: warningList,
     cells: metadataCells.cells,
     cellGeometryUnit: "pt",

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
+import { formulonModule } from "../../dist/formulon.js";
 import {
   analyzeSessionWorkbook,
   applySessionMutations,
@@ -87,34 +88,21 @@ test("supports dependency, spill-info, and function metadata APIs", async () => 
       ],
       true,
     );
-    assert.deepEqual(callWorkbookMethod("analysis", "precedents", [0, 0, 1, 1]).result.items, [
+    const sheet = { kind: "Sheet", sheet: 0 };
+    assert.deepEqual(callWorkbookMethod("analysis", sheet, "getPrecedents", ["B1", 1]).result, [
       { sheet: 0, row: 0, col: 0 },
     ]);
-    assert.deepEqual(callWorkbookMethod("analysis", "dependents", [0, 0, 0, 1]).result.items, [
+    assert.deepEqual(callWorkbookMethod("analysis", sheet, "getDependents", ["A1", 1]).result, [
       { sheet: 0, row: 0, col: 1 },
     ]);
-    const spill = callWorkbookMethod("analysis", "spillInfo", [0, 0, 2]);
-    assert.deepEqual(spill.result, {
-      status: { ok: true, status: 0, message: "", context: "" },
-      engaged: false,
-      anchorRow: 0,
-      anchorCol: 0,
-      rows: 0,
-      cols: 0,
-    });
+    // A cell outside any spill region reads null.
+    assert.equal(callWorkbookMethod("analysis", sheet, "getSpill", ["A1"]).result, null);
 
-    const metadata = callWorkbookMethod("analysis", "functionMetadata", ["SUM"]);
-    assert.equal(metadata.result.ok, true);
-    assert.equal(metadata.result.name, "SUM");
-    assert.equal(
-      callWorkbookMethod("analysis", "localizeFunctionName", ["SUM", "win-365-de_DE"]).result.value,
-      "SUMME",
-    );
-    assert.equal(
-      callWorkbookMethod("analysis", "canonicalizeFunctionName", ["SUMME", "win-365-de_DE"]).result
-        .value,
-      "SUM",
-    );
+    const engine = await formulonModule();
+    const metadata = engine.getFunctionMetadata("SUM");
+    assert.equal(metadata.name, "SUM");
+    assert.equal(engine.localizeFunctionName("SUM", "win-365-de_DE"), "SUMME");
+    assert.equal(engine.canonicalizeFunctionName("SUMME", "win-365-de_DE"), "SUM");
   } finally {
     closeSession("analysis");
   }

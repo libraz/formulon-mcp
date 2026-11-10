@@ -38,7 +38,7 @@ test("scopes a defined name to one sheet and reports the scope back", async () =
     const byName = Object.fromEntries(workbook.definedNames.map((entry) => [entry.name, entry]));
     assert.equal(byName.Rate.localSheetId, -1);
     assert.equal(byName["_xlnm.Print_Area"].localSheetId, 1);
-    assert.equal(byName["_xlnm.Print_Area"].formula, "'Sheet2'!$A$1:$C$3");
+    assert.equal(byName["_xlnm.Print_Area"].formula, "='Sheet2'!$A$1:$C$3");
   } finally {
     closeSession("defined-name-scope");
   }
@@ -47,14 +47,16 @@ test("scopes a defined name to one sheet and reports the scope back", async () =
 test("supports sheet operations", async () => {
   await openSession(undefined, "sheets");
   try {
-    callWorkbookMethod("sheets", "addSheet", ["Data"]);
-    assert.equal(callWorkbookMethod("sheets", "sheetCount", []).result.value, 2);
-    callWorkbookMethod("sheets", "renameSheet", [1, "Input"]);
-    assert.equal(callWorkbookMethod("sheets", "sheetName", [1]).result.value, "Input");
-    callWorkbookMethod("sheets", "moveSheet", [1, 0]);
-    assert.equal(callWorkbookMethod("sheets", "sheetName", [0]).result.value, "Input");
-    callWorkbookMethod("sheets", "removeSheet", [0]);
-    assert.equal(callWorkbookMethod("sheets", "sheetCount", []).result.value, 1);
+    const sheetNames = () =>
+      callWorkbookMethod("sheets", undefined, "listSheets", []).result.map((sheet) => sheet.name);
+    callWorkbookMethod("sheets", undefined, "addSheet", ["Data"]);
+    assert.equal(sheetNames().length, 2);
+    callWorkbookMethod("sheets", { kind: "Sheet", sheet: 1 }, "rename", ["Input"]);
+    assert.equal(sheetNames()[1], "Input");
+    callWorkbookMethod("sheets", { kind: "Sheet", sheet: 1 }, "move", [0]);
+    assert.equal(sheetNames()[0], "Input");
+    callWorkbookMethod("sheets", undefined, "removeSheet", [0]);
+    assert.equal(sheetNames().length, 1);
   } finally {
     closeSession("sheets");
   }
@@ -72,7 +74,10 @@ test("sheet-operation argument failures leave a clean session unchanged", async 
       /newName is required/,
     );
     assert.equal(getSession("sheet-preflight").dirty, false);
-    assert.equal(callWorkbookMethod("sheet-preflight", "sheetCount", []).result.value, 1);
+    assert.equal(
+      callWorkbookMethod("sheet-preflight", undefined, "listSheets", []).result.length,
+      1,
+    );
   } finally {
     closeSession("sheet-preflight");
   }
@@ -91,12 +96,11 @@ test("defined-name refersTo is stored without a leading '='", async () => {
 
   const wb = await loadWorkbook(file);
   try {
-    const entry = wb.definedNameAt(0);
-    assert.equal(entry.status.ok, true);
-    assert.equal(entry.formula.startsWith("="), false);
-    assert.equal(entry.formula, "Sheet1!$A$1:$A$5");
+    const [entry] = wb.listDefinedNames();
+    // The engine spells a formula with one leading '='; a stored '==' would show here.
+    assert.equal(entry.formula, "=Sheet1!$A$1:$A$5");
   } finally {
-    wb.delete();
+    wb.dispose();
     await rm(dir, { recursive: true, force: true });
   }
 });

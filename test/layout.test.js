@@ -26,16 +26,16 @@ test("column geometry follows the engine width model", async () => {
   try {
     const { workbook } = getSession("layout-geometry");
     const metrics = resolveColumnMetrics(workbook, 0);
-    const model = workbook.getWidthModel(0, GeometryMode.Display);
+    const model = workbook.sheet(0).getWidthModel(GeometryMode.Display);
     assert.equal(metrics.approximate, !model.calibrated);
     assert.equal(metrics.pointsPerChar, model.pointsPerChar);
-    const expected = workbook.columnCharsToPt(0, GeometryMode.Display, 30).value;
+    const expected = workbook.sheet(0).convertColumnCharsToPt(30, GeometryMode.Display);
     assert.equal(columnCharsToPoints(workbook, 0, 30), expected);
     assert.ok(Math.abs(columnPointsToChars(workbook, 0, expected) - 30) < 1e-9);
     assert.equal(columnPointsToChars(workbook, 0, 0), 0);
     // Stored widths include the cell padding, so even 1pt is a positive width.
     const narrow = columnPointsToChars(workbook, 0, 1);
-    assert.equal(narrow, workbook.columnPtToChars(0, GeometryMode.Display, 1).value);
+    assert.equal(narrow, workbook.sheet(0).convertColumnPtToChars(1, GeometryMode.Display));
     assert.ok(narrow > 0);
     assert.equal(pointsToMm(mmToPoints(25.4)), 25.4);
   } finally {
@@ -66,20 +66,31 @@ test("layout batches preserve operation order and report physical geometry", asy
     const { workbook } = getSession("layout-order");
     assert.equal(
       result.operations[0].displayGeometry.pixels,
-      pointsToPixels(workbook.columnCharsToPt(0, GeometryMode.Display, 30).value),
+      pointsToPixels(workbook.sheet(0).convertColumnCharsToPt(30, GeometryMode.Display)),
     );
     assert.equal(result.operations[1].displayGeometry.pixels, 40);
     assert.equal(result.operations[5].range, "A2:B2");
 
-    const xfIndex = callWorkbookMethod("layout-order", "getCellXfIndex", [0, 0, 0]).result;
-    const xf = callWorkbookMethod("layout-order", "getCellXf", [xfIndex.xfIndex]).result;
-    const font = callWorkbookMethod("layout-order", "getFont", [xf.fontIndex]).result;
-    const fill = callWorkbookMethod("layout-order", "getFill", [xf.fillIndex]).result;
-    const border = callWorkbookMethod("layout-order", "getBorder", [xf.borderIndex]).result;
+    const tables = (method, ...args) =>
+      callWorkbookMethod("layout-order", { kind: "WorkbookOoxml" }, method, args).result;
+    const xfIndex = callWorkbookMethod(
+      "layout-order",
+      { kind: "SheetOoxml", sheet: 0 },
+      "getCellXfIndex",
+      [0, 0],
+    ).result;
+    const xf = tables("getCellXf", xfIndex);
+    const font = tables("getFont", xf.fontIndex);
+    const fill = tables("getFill", xf.fillIndex);
+    const border = tables("getBorder", xf.borderIndex);
     assert.equal(font.bold, true);
-    assert.equal(fill.fgArgb, 0xffff0000);
-    assert.equal(border.left.colorArgb, 0xff000000);
-    assert.equal(callWorkbookMethod("layout-order", "getMerges", [0]).result.items.length, 1);
+    assert.equal(fill.foreground.argb, 0xffff0000);
+    assert.equal(border.left.color.argb, 0xff000000);
+    assert.equal(
+      callWorkbookMethod("layout-order", { kind: "Sheet", sheet: 0 }, "listMerges", []).result
+        .length,
+      1,
+    );
   } finally {
     closeSession("layout-order");
   }
@@ -116,7 +127,8 @@ test("layout preflight leaves a clean session when a later operation is invalid"
     );
     assert.equal(inspectSession("layout-preflight", false, 10).session.dirty, false);
     assert.deepEqual(
-      callWorkbookMethod("layout-preflight", "getSheetColumns", [0]).result.columns,
+      callWorkbookMethod("layout-preflight", { kind: "Sheet", sheet: 0 }, "listColumnOverrides", [])
+        .result,
       [],
     );
     for (const operation of [
@@ -156,20 +168,17 @@ test("layout mutations survive an XLSX save and reload", async () => {
 
     await openSession(outputPath, "layout-reloaded");
     try {
-      const columns = callWorkbookMethod("layout-reloaded", "getSheetColumns", [0]).result.columns;
-      const rows = callWorkbookMethod("layout-reloaded", "getSheetRowOverrides", [0]).result.rows;
-      const merges = callWorkbookMethod("layout-reloaded", "getMerges", [0]).result.items;
-      const printArea = callWorkbookMethod("layout-reloaded", "getSheetPrintArea", [0]).result;
-      assert.equal(columns[0].width, 30);
-      assert.equal(rows[0].height, 30);
+      const sheet = (method, ...args) =>
+        callWorkbookMethod("layout-reloaded", { kind: "Sheet", sheet: 0 }, method, args).result;
+      const columns = sheet("listColumnOverrides");
+      const rows = sheet("listRowOverrides");
+      const merges = sheet("listMerges");
+      const printArea = sheet("getPrintArea");
+      assert.equal(columns[0].widthChars, 30);
+      assert.equal(rows[0].heightPt, 30);
       assert.equal(merges[0].firstRow, 1);
-      assert.equal(printArea.ranges, "A1:B2");
-      const savedValue = callWorkbookMethod("layout-reloaded", "getValue", [0, 0, 0]).result;
-      assert.equal(savedValue.status.ok, true);
-      assert.deepEqual(savedValue.value, {
-        kind: "text",
-        value: "saved",
-      });
+      assert.deepEqual(printArea, [{ firstRow: 0, firstCol: 0, lastRow: 1, lastCol: 1 }]);
+      assert.deepEqual(sheet("getTypedValue", 0, 0), { kind: "text", value: "saved" });
     } finally {
       closeSession("layout-reloaded");
     }

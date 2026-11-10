@@ -1,5 +1,12 @@
+/** How `formulon_workbook_call` reaches a handle: its kind and the keys its accessors take, in order. */
+export interface WorkbookApiTarget {
+  kind: string;
+  keys: string[];
+}
+
 export interface WorkbookApiMethod {
   name: string;
+  target: WorkbookApiTarget;
   signature: string;
   description: string;
   access: "read" | "write";
@@ -16,8 +23,25 @@ export type ParsedDeclaration = WorkbookApiDeclaration & {
   references: string[];
 };
 
-export type ParsedMethod = WorkbookApiMethod & {
+/** One method of an interface; overloads are merged, one signature per line. */
+export type ParsedMethod = {
+  name: string;
+  signature: string;
+  description: string;
   references: string[];
+  /** The return type text of the first overload. */
+  returns: string;
+  /** The parameter count of the first overload. */
+  arity: number;
+};
+
+/** The members of one exported interface, without those it inherits. */
+export type ParsedInterface = {
+  name: string;
+  extends: string[];
+  methods: Map<string, ParsedMethod>;
+  /** Property name -> type text. */
+  properties: Map<string, string>;
 };
 
 type Token = {
@@ -269,92 +293,103 @@ export function parseExportedDeclarations(
   return declarations;
 }
 
-export function parseWorkbookMethods(
+/** The members of the exported interface `name`, or `undefined` when the file declares none. */
+export function parseInterface(
   source: string,
-  readOnlyMethods: ReadonlySet<string>,
+  name: string,
   declarations: ReadonlyMap<string, ParsedDeclaration>,
   tokens = scanTokens(source),
-): Map<string, ParsedMethod> {
-  const workbookStart = tokens.findIndex(
+): ParsedInterface | undefined {
+  const start = tokens.findIndex(
     (token, index) =>
       token.value === "interface" &&
       tokens[index - 1]?.value === "export" &&
-      tokens[index + 1]?.value === "Workbook",
+      tokens[index + 1]?.value === name,
   );
-  if (workbookStart < 0) {
-    throw new Error(
-      "installed @libraz/formulon declaration file has no exported Workbook interface",
-    );
+  if (start < 0) {
+    return undefined;
   }
-  let open = workbookStart + 2;
-  while (tokens[open]?.value !== "{" && tokens[open]) {
+  let open = start + 2;
+  const heritage: string[] = [];
+  while (tokens[open] && tokens[open].value !== "{") {
+    if (tokens[open - 1]?.value === "extends" || tokens[open - 1]?.value === ",") {
+      heritage.push(tokens[open].value);
+    }
     open += 1;
   }
-  if (tokens[open]?.value !== "{") {
-    throw new Error("exported Workbook interface has no body");
+  if (!tokens[open]) {
+    throw new Error(`exported interface ${name} has no body`);
   }
   const close = matchingDelimiter(tokens, open);
-  const methods = new Map<string, ParsedMethod>();
-  let index = open + 1;
-  let braceDepth = 0;
-  let parenDepth = 0;
-  let bracketDepth = 0;
   const declarationNames = new Set(declarations.keys());
+  const parsed: ParsedInterface = {
+    name,
+    extends: heritage,
+    methods: new Map(),
+    properties: new Map(),
+  };
+  let index = open + 1;
   while (index < close) {
-    const token = tokens[index];
-    if (token.value === "{" || token.value === "(" || token.value === "[") {
-      if (token.value === "{") {
-        braceDepth += 1;
+    const first = index;
+    let depth = 0;
+    while (index < close && !(tokens[index].value === ";" && depth === 0)) {
+      const value = tokens[index].value;
+      if (value === "{" || value === "(" || value === "[") {
+        depth += 1;
+      } else if (value === "}" || value === ")" || value === "]") {
+        depth -= 1;
       }
-      if (token.value === "(") {
-        parenDepth += 1;
-      }
-      if (token.value === "[") {
-        bracketDepth += 1;
-      }
-      if (token.value === "(" && braceDepth === 0 && parenDepth === 1 && bracketDepth === 0) {
-        const nameToken = tokens[index - 1];
-        if (nameToken && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(nameToken.value)) {
-          const endParen = matchingDelimiter(tokens, index);
-          let end = endParen + 1;
-          while (end < close && tokens[end].value !== ";") {
-            end += 1;
-          }
-          if (end >= close) {
-            throw new Error(`Workbook method ${nameToken.value} has no terminating semicolon`);
-          }
-          const signature = normalizeSignature(source.slice(nameToken.start, tokens[end].end));
-          if (methods.has(nameToken.value)) {
-            throw new Error(`installed Workbook declaration repeats method ${nameToken.value}`);
-          }
-          const description =
-            leadingDoc(source, nameToken.start) || `Call Workbook.${nameToken.value}.`;
-          methods.set(nameToken.value, {
-            name: nameToken.value,
-            signature,
-            description,
-            access: readOnlyMethods.has(nameToken.value) ? "read" : "write",
-            references: referencesInText(signature, declarationNames),
-          });
-          index = end + 1;
-          braceDepth = 0;
-          parenDepth = 0;
-          bracketDepth = 0;
-          continue;
-        }
-      }
-    } else if (token.value === "}" || token.value === ")" || token.value === "]") {
-      if (token.value === "}") {
-        braceDepth -= 1;
-      }
-      if (token.value === ")") {
-        parenDepth -= 1;
-      }
-      if (token.value === "]") {
-        bracketDepth -= 1;
+      index += 1;
+    }
+    const member = tokens.slice(first, index);
+    index += 1;
+    let at = member[0]?.value === "readonly" ? 1 : 0;
+    const nameToken = member[at];
+    if (!(nameToken && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(nameToken.value))) {
+      continue;
+    }
+    at += member[at + 1]?.value === "?" ? 2 : 1;
+    const end = member[member.length - 1].end;
+    const text = normalizeSignature(source.slice(nameToken.start, end));
+    if (member[at]?.value === ":") {
+      parsed.properties.set(
+        nameToken.value,
+        normalizeSignature(source.slice(member[at + 1].start, end)),
+      );
+      continue;
+    }
+    if (member[at]?.value !== "(") {
+      continue;
+    }
+    const closeParen = matchingDelimiter(member, at);
+    let arity = closeParen > at + 1 ? 1 : 0;
+    for (let depth = 0, i = at + 1; i < closeParen; i += 1) {
+      const value = member[i].value;
+      if (value === "{" || value === "(" || value === "[" || value === "<") {
+        depth += 1;
+      } else if (value === "}" || value === ")" || value === "]" || value === ">") {
+        depth -= 1;
+      } else if (value === "," && depth === 0) {
+        arity += 1;
       }
     }
-    index += 1;
+    const returns = normalizeSignature(source.slice(member[closeParen + 2]?.start ?? end, end));
+    const existing = parsed.methods.get(nameToken.value);
+    if (existing) {
+      existing.signature = `${existing.signature}\n${text}`;
+      existing.references = [
+        ...new Set([...existing.references, ...referencesInText(text, declarationNames)]),
+      ];
+      continue;
+    }
+    parsed.methods.set(nameToken.value, {
+      name: nameToken.value,
+      signature: text,
+      description: leadingDoc(source, nameToken.start) || `Call ${name}.${nameToken.value}.`,
+      references: referencesInText(text, declarationNames),
+      returns,
+      arity,
+    });
   }
-  return methods;
+  return parsed;
 }

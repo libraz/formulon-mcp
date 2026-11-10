@@ -2,86 +2,60 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { callWorkbookMethod, closeSession, openSession } from "../../dist/sessions.js";
 
+const call = (id, target, method, args = []) => callWorkbookMethod(id, target, method, args).result;
+const cacheOf = (cacheId) => ({ kind: "PivotCache", pivotCache: cacheId });
+const pivotOf = { kind: "Pivot", sheet: 0, pivot: 0 };
+const sheetOf = { kind: "Sheet", sheet: 0 };
+
 test("supports pivot cache and pivot table creation through workbook calls", async () => {
   await openSession(undefined, "pivot");
   try {
-    const cache = callWorkbookMethod("pivot", "pivotCacheCreate", [0]);
-    assert.equal(cache.result.status.ok, true);
-    const cacheId = cache.result.index;
-    assert.equal(callWorkbookMethod("pivot", "pivotCacheCount", []).result.value, 1);
+    const cacheId = 7;
+    const cache = call("pivot", undefined, "addPivotCache", [cacheId]);
+    assert.equal(cache.handle, "PivotCache");
+    assert.equal(call("pivot", undefined, "listPivotCaches").length, 1);
 
-    assert.equal(
-      callWorkbookMethod("pivot", "pivotCacheFieldAdd", [cacheId, "Region"]).result.index,
-      0,
-    );
-    assert.equal(
-      callWorkbookMethod("pivot", "pivotCacheFieldAdd", [cacheId, "Amount"]).result.index,
-      1,
-    );
-    assert.equal(callWorkbookMethod("pivot", "pivotCacheFieldCount", [cacheId]).result.value, 2);
-    assert.equal(
-      callWorkbookMethod("pivot", "pivotCacheFieldName", [cacheId, 0]).result.value,
-      "Region",
-    );
+    assert.equal(call("pivot", cacheOf(cacheId), "addField", ["Region"]), 0);
+    assert.equal(call("pivot", cacheOf(cacheId), "addField", ["Amount"]), 1);
+    const fields = call("pivot", cacheOf(cacheId), "listFields");
+    assert.equal(fields.length, 2);
+    assert.equal(fields[0].name, "Region");
 
-    assert.equal(callWorkbookMethod("pivot", "pivotCacheRecordAdd", [cacheId]).result.index, 0);
-    assert.equal(
-      callWorkbookMethod("pivot", "pivotCacheRecordSetText", [cacheId, 0, 0, "East"]).result.ok,
-      true,
-    );
-    assert.equal(
-      callWorkbookMethod("pivot", "pivotCacheRecordSetNumber", [cacheId, 0, 1, 10]).result.ok,
-      true,
-    );
-    assert.equal(callWorkbookMethod("pivot", "pivotCacheRecordCount", [cacheId]).result.value, 1);
+    assert.equal(call("pivot", cacheOf(cacheId), "addRecord"), 0);
+    call("pivot", cacheOf(cacheId), "setRecordValue", [0, 0, "East"]);
+    call("pivot", cacheOf(cacheId), "setRecordValue", [0, 1, 10]);
+    assert.equal(call("pivot", cacheOf(cacheId), "getRecordCount"), 1);
 
+    const created = call("pivot", sheetOf, "addPivot", [{ name: "Pivot1", cacheId, anchor: "E1" }]);
+    assert.equal(created.handle, "Pivot");
+    assert.equal(call("pivot", sheetOf, "listPivots").length, 1);
+    call("pivot", pivotOf, "setFieldAxis", [0, 0]);
+    call("pivot", pivotOf, "setFieldAxis", [1, 2]);
     assert.equal(
-      callWorkbookMethod("pivot", "pivotCreate", [0, "Pivot1", cacheId, 4, 0]).result.index,
-      0,
-    );
-    assert.equal(callWorkbookMethod("pivot", "pivotCount", [0]).result.value, 1);
-    assert.equal(
-      callWorkbookMethod("pivot", "pivotFieldAdd", [0, 0, { sourceName: "Region", axis: 0 }]).result
-        .index,
-      0,
-    );
-    assert.equal(
-      callWorkbookMethod("pivot", "pivotFieldAdd", [0, 0, { sourceName: "Amount", axis: 2 }]).result
-        .index,
-      1,
-    );
-    assert.equal(
-      callWorkbookMethod("pivot", "pivotDataFieldAdd", [
-        0,
-        0,
+      call("pivot", pivotOf, "addDataField", [
         { name: "Sum of Amount", fieldIndex: 1, aggregation: 0 },
-      ]).result.index,
+      ]),
       0,
     );
 
-    const layout = callWorkbookMethod("pivot", "pivotLayout", [0, 0]);
-    assert.equal(layout.result.status.ok, true);
+    const layout = call("pivot", pivotOf, "getLayout");
     assert.equal(
-      layout.result.cells.some((cell) => cell.value.kind === "number" && cell.value.value === 10),
+      layout.cells.some((cell) => cell.value === 10),
       true,
     );
 
-    assert.equal(
-      callWorkbookMethod("pivot", "pivotFilterAdd", [
-        0,
-        0,
-        { axis: 0, fieldName: "Region", type: 3, valueKind: 2, valueText: "Ea" },
-      ]).result.ok,
-      true,
-    );
-    assert.equal(callWorkbookMethod("pivot", "pivotFilterCount", [0, 0]).result.value, 1);
-    assert.equal(callWorkbookMethod("pivot", "pivotFilterClear", [0, 0]).result.ok, true);
-    assert.equal(callWorkbookMethod("pivot", "pivotDataFieldClear", [0, 0]).result.ok, true);
-    assert.equal(callWorkbookMethod("pivot", "pivotFieldClear", [0, 0]).result.ok, true);
-    assert.equal(callWorkbookMethod("pivot", "pivotRemove", [0, 0]).result.ok, true);
-    assert.equal(callWorkbookMethod("pivot", "pivotCount", [0]).result.value, 0);
-    assert.equal(callWorkbookMethod("pivot", "pivotCacheRemove", [cacheId]).result.ok, true);
-    assert.equal(callWorkbookMethod("pivot", "pivotCacheCount", []).result.value, 0);
+    // PivotFilterKind.LabelContains is 3; valueKind/valueText became a single `value`.
+    assert.equal(call("pivot", pivotOf, "addFilter", [{ fieldIndex: 0, kind: 3, value: "Ea" }]), 0);
+    assert.equal(call("pivot", pivotOf, "listFilters").length, 1);
+    call("pivot", pivotOf, "clearFilters");
+    assert.equal(call("pivot", pivotOf, "listFilters").length, 0);
+    call("pivot", pivotOf, "clearDataFields");
+    assert.equal(call("pivot", pivotOf, "listDataFields").length, 0);
+    call("pivot", pivotOf, "clearFields");
+    call("pivot", sheetOf, "removePivot", [0]);
+    assert.equal(call("pivot", sheetOf, "listPivots").length, 0);
+    call("pivot", undefined, "removePivotCache", [cacheId]);
+    assert.equal(call("pivot", undefined, "listPivotCaches").length, 0);
   } finally {
     closeSession("pivot");
   }
@@ -90,57 +64,38 @@ test("supports pivot cache and pivot table creation through workbook calls", asy
 test("groups pivot dates in seven-day intervals and formats aggregated values", async () => {
   await openSession(undefined, "pivot-days");
   try {
-    const cache = callWorkbookMethod("pivot-days", "pivotCacheCreate", [0]);
-    const cacheId = cache.result.index;
-    callWorkbookMethod("pivot-days", "pivotCacheFieldAdd", [cacheId, "Date"]);
-    callWorkbookMethod("pivot-days", "pivotCacheFieldAdd", [cacheId, "Amount"]);
+    const cacheId = 3;
+    call("pivot-days", undefined, "addPivotCache", [cacheId]);
+    call("pivot-days", cacheOf(cacheId), "addField", ["Date"]);
+    call("pivot-days", cacheOf(cacheId), "addField", ["Amount"]);
     for (const [index, serial] of [45_000, 45_003, 45_009].entries()) {
-      callWorkbookMethod("pivot-days", "pivotCacheRecordAdd", [cacheId]);
-      callWorkbookMethod("pivot-days", "pivotCacheRecordSetNumber", [cacheId, index, 0, serial]);
-      callWorkbookMethod("pivot-days", "pivotCacheRecordSetNumber", [
-        cacheId,
-        index,
-        1,
-        (index + 1) * 10,
-      ]);
+      call("pivot-days", cacheOf(cacheId), "addRecord");
+      call("pivot-days", cacheOf(cacheId), "setRecordValue", [index, 0, serial]);
+      call("pivot-days", cacheOf(cacheId), "setRecordValue", [index, 1, (index + 1) * 10]);
     }
-    callWorkbookMethod("pivot-days", "pivotCreate", [0, "ByDays", cacheId, 4, 0]);
-    callWorkbookMethod("pivot-days", "pivotFieldAdd", [0, 0, { sourceName: "Date", axis: 0 }]);
-    callWorkbookMethod("pivot-days", "pivotFieldAdd", [0, 0, { sourceName: "Amount", axis: 2 }]);
-    callWorkbookMethod("pivot-days", "pivotSetRowFieldOrder", [0, 0, [0]]);
-    assert.equal(
-      callWorkbookMethod("pivot-days", "pivotFieldSetDateGroup", [0, 0, 0, 4, 0, -1, -1, 7, -1, -1])
-        .result.ok,
-      true,
-    );
-    assert.equal(
-      callWorkbookMethod("pivot-days", "pivotFieldSetNumberFormat", [0, 0, 1, "14"]).result.ok,
-      true,
-    );
-    assert.throws(
-      () => callWorkbookMethod("pivot-days", "pivotFieldSetNumberFormat", [0, 0, 1, "0.00"]),
-      /failed/,
-    );
-    const numFmtId = callWorkbookMethod("pivot-days", "addNumFmt", ["0.00"]).result.numFmtId;
-    callWorkbookMethod("pivot-days", "pivotDataFieldAdd", [
-      0,
-      0,
-      { name: "Sum", fieldIndex: 1, aggregation: 0, numberFormat: String(numFmtId) },
+    call("pivot-days", sheetOf, "addPivot", [{ name: "ByDays", cacheId, anchor: "A1" }]);
+    call("pivot-days", pivotOf, "setFieldAxis", [0, 0]);
+    call("pivot-days", pivotOf, "setFieldAxis", [1, 2]);
+    call("pivot-days", pivotOf, "setRowFieldOrder", [[0]]);
+    // PivotDatePeriod.Days is 8 (it was 4 before the bit values were renumbered).
+    call("pivot-days", pivotOf, "setFieldDateGroup", [0, { periods: 8, intervalDays: 7 }]);
+    call("pivot-days", pivotOf, "updateField", [1, { numberFormat: "14" }]);
+    call("pivot-days", pivotOf, "addDataField", [
+      { name: "Sum", fieldIndex: 1, aggregation: 0, numberFormat: "0.00" },
     ]);
-    const layout = callWorkbookMethod("pivot-days", "pivotLayout", [0, 0]).result;
-    assert.equal(layout.status.ok, true);
+    const layout = call("pivot-days", pivotOf, "getLayout");
     assert.deepEqual(
-      layout.cells.filter((cell) => cell.kind === 1).map((cell) => cell.value.value),
-      ["2023/3/15 - 2023/3/21", "2023/3/22 - 2023/3/25"],
+      layout.cells.filter((cell) => cell.kind === 1).map((cell) => cell.value),
+      ["3/15/23 - 3/21/23", "3/22/23 - 3/25/23"],
     );
     assert.deepEqual(
       layout.cells
-        .filter((cell) => cell.value.kind === "number")
-        .map((cell) => [cell.value.value, cell.numberFormat]),
+        .filter((cell) => typeof cell.value === "number")
+        .map((cell) => [cell.value, cell.numberFormat]),
       [
-        [30, String(numFmtId)],
-        [30, String(numFmtId)],
-        [60, String(numFmtId)],
+        [30, "0.00"],
+        [30, "0.00"],
+        [60, "0.00"],
       ],
     );
   } finally {

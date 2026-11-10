@@ -1,13 +1,14 @@
 import { readFileSync, writeFileSync } from "node:fs";
+import { type Drawing, type DrawingAnchor, DrawingObjectKind } from "@libraz/formulon";
 import { parseCellRef } from "../a1.js";
 import {
   AnchorEditAs,
   AnchorKind,
-  assertStatus,
-  DrawingObjectKind,
   findSheetIndex,
+  formulonModule,
   ImageFormat,
   resolveUserPath,
+  sheetAt,
 } from "../formulon.js";
 import { mmToPoints, pixelsToPoints, pointsToPixels } from "./geometry.js";
 import { assertInGrid, refA1, sheetName } from "./shared.js";
@@ -86,58 +87,56 @@ export function emuSize(emu: number) {
   return { pt: Math.round(points * 100) / 100, px: Math.round(pointsToPixels(points)) };
 }
 
-/** The anchor fields every drawing record shares, as `listDrawingObjects` and `listShapes` report them. */
-export type DrawingAnchorFields = {
-  anchorKind: AnchorKind;
-  fromRow: number;
-  fromCol: number;
-  fromRowOff: number;
-  fromColOff: number;
-  toRow: number;
-  toCol: number;
-  toRowOff: number;
-  toColOff: number;
-  cx: number;
-  cy: number;
-};
-
 /** Describes a drawing object's anchor with A1 cells and sizes in points and 96-DPI pixels. */
-export function describePlacement(object: DrawingAnchorFields) {
+export function describePlacement(anchor: DrawingAnchor) {
   return {
-    anchorKind: ANCHOR_NAMES[object.anchorKind] ?? "oneCell",
-    ...(object.anchorKind === AnchorKind.Absolute
-      ? { position: { x: emuSize(object.fromColOff), y: emuSize(object.fromRowOff) } }
-      : {
-          from: refA1(object.fromRow, object.fromCol),
-          offset: { x: emuSize(object.fromColOff), y: emuSize(object.fromRowOff) },
-        }),
-    ...(object.anchorKind === AnchorKind.TwoCell
+    anchorKind: ANCHOR_NAMES[anchor.kind] ?? "oneCell",
+    ...(anchor.kind === AnchorKind.Absolute
       ? {
-          to: refA1(object.toRow, object.toCol),
-          toOffset: { x: emuSize(object.toColOff), y: emuSize(object.toRowOff) },
+          position: {
+            x: emuSize(anchor.fromColOffsetEmu),
+            y: emuSize(anchor.fromRowOffsetEmu),
+          },
+        }
+      : {
+          from: refA1(anchor.fromRow, anchor.fromCol),
+          offset: { x: emuSize(anchor.fromColOffsetEmu), y: emuSize(anchor.fromRowOffsetEmu) },
+        }),
+    ...(anchor.kind === AnchorKind.TwoCell
+      ? {
+          to: refA1(anchor.toRow, anchor.toCol),
+          toOffset: { x: emuSize(anchor.toColOffsetEmu), y: emuSize(anchor.toRowOffsetEmu) },
         }
       : {}),
-    width: emuSize(object.cx),
-    height: emuSize(object.cy),
+    width: emuSize(anchor.widthEmu),
+    height: emuSize(anchor.heightEmu),
   };
+}
+
+type StackableDrawing = Drawing & { setZOrder(zOrderIndex: number): void };
+
+function isStackable(drawing: Drawing): drawing is StackableDrawing {
+  return "setZOrder" in drawing;
 }
 
 /** Lists a sheet's drawing objects with A1 anchors and sizes in points and 96-DPI pixels. */
 export function listSessionImages(id: string, sheet: number | string | undefined) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
-  const result = session.workbook.listDrawingObjects(sheetIndex);
-  assertStatus(result.status, "list drawing objects");
-  const objects = Array.from(result, (object) => ({
-    objectId: object.objectId,
-    kind: KIND_NAMES[object.kind] ?? "other",
-    name: object.name,
-    description: object.descr,
-    ...describePlacement(object),
-    ...(object.kind === DrawingObjectKind.Picture
-      ? { format: imageFormatName(object.imageFormat) }
-      : {}),
-  }));
+  const sheetHandle = sheetAt(session.workbook, sheetIndex);
+  const objects = sheetHandle.listDrawings().map((drawing) => {
+    const properties = drawing.getDrawingProperties();
+    return {
+      objectId: properties.objectId,
+      kind: KIND_NAMES[properties.kind] ?? "other",
+      name: properties.name,
+      description: properties.description ?? "",
+      ...describePlacement(properties.anchor),
+      ...(properties.kind === DrawingObjectKind.Picture
+        ? { format: imageFormatName(sheetHandle.picture(drawing).getProperties().format) }
+        : {}),
+    };
+  });
   return {
     session: publicInfo(session),
     sheet: sheetIndex,
@@ -156,8 +155,7 @@ export function getSessionImage(
 ) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
-  const result = session.workbook.getImage(sheetIndex, objectId);
-  assertStatus(result.status, "get image");
+  const result = sheetAt(session.workbook, sheetIndex).picture(objectId).getProperties();
   const bytes = Buffer.from(result.bytes);
   const written = outputPath === undefined ? undefined : resolveUserPath(outputPath);
   if (written !== undefined) {
@@ -171,8 +169,8 @@ export function getSessionImage(
       sheet: sheetIndex,
       objectId,
       format: imageFormatName(result.format),
-      pxWidth: result.pxWidth,
-      pxHeight: result.pxHeight,
+      pxWidth: result.widthPx,
+      pxHeight: result.heightPx,
       byteLength: bytes.byteLength,
       ...(written ? { outputPath: written } : {}),
     },
@@ -184,7 +182,7 @@ export function getSessionImage(
  * width or height keeps the image's aspect ratio; omitting both uses its
  * pixel size at 96 DPI.
  */
-export function insertSessionImage(
+export async function insertSessionImage(
   id: string,
   sheet: number | string | undefined,
   input: ImageInsertInput,
@@ -201,43 +199,45 @@ export function insertSessionImage(
   if (bytes.byteLength > MAX_IMAGE_BYTES) {
     throw new Error(`image exceeds ${MAX_IMAGE_BYTES} bytes: ${path}`);
   }
-  const info = session.workbook.probeImage(bytes);
-  assertStatus(info.status, "probe image");
+  const info = (await formulonModule()).getImageInfo(bytes);
 
   let widthEmu = lengthToEmu(input.width, "width");
   let heightEmu = lengthToEmu(input.height, "height");
   if (widthEmu > 0 && heightEmu === 0) {
-    heightEmu = Math.round((widthEmu * info.pxHeight) / info.pxWidth);
+    heightEmu = Math.round((widthEmu * info.heightPx) / info.widthPx);
   } else if (heightEmu > 0 && widthEmu === 0) {
-    widthEmu = Math.round((heightEmu * info.pxWidth) / info.pxHeight);
+    widthEmu = Math.round((heightEmu * info.widthPx) / info.heightPx);
   }
 
   touch(session, true);
-  const result = session.workbook.insertImage(sheetIndex, bytes, {
+  const twoCell = input.anchorKind === "twoCell";
+  const picture = sheetAt(session.workbook, sheetIndex).addPicture(bytes, {
     name: input.name ?? "",
-    descr: input.description ?? "",
-    anchorKind: input.anchorKind === "twoCell" ? AnchorKind.TwoCell : AnchorKind.OneCell,
-    editAs: AnchorEditAs.OneCell,
-    row: anchor.row,
-    col: anchor.col,
-    colOffEmu: lengthToEmu(input.offsetX, "offsetX"),
-    rowOffEmu: lengthToEmu(input.offsetY, "offsetY"),
-    widthEmu,
-    heightEmu,
+    description: input.description ?? "",
+    anchor: {
+      kind: twoCell ? AnchorKind.TwoCell : AnchorKind.OneCell,
+      ...(twoCell ? { editAs: AnchorEditAs.OneCell } : {}),
+      fromRow: anchor.row,
+      fromCol: anchor.col,
+      fromColOffsetEmu: lengthToEmu(input.offsetX, "offsetX"),
+      fromRowOffsetEmu: lengthToEmu(input.offsetY, "offsetY"),
+      widthEmu,
+      heightEmu,
+    },
   });
-  assertStatus(result.status, "insert image");
+  const { objectId } = picture;
   const placed = listSessionImages(id, sheetIndex).objects.find(
-    (object) => object.objectId === result.objectId,
+    (object) => object.objectId === objectId,
   );
   return {
     session: publicInfo(session),
     sheet: sheetIndex,
-    objectId: result.objectId,
+    objectId,
     source: {
       path,
       format: imageFormatName(info.format),
-      pxWidth: info.pxWidth,
-      pxHeight: info.pxHeight,
+      pxWidth: info.widthPx,
+      pxHeight: info.heightPx,
     },
     ...(placed ? { placed } : {}),
   };
@@ -251,8 +251,13 @@ export function removeSessionImage(
 ) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
+  const sheetHandle = sheetAt(session.workbook, sheetIndex);
+  const { kind } = sheetHandle.drawing(objectId);
+  if (kind !== DrawingObjectKind.Picture && kind !== DrawingObjectKind.Chart) {
+    throw new Error(`drawing object ${objectId} is not a picture or chart`);
+  }
   touch(session, true);
-  assertStatus(session.workbook.removeDrawing(sheetIndex, objectId), "remove image");
+  sheetHandle.removeDrawing(objectId);
   touch(session, true);
   return { session: publicInfo(session), sheet: sheetIndex, objectId, removed: true };
 }
@@ -279,12 +284,8 @@ export function moveSessionImage(
 ) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
-  const objects = session.workbook.listDrawingObjects(sheetIndex);
-  assertStatus(objects.status, "list drawing objects");
-  const current = Array.from(objects).find((object) => object.objectId === objectId);
-  if (!current) {
-    throw new Error(`no drawing object ${objectId} on sheet ${sheetIndex}`);
-  }
+  const drawing = sheetAt(session.workbook, sheetIndex).drawing(objectId);
+  const current = drawing.getDrawingProperties().anchor;
   const anchor = input.anchor === undefined ? undefined : parseCellRef(input.anchor);
   if (anchor?.sheetName !== undefined) {
     throw new Error("anchor must be a cell on the selected sheet, without a sheet name");
@@ -296,32 +297,42 @@ export function moveSessionImage(
   let widthEmu = lengthToEmu(input.width, "width");
   let heightEmu = lengthToEmu(input.height, "height");
   if (widthEmu > 0 && heightEmu === 0) {
-    heightEmu = Math.round((widthEmu * current.cy) / current.cx);
+    heightEmu = Math.round((widthEmu * current.heightEmu) / current.widthEmu);
   } else if (heightEmu > 0 && widthEmu === 0) {
-    widthEmu = Math.round((heightEmu * current.cx) / current.cy);
+    widthEmu = Math.round((heightEmu * current.widthEmu) / current.heightEmu);
   }
-  const anchorKind =
+  const placement = {
+    ...(anchor ? { fromRow: anchor.row, fromCol: anchor.col } : {}),
+    ...(input.offsetX === undefined
+      ? {}
+      : { fromColOffsetEmu: lengthToEmu(input.offsetX, "offsetX") }),
+    ...(input.offsetY === undefined
+      ? {}
+      : { fromRowOffsetEmu: lengthToEmu(input.offsetY, "offsetY") }),
+    ...(widthEmu > 0 ? { widthEmu } : {}),
+    ...(heightEmu > 0 ? { heightEmu } : {}),
+  };
+  const finalKind =
     input.anchorKind === undefined
-      ? current.anchorKind
+      ? current.kind
       : input.anchorKind === "twoCell"
         ? AnchorKind.TwoCell
         : AnchorKind.OneCell;
-
   touch(session, true);
-  assertStatus(
-    session.workbook.setDrawingAnchor(sheetIndex, objectId, {
-      anchorKind,
-      row: anchor?.row ?? current.fromRow,
-      col: anchor?.col ?? current.fromCol,
-      colOffEmu:
-        input.offsetX === undefined ? current.fromColOff : lengthToEmu(input.offsetX, "offsetX"),
-      rowOffEmu:
-        input.offsetY === undefined ? current.fromRowOff : lengthToEmu(input.offsetY, "offsetY"),
-      widthEmu,
-      heightEmu,
-    }),
-    "move image",
-  );
+  if (finalKind === AnchorKind.TwoCell && Object.keys(placement).length > 0) {
+    // A two-cell anchor takes no size and keeps its `to` corner when only `from` moves, so the
+    // move is made on a one-cell anchor (which keeps the box size) and converted back; the
+    // conversion derives the `to` corner from the size.
+    drawing.update({ anchor: { kind: AnchorKind.OneCell, ...placement } });
+    drawing.update({
+      anchor: {
+        kind: AnchorKind.TwoCell,
+        ...(current.kind === AnchorKind.TwoCell ? { editAs: current.editAs } : {}),
+      },
+    });
+  } else {
+    drawing.update({ anchor: { kind: finalKind, ...placement } });
+  }
   const placed = listSessionImages(id, sheetIndex).objects.find(
     (object) => object.objectId === objectId,
   );
@@ -342,8 +353,12 @@ export function reorderSessionImage(
 ) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
+  const drawing = sheetAt(session.workbook, sheetIndex).drawing(objectId);
+  if (!isStackable(drawing)) {
+    throw new Error(`drawing object ${objectId} cannot be reordered`);
+  }
   touch(session, true);
-  assertStatus(session.workbook.setDrawingZOrder(sheetIndex, objectId, index), "reorder image");
+  drawing.setZOrder(index);
   const order = listSessionImages(id, sheetIndex).objects.map((object) => object.objectId);
   return { session: publicInfo(session), sheet: sheetIndex, objectId, index, order };
 }

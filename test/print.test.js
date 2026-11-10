@@ -152,7 +152,8 @@ test("reads the resolved page layout of a fit-to-width landscape sheet", async (
     assert.ok(layout.paper.widthPt > layout.paper.heightPt);
     assert.equal(layout.pageOrder, "downThenOver");
     assert.ok(layout.scale > 0 && layout.scale <= 1);
-    assert.ok(layout.marginsPt.left > 0);
+    // Points, not inches: every Excel margin preset is at least 0.25 in (18 pt).
+    assert.ok(layout.marginsPt.left >= 18);
     assert.ok(layout.printable.width > 0);
     assert.deepEqual(
       layout.rowPageBreaks.filter((entry) => entry.manual).map((entry) => entry.index),

@@ -1,11 +1,13 @@
+import { ColorKind } from "@libraz/formulon";
 import { MAX_COL, MAX_ROW } from "../a1.js";
 import {
-  assertStatus,
-  type BorderRecord,
+  type Border,
   type BorderSide,
   type CellXf,
-  type FillRecord,
-  type FontRecord,
+  ColorContext,
+  type Fill,
+  type Font,
+  sheetAt,
   type Workbook,
 } from "../formulon.js";
 import type {
@@ -31,18 +33,18 @@ import {
   VERTICAL_ALIGN,
 } from "./input.js";
 
-/**
- * Builds the explicit RGB `ColorSpec` for a caller-supplied colour. A record
- * read back from a file may carry a theme or indexed selector, which stays
- * authoritative over the sibling ARGB field, so an explicit colour has to
- * replace the selector rather than only the fallback.
- */
-function rgbColorSpec(argb: number) {
-  return { kind: 1, rgb: argb, theme: 0, tint: 0, indexed: 0 };
+type FontPatch = Parameters<Workbook["ooxml"]["addFont"]>[0];
+type FillPatch = Parameters<Workbook["ooxml"]["addFill"]>[0];
+type BorderPatch = Parameters<Workbook["ooxml"]["addBorder"]>[0];
+type CellXfPatch = Parameters<Workbook["ooxml"]["addCellXf"]>[0];
+
+/** The colour string the engine takes for a caller-supplied colour. */
+function colorText(spec: string): string {
+  return formatColor(parseColor(spec));
 }
 
-function applyFont(base: FontRecord, input: FontStyleInput): FontRecord {
-  const font: FontRecord = { ...base, color: { ...base.color } };
+function applyFont(base: Font, input: FontStyleInput): FontPatch {
+  const font: { -readonly [K in keyof FontPatch]: FontPatch[K] } = { ...base };
   if (input.name !== undefined) {
     font.name = input.name;
     // A `<scheme>` link tells Excel to take the typeface from the theme, which
@@ -56,21 +58,17 @@ function applyFont(base: FontRecord, input: FontStyleInput): FontRecord {
     if (!(input.size > 0)) {
       throw new Error(`invalid font size: ${input.size}`);
     }
-    font.size = input.size;
+    font.sizePt = input.size;
   }
-  // The `has*` flags say whether the element is written at all; an explicit
-  // false has to be stated, or the writer omits it and Excel inherits instead.
+  // An explicit false has to be stated: an absent element makes Excel inherit instead.
   if (input.bold !== undefined) {
     font.bold = input.bold;
-    font.hasBold = true;
   }
   if (input.italic !== undefined) {
     font.italic = input.italic;
-    font.hasItalic = true;
   }
   if (input.strike !== undefined) {
     font.strike = input.strike;
-    font.hasStrike = true;
   }
   if (input.underline !== undefined) {
     font.underline = ordinal(UNDERLINE, input.underline, "underline style");
@@ -79,42 +77,35 @@ function applyFont(base: FontRecord, input: FontStyleInput): FontRecord {
     font.vertAlign = ordinal(VERT_ALIGN_RUN, input.vertAlign, "font vertical alignment");
   }
   if (input.color !== undefined) {
-    const argb = parseColor(input.color);
-    font.colorArgb = argb;
-    font.color = rgbColorSpec(argb);
+    font.color = colorText(input.color);
   }
   return font;
 }
 
 /** Reports a font record in the vocabulary `FontStyleInput` accepts back. */
-export function describeFont(font: FontRecord) {
+export function describeFont(wb: Workbook, font: Font) {
+  const color =
+    font.color.kind === ColorKind.Rgb
+      ? font.color.argb
+      : wb.resolveColor(font.color, ColorContext.Font).argb;
   return {
     name: font.name,
-    size: font.size,
-    bold: font.bold,
-    italic: font.italic,
-    strike: font.strike,
+    size: font.sizePt,
+    bold: font.bold ?? false,
+    italic: font.italic ?? false,
+    strike: font.strike ?? false,
     underline: UNDERLINE[font.underline] ?? font.underline,
     vertAlign: VERT_ALIGN_RUN[font.vertAlign] ?? font.vertAlign,
-    color: formatColor(font.colorArgb),
+    color: formatColor(color),
     // Reported because it decides whether `name` survives a theme change: a
     // font linked to the theme is re-resolved from it rather than kept.
     themeLink: FONT_SCHEME[font.scheme] ?? font.scheme,
   };
 }
 
-/**
- * The workbook default font: font 0, the record every unstyled cell resolves
- * to. The style table always owns the slot, so it is set in place rather than
- * appended — `addFont` can only add a font beside it.
- */
-const DEFAULT_FONT_INDEX = 0;
-
 /** Reads the workbook default font. */
 export function readDefaultFont(wb: Workbook) {
-  const font = wb.getFont(DEFAULT_FONT_INDEX);
-  assertStatus(font.status, "read default font");
-  return describeFont(record(font));
+  return describeFont(wb, wb.getDefaultFont());
 }
 
 /**
@@ -124,29 +115,22 @@ export function readDefaultFont(wb: Workbook) {
  * the seeded default is Excel's Calibri.
  */
 export function applyDefaultFont(wb: Workbook, input: FontStyleInput) {
-  const base = wb.getFont(DEFAULT_FONT_INDEX);
-  assertStatus(base.status, "read default font");
-  const font = applyFont(record(base), input);
-  assertStatus(wb.setDefaultFont(font), "set default font");
-  return describeFont(font);
+  wb.setDefaultFont(applyFont(wb.getDefaultFont(), input));
+  return describeFont(wb, wb.getDefaultFont());
 }
 
-function applyFill(base: FillRecord, input: FillStyleInput): FillRecord {
-  const fill: FillRecord = { ...base, fg: { ...base.fg }, bg: { ...base.bg } };
+function applyFill(base: Fill, input: FillStyleInput): FillPatch {
+  const fill: { -readonly [K in keyof FillPatch]: FillPatch[K] } = { ...base };
   if (input.color !== undefined) {
-    const argb = parseColor(input.color);
-    fill.fgArgb = argb;
-    fill.fg = rgbColorSpec(argb);
+    fill.foreground = colorText(input.color);
     // A colour with no stated pattern means "paint the cell", which OOXML
     // spells as a solid pattern whose foreground carries the colour.
-    if (input.pattern === undefined && fill.pattern === 0) {
+    if (input.pattern === undefined && base.pattern === 0) {
       fill.pattern = 1;
     }
   }
   if (input.bgColor !== undefined) {
-    const argb = parseColor(input.bgColor);
-    fill.bgArgb = argb;
-    fill.bg = rgbColorSpec(argb);
+    fill.background = colorText(input.bgColor);
   }
   if (input.pattern !== undefined) {
     fill.pattern = ordinal(FILL_PATTERN, input.pattern, "fill pattern");
@@ -154,22 +138,26 @@ function applyFill(base: FillRecord, input: FillStyleInput): FillRecord {
   return fill;
 }
 
-function normalizeSide(input: BorderSideInput): { style: number; argb?: number } {
-  const spec = typeof input === "string" ? { style: input } : input;
-  const style = ordinal(BORDER_STYLE, spec.style ?? "thin", "border style");
-  return { style, argb: spec.color === undefined ? undefined : parseColor(spec.color) };
+type EngineSide = NonNullable<BorderPatch["left"]>;
+
+const BLACK = "#000000";
+
+type NormalizedSide = { style: BorderSide["style"]; color?: string };
+
+function normalizeSide(input: BorderSideInput): NormalizedSide {
+  const spec = typeof input === "string" ? { style: input, color: undefined } : input;
+  const style = ordinal<BorderSide["style"]>(BORDER_STYLE, spec.style ?? "thin", "border style");
+  return { style, color: spec.color === undefined ? undefined : colorText(spec.color) };
 }
 
-function withSide(base: BorderSide, side: { style: number; argb?: number }): BorderSide {
-  const next: BorderSide = { ...base, color: { ...base.color }, style: side.style };
-  if (side.argb !== undefined) {
-    next.colorArgb = side.argb;
-    next.color = rgbColorSpec(side.argb);
-  } else if (side.style !== 0 && base.color.kind === 0 && base.colorArgb === 0) {
-    next.colorArgb = 0xff000000;
-    next.color = rgbColorSpec(0xff000000);
+function withSide(base: BorderSide, side: NormalizedSide): EngineSide {
+  if (side.color !== undefined) {
+    return { style: side.style, color: side.color };
   }
-  return next;
+  if (side.style !== 0 && base.color.kind === ColorKind.None) {
+    return { style: side.style, color: BLACK };
+  }
+  return { ...base, style: side.style };
 }
 
 /** One band of a range split: an edge row/column, or the span between edges. */
@@ -195,69 +183,56 @@ function bands(first: number, last: number): Band[] {
 }
 
 function buildBorder(
-  base: BorderRecord,
+  base: Border,
   input: BorderStyleInput,
   rowBand: Band,
   colBand: Band,
-): BorderRecord {
-  let border: BorderRecord = {
-    ...base,
-    left: { ...base.left, color: { ...base.left.color } },
-    right: { ...base.right, color: { ...base.right.color } },
-    top: { ...base.top, color: { ...base.top.color } },
-    bottom: { ...base.bottom, color: { ...base.bottom.color } },
-    diagonal: { ...base.diagonal, color: { ...base.diagonal.color } },
-  };
+): BorderPatch {
+  const border: { -readonly [K in keyof Border]: BorderPatch[K] } = { ...base };
+  const sides = ["left", "right", "top", "bottom"] as const;
   if (input.all !== undefined) {
     const side = normalizeSide(input.all);
-    border = {
-      ...border,
-      left: withSide(border.left, side),
-      right: withSide(border.right, side),
-      top: withSide(border.top, side),
-      bottom: withSide(border.bottom, side),
-    };
+    for (const key of sides) {
+      border[key] = withSide(base[key], side);
+    }
   }
-  for (const key of ["left", "right", "top", "bottom"] as const) {
+  for (const key of sides) {
     const spec = input[key];
     if (spec !== undefined) {
-      border[key] = withSide(border[key], normalizeSide(spec));
+      border[key] = withSide(base[key], normalizeSide(spec));
     }
   }
   if (input.outline !== undefined) {
     const side = normalizeSide(input.outline);
     if (rowBand.atStart) {
-      border.top = withSide(border.top, side);
+      border.top = withSide(base.top, side);
     }
     if (rowBand.atEnd) {
-      border.bottom = withSide(border.bottom, side);
+      border.bottom = withSide(base.bottom, side);
     }
     if (colBand.atStart) {
-      border.left = withSide(border.left, side);
+      border.left = withSide(base.left, side);
     }
     if (colBand.atEnd) {
-      border.right = withSide(border.right, side);
+      border.right = withSide(base.right, side);
     }
   }
   return border;
 }
 
-function applyAlignment(xf: CellXf, input: AlignStyleInput): CellXf {
-  const next: CellXf = { ...xf };
+function applyAlignment(xf: CellXfPatch, input: AlignStyleInput): CellXfPatch {
+  const next: { -readonly [K in keyof CellXfPatch]: CellXfPatch[K] } = { ...xf };
   let touched = false;
   if (input.horizontal !== undefined) {
-    next.horizontalAlign = ordinal(HORIZONTAL_ALIGN, input.horizontal, "horizontal alignment");
-    next.hasHorizontalAlign = true;
+    next.horizontal = ordinal(HORIZONTAL_ALIGN, input.horizontal, "horizontal alignment");
     touched = true;
   }
   if (input.vertical !== undefined) {
-    next.verticalAlign = ordinal(VERTICAL_ALIGN, input.vertical, "vertical alignment");
-    next.hasVerticalAlign = true;
+    next.vertical = ordinal(VERTICAL_ALIGN, input.vertical, "vertical alignment");
     touched = true;
   }
   if (input.wrapText !== undefined) {
     next.wrapText = input.wrapText;
-    next.hasWrapText = true;
     touched = true;
   }
   if (input.indent !== undefined) {
@@ -273,30 +248,9 @@ function applyAlignment(xf: CellXf, input: AlignStyleInput): CellXf {
     touched = true;
   }
   if (touched) {
-    next.hasAlignment = true;
+    next.applyAlignment = true;
   }
   return next;
-}
-
-/** Strips the `status` field engine getters carry so a record round-trips into a setter. */
-function record<T>(value: T & { status?: unknown }): T {
-  const { status: _status, ...rest } = value;
-  return rest as T;
-}
-
-function addStyle(
-  wb: Workbook,
-  kind: "font" | "fill" | "border",
-  entry: FontRecord | FillRecord | BorderRecord,
-): number {
-  const result =
-    kind === "font"
-      ? wb.addFont(entry as FontRecord)
-      : kind === "fill"
-        ? wb.addFill(entry as FillRecord)
-        : wb.addBorder(entry as BorderRecord);
-  assertStatus(result.status, `add ${kind}`);
-  return result.index;
 }
 
 /** The style properties a base `xf` contributes once the deltas are applied. */
@@ -305,7 +259,7 @@ type DerivedStyle = {
   fontIndex: number;
   fillIndex: number;
   numFmtId: number;
-  border: BorderRecord;
+  border: Border;
 };
 
 /**
@@ -323,43 +277,27 @@ function deriveStyle(
   if (cached) {
     return cached;
   }
-  const baseXf = wb.getCellXf(baseXfIndex);
-  assertStatus(baseXf.status, `read style ${baseXfIndex}`);
+  const { ooxml } = wb;
+  const baseXf = ooxml.getCellXf(baseXfIndex);
 
-  let fontIndex = baseXf.fontIndex;
-  if (style.font) {
-    const baseFont = wb.getFont(baseXf.fontIndex);
-    assertStatus(baseFont.status, `read font ${baseXf.fontIndex}`);
-    fontIndex = addStyle(wb, "font", applyFont(record(baseFont), style.font));
-  }
-
-  let fillIndex = baseXf.fillIndex;
-  if (style.fill) {
-    const baseFill = wb.getFill(baseXf.fillIndex);
-    assertStatus(baseFill.status, `read fill ${baseXf.fillIndex}`);
-    fillIndex = addStyle(wb, "fill", applyFill(record(baseFill), style.fill));
-  }
+  const fontIndex = style.font
+    ? ooxml.addFont(applyFont(ooxml.getFont(baseXf.fontIndex), style.font))
+    : baseXf.fontIndex;
+  const fillIndex = style.fill
+    ? ooxml.addFill(applyFill(ooxml.getFill(baseXf.fillIndex), style.fill))
+    : baseXf.fillIndex;
 
   let numFmtId = baseXf.numFmtId;
   if (style.numberFormat !== undefined) {
-    if (style.numberFormat === "") {
-      numFmtId = 0;
-    } else {
-      const added = wb.addNumFmt(style.numberFormat);
-      assertStatus(added.status, "add number format");
-      numFmtId = added.numFmtId;
-    }
+    numFmtId = style.numberFormat === "" ? 0 : ooxml.addNumberFormat(style.numberFormat);
   }
 
-  const baseBorder = wb.getBorder(baseXf.borderIndex);
-  assertStatus(baseBorder.status, `read border ${baseXf.borderIndex}`);
-
   const derived: DerivedStyle = {
-    xf: record(baseXf),
+    xf: baseXf,
     fontIndex,
     fillIndex,
     numFmtId,
-    border: record(baseBorder),
+    border: ooxml.getBorder(baseXf.borderIndex),
   };
   cache.set(baseXfIndex, derived);
   return derived;
@@ -428,65 +366,45 @@ export function applyRangeStyle(
 
   const cache = new Map<number, DerivedStyle>();
   const regions: StyledRegion[] = [];
+  const { ooxml } = wb;
+  const sheetOoxml = sheetAt(wb, sheet).ooxml;
   for (const rowBand of rowBands) {
     for (const colBand of colBands) {
-      const resolved = wb.rangeStyleBases(
-        sheet,
-        rowBand.first,
-        colBand.first,
-        rowBand.last,
-        colBand.last,
-      );
-      assertStatus(resolved.status, "read range styles");
-      const fromXfs = resolved.xfIndices;
+      const band = {
+        firstRow: rowBand.first,
+        firstCol: colBand.first,
+        lastRow: rowBand.last,
+        lastCol: colBand.last,
+      };
       const patched = new Map<number, number>();
-      const toXfs = fromXfs.map((xfIndex) => {
+      const mapping = new Map<number, number>();
+      for (const xfIndex of sheetOoxml.getRangeXfBases(band)) {
         // "default" discards whatever is there, so every base patches xf 0.
         const baseXfIndex = base === "default" ? 0 : xfIndex;
-        const known = patched.get(baseXfIndex);
-        if (known !== undefined) {
-          return known;
+        let patchedIndex = patched.get(baseXfIndex);
+        if (patchedIndex === undefined) {
+          const derived = deriveStyle(wb, baseXfIndex, style, cache);
+          const borderIndex = borderInput
+            ? ooxml.addBorder(buildBorder(derived.border, borderInput, rowBand, colBand))
+            : derived.xf.borderIndex;
+          patchedIndex = ooxml.addCellXf(
+            applyAlignment(
+              {
+                ...derived.xf,
+                fontIndex: derived.fontIndex,
+                fillIndex: derived.fillIndex,
+                borderIndex,
+                numFmtId: derived.numFmtId,
+              },
+              style.align ?? {},
+            ),
+          );
+          patched.set(baseXfIndex, patchedIndex);
+          regions.push({ ...band, baseXfIndex, xfIndex: patchedIndex });
         }
-        const derived = deriveStyle(wb, baseXfIndex, style, cache);
-        const borderIndex = borderInput
-          ? addStyle(wb, "border", buildBorder(derived.border, borderInput, rowBand, colBand))
-          : derived.xf.borderIndex;
-        const added = wb.addXf(
-          applyAlignment(
-            {
-              ...derived.xf,
-              fontIndex: derived.fontIndex,
-              fillIndex: derived.fillIndex,
-              borderIndex,
-              numFmtId: derived.numFmtId,
-            },
-            style.align ?? {},
-          ),
-        );
-        assertStatus(added.status, "add cell format");
-        patched.set(baseXfIndex, added.index);
-        regions.push({
-          firstRow: rowBand.first,
-          firstCol: colBand.first,
-          lastRow: rowBand.last,
-          lastCol: colBand.last,
-          baseXfIndex,
-          xfIndex: added.index,
-        });
-        return added.index;
-      });
-      assertStatus(
-        wb.remapRangeStyle(
-          sheet,
-          rowBand.first,
-          colBand.first,
-          rowBand.last,
-          colBand.last,
-          fromXfs,
-          toXfs,
-        ),
-        "apply cell format to range",
-      );
+        mapping.set(xfIndex, patchedIndex);
+      }
+      sheetOoxml.remapRangeXfs(band, mapping);
     }
   }
 

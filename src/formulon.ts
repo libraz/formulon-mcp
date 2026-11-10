@@ -4,51 +4,54 @@ import path from "node:path";
 import createFormulon, {
   AnchorEditAs,
   AnchorKind,
-  type BorderRecord,
+  type Border,
   type BorderSide,
-  type CellEntry,
+  CalcMode,
   type CellXf,
   ColorContext,
   ColorResolution,
   DisplayStatus,
-  DrawingObjectKind,
-  type ExcelProfileId,
-  type FillRecord,
-  type FontRecord,
-  type FormulonModule,
+  ErrorDisplayName,
+  ExcelError,
+  enumName,
+  type Fill,
+  type Font,
+  type Formulon,
+  FormulonError,
   GeometryMode,
   type HeaderFooterInput,
   ImageFormat,
-  type ListResult,
-  type NumberResult,
+  type NativeValue,
   type PageMarginsInput,
   type PageSetupInput,
   type PrintOptionsInput,
-  type ReadDiagnosticsResult,
-  type SaveDiagnosticsResult,
-  ShapePaint,
+  type ProfileId,
+  type ReadDiagnostics,
+  type SaveDiagnostics,
+  type Sheet,
   SheetVisibility,
   SparklineAxisType,
-  SparklineEmptyCells,
   SparklineType,
-  type Status,
+  StatusCode,
   type Value,
+  ValueKind,
   type Workbook,
   WorkbookFormat,
 } from "@libraz/formulon";
+import { cellToA1 } from "./a1.js";
 
 export type {
-  BorderRecord,
+  Border,
   BorderSide,
   CellXf,
-  ExcelProfileId,
-  FillRecord,
-  FontRecord,
+  Fill,
+  Font,
   HeaderFooterInput,
   PageMarginsInput,
   PageSetupInput,
   PrintOptionsInput,
-  Status,
+  ProfileId,
+  Sheet,
   Workbook,
 };
 export {
@@ -57,14 +60,14 @@ export {
   ColorContext,
   ColorResolution,
   DisplayStatus,
-  DrawingObjectKind,
+  ExcelError,
+  FormulonError,
   GeometryMode,
   ImageFormat,
-  ShapePaint,
   SheetVisibility,
   SparklineAxisType,
-  SparklineEmptyCells,
   SparklineType,
+  StatusCode,
 };
 
 export type CellMutation =
@@ -93,8 +96,7 @@ const VALUE_KIND = Object.freeze({
   7: "lambda",
 } as const);
 
-let modulePromise: Promise<FormulonModule> | undefined;
-let loadedModule: FormulonModule | undefined;
+let modulePromise: Promise<Formulon> | undefined;
 
 /** Sends one engine output line to stderr, keeping fd 1 free for JSON-RPC. */
 function toStderr(message: string): void {
@@ -109,61 +111,14 @@ function toStderr(message: string): void {
  * rather than `console.log` — so a single line of engine output would land in
  * the middle of a JSON-RPC frame, and replacing `console.log` would not stop it.
  */
-export function formulonModule(): Promise<FormulonModule> {
-  modulePromise ??= (
-    createFormulon({ print: toStderr, printErr: toStderr }) as Promise<FormulonModule>
-  ).then((module) => {
-    // Cache the resolved instance so synchronous helpers such as errorName()
-    // can reach the engine without threading a promise through every caller.
-    loadedModule = module;
-    return module;
-  });
+export function formulonModule(): Promise<Formulon> {
+  modulePromise ??= createFormulon({ print: toStderr, printErr: toStderr });
   return modulePromise;
 }
 
-/**
- * Returns the Excel error literal for an `ErrorCode` ordinal.
- *
- * Ordinals are the engine's own enum order (not Excel's BIFF codes), so the
- * mapping is asked of the engine rather than restated here. Every read that
- * can surface an error code happens after a workbook is open, so the module is
- * loaded by then; the ordinal fallback only covers a call made before that.
- */
+/** Returns the Excel error literal for an `ErrorCode` ordinal. */
 export function errorName(errorCode: number): string {
-  return loadedModule?.errorDisplayName(errorCode) ?? `#ERR(${errorCode})`;
-}
-
-/**
- * Fields of a `cellAt` entry, which the engine leaves unset when the read
- * fails. Throws on a failed read so callers get the populated record.
- */
-export type ResolvedCell = {
-  row: number;
-  col: number;
-  formula: string;
-  value: Value;
-};
-
-/** Asserts a `cellAt` read succeeded and returns its populated fields. */
-export function requireCell(entry: CellEntry, action: string): ResolvedCell {
-  assertStatus(entry.status, action);
-  if (entry.row === undefined || entry.col === undefined || entry.value === undefined) {
-    throw new Error(`${action} failed: incomplete cell record`);
-  }
-  return { row: entry.row, col: entry.col, formula: entry.formula ?? "", value: entry.value };
-}
-
-/** Returns a `cellAt` entry's fields, or null when the read failed. */
-export function readCell(entry: CellEntry): ResolvedCell | null {
-  if (
-    !entry.status.ok ||
-    entry.row === undefined ||
-    entry.col === undefined ||
-    entry.value === undefined
-  ) {
-    return null;
-  }
-  return { row: entry.row, col: entry.col, formula: entry.formula ?? "", value: entry.value };
+  return ErrorDisplayName[errorCode as keyof typeof ErrorDisplayName] ?? `#ERR(${errorCode})`;
 }
 
 /** Ensures a formula has a leading equals sign. */
@@ -184,82 +139,106 @@ export function jsonText(value: unknown): string {
     : JSON.stringify(value);
 }
 
-/** Converts a Formulon value envelope into a compact JSON shape for MCP responses. */
+/** Converts a tagged Formulon `Value` into a compact JSON shape for MCP responses. */
 export function valueToJson(value: Value) {
   const kind = VALUE_KIND[value.kind as keyof typeof VALUE_KIND] ?? "unknown";
   switch (value.kind) {
-    case 0:
+    case ValueKind.Blank:
       return { kind };
-    case 1:
+    case ValueKind.Number:
       return { kind, value: value.number };
-    case 2:
-      return { kind, value: Boolean(value.boolean) };
-    case 3:
+    case ValueKind.Bool:
+      return { kind, value: value.boolean };
+    case ValueKind.Text:
       return { kind, value: value.text };
-    case 4:
+    case ValueKind.Error:
       return { kind, errorCode: value.errorCode, errorName: errorName(value.errorCode) };
     default:
       return { kind, raw: value };
   }
 }
 
-/** Converts a Formulon status into plain JSON. */
-export function statusToJson(status: Status) {
+/** Converts a native cell value (`null`, number, boolean, string, `ExcelError`) to the `valueToJson` shape. */
+export function nativeToJson(value: NativeValue) {
+  if (value === null) {
+    return { kind: VALUE_KIND[0] };
+  }
+  if (typeof value === "number") {
+    return { kind: VALUE_KIND[1], value };
+  }
+  if (typeof value === "boolean") {
+    return { kind: VALUE_KIND[2], value };
+  }
+  if (typeof value === "string") {
+    return { kind: VALUE_KIND[3], value };
+  }
+  if (value instanceof ExcelError) {
+    return { kind: VALUE_KIND[4], errorCode: value.code, errorName: errorName(value.code) };
+  }
+  return { kind: VALUE_KIND[5], raw: value };
+}
+
+/** The per-step status JSON a tool result carries: `{ ok, status, message, context }`. */
+export type StatusJson = { ok: boolean; status: number; message: string; context: string };
+
+/** The status JSON of a step that completed. */
+export function okStatus(): StatusJson {
+  return { ok: true, status: 0, message: "", context: "" };
+}
+
+/**
+ * The status JSON of a step that failed: a `FormulonError` keeps its code, message and context;
+ * any other error reports `InternalError` with its message.
+ */
+export function errorStatus(error: unknown): StatusJson {
+  if (error instanceof FormulonError) {
+    return { ok: false, status: error.code, message: error.message, context: error.context };
+  }
   return {
-    ok: status.ok,
-    status: status.status,
-    message: status.message,
-    context: status.context,
+    ok: false,
+    status: StatusCode.InternalError,
+    message: error instanceof Error ? error.message : String(error),
+    context: "",
   };
 }
 
-function isStatusLike(value: unknown): value is Status {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "ok" in value &&
-    "status" in value &&
-    typeof (value as { ok: unknown }).ok === "boolean"
-  );
+/** Runs one step and reports its outcome as status JSON instead of throwing. */
+export function stepStatus(step: () => void): StatusJson {
+  try {
+    step();
+    return okStatus();
+  } catch (error) {
+    return errorStatus(error);
+  }
 }
 
-function isStatusResult(value: unknown): value is { status: Status } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "status" in value &&
-    isStatusLike((value as { status: unknown }).status)
-  );
-}
-
-function isListResult(value: unknown): value is ListResult<unknown> {
-  return Array.isArray(value) && isStatusResult(value);
-}
-
-function isValueLike(value: unknown): value is Value {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "kind" in value &&
-    "number" in value &&
-    "boolean" in value &&
-    "text" in value &&
-    "errorCode" in value
-  );
+/**
+ * The text of a tool error: a `FormulonError` leads with its status name, then the message,
+ * the context and, for a formula syntax error, where the parse failed.
+ */
+export function errorText(error: unknown): string {
+  if (!(error instanceof FormulonError)) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  const parts = [`${enumName(StatusCode, error.code) ?? error.code}: ${error.message}`];
+  if (error.context) {
+    parts.push(`(${error.context})`);
+  }
+  const parse = error.parseError;
+  if (parse) {
+    parts.push(
+      `[parse ${parse.code} at ${parse.start}-${parse.end}, line ${parse.line} column ${parse.column}]`,
+    );
+  }
+  return parts.join(" ");
 }
 
 /** Converts arbitrary Formulon return values into JSON-friendly data. */
 export function resultToJson(value: unknown): unknown {
-  if (isListResult(value)) {
-    return {
-      status: statusToJson(value.status),
-      items: value.map((item) => resultToJson(item)),
-    };
+  if (value instanceof ExcelError) {
+    return nativeToJson(value);
   }
-  if (isStatusLike(value)) {
-    return statusToJson(value);
-  }
-  if (isValueLike(value)) {
+  if (isTaggedValue(value)) {
     return valueToJson(value);
   }
   if (value instanceof Uint8Array) {
@@ -268,6 +247,9 @@ export function resultToJson(value: unknown): unknown {
   // Other typed arrays carry numbers (collation class ids), not opaque bytes.
   if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
     return Array.from(value as unknown as ArrayLike<number>);
+  }
+  if (value instanceof Map) {
+    return Object.fromEntries([...value].map(([key, entry]) => [String(key), resultToJson(entry)]));
   }
   if (Array.isArray(value)) {
     return value.map((item) => resultToJson(item));
@@ -280,30 +262,30 @@ export function resultToJson(value: unknown): unknown {
   return value;
 }
 
-/** Asserts a status-bearing numeric result and returns its plain number. */
-export function requireNumberResult(result: NumberResult<number>, action: string): number {
-  assertStatus(result.status, action);
-  return result.value;
+function isTaggedValue(value: unknown): value is Value {
+  if (typeof value !== "object" || value === null || !("kind" in value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  switch (record.kind) {
+    case ValueKind.Blank:
+      return Object.keys(record).length === 1;
+    case ValueKind.Number:
+      return typeof record.number === "number";
+    case ValueKind.Bool:
+      return typeof record.boolean === "boolean";
+    case ValueKind.Text:
+      return typeof record.text === "string";
+    case ValueKind.Error:
+      return typeof record.errorCode === "number";
+    default:
+      return false;
+  }
 }
 
 /** Whether the workbook uses the 1904 date system (`<workbookPr date1904>`). */
 export function isDate1904(wb: Workbook): boolean {
-  return requireNumberResult(wb.date1904(), "read date system") !== 0;
-}
-
-/** Asserts a status-bearing list result and returns a plain mutable array. */
-export function requireListResult<T>(result: ListResult<T>, action: string): T[] {
-  assertStatus(result.status, action);
-  return Array.from(result);
-}
-
-/** Throws when a Formulon status is not ok. */
-export function assertStatus(status: Status, action: string): void {
-  if (status.ok) {
-    return;
-  }
-  const detail = status.context ? `${status.message} (${status.context})` : status.message;
-  throw new Error(`${action} failed: ${detail || `status ${status.status}`}`);
+  return wb.getDate1904();
 }
 
 /** Resolves a user-supplied path relative to the MCP server process cwd. */
@@ -314,15 +296,21 @@ export function resolveUserPath(filePath: string): string {
   return path.resolve(process.cwd(), filePath);
 }
 
-/** Loads an xlsx workbook from disk and validates the native handle. */
-export async function loadWorkbook(filePath: string): Promise<Workbook> {
+/**
+ * Loads an xlsx or xlsb workbook from disk. With `cachedValues`, reads return the values the file
+ * cached until an explicit recalc: the engine loads formulas pending, and under automatic
+ * calculation a read would compute them first. Only a workbook that is not saved back is loaded
+ * that way, since the calculation mode is part of the file.
+ */
+export async function loadWorkbook(
+  filePath: string,
+  options: { cachedValues?: boolean } = {},
+): Promise<Workbook> {
   const Module = await formulonModule();
   const bytes = await readFile(resolveUserPath(filePath));
-  const wb = Module.Workbook.loadBytes(bytes);
-  if (!wb.isValid()) {
-    const message = Module.lastErrorMessage();
-    wb.delete();
-    throw new Error(`load workbook failed: ${message || filePath}`);
+  const wb = Module.Workbook.load(bytes);
+  if (options.cachedValues) {
+    wb.setCalcMode(CalcMode.Manual);
   }
   return wb;
 }
@@ -335,13 +323,7 @@ export const PROFILE_ENV = "FORMULON_MCP_PROFILE";
 
 /** Reports whether the engine knows `profile`. */
 export async function isKnownProfile(profile: string): Promise<boolean> {
-  if (!PROFILE_ID_PATTERN.test(profile)) {
-    return false;
-  }
-  const wb = (await formulonModule()).Workbook.createForProfile(profile);
-  const known = wb.isValid();
-  wb.delete();
-  return known;
+  return (await formulonModule()).listProfileIds().includes(profile as ProfileId);
 }
 
 /**
@@ -353,41 +335,36 @@ export async function isKnownProfile(profile: string): Promise<boolean> {
  */
 export async function createOrLoadWorkbook(
   filePath?: string,
-  requested?: ExcelProfileId,
+  requested?: ProfileId,
+  options: { cachedValues?: boolean } = {},
 ): Promise<Workbook> {
   const configured = process.env[PROFILE_ENV]?.trim() || undefined;
-  const profile = requested ?? (configured as ExcelProfileId | undefined);
+  const profile = requested ?? (configured as ProfileId | undefined);
   const source = requested === undefined ? ` (from ${PROFILE_ENV})` : "";
   if (filePath) {
-    const wb = await loadWorkbook(filePath);
+    const wb = await loadWorkbook(filePath, options);
     if (profile !== undefined) {
-      const status = wb.setExcelProfileId(profile);
-      if (!status.ok) {
-        wb.delete();
-        assertStatus(status, `set excel profile ${profile}${source}`);
+      try {
+        wb.setProfileId(profile);
+      } catch (error) {
+        wb.dispose();
+        throw new Error(`set excel profile ${profile}${source} failed: ${errorText(error)}`);
       }
     }
     return wb;
   }
-  const Module = await formulonModule();
-  const wb =
-    profile === undefined
-      ? Module.Workbook.createDefault()
-      : Module.Workbook.createForProfile(profile);
-  if (!wb.isValid()) {
-    wb.delete();
-    throw new Error(
-      profile === undefined
-        ? "create workbook failed"
-        : `unknown excel profile: ${profile}${source}`,
-    );
+  if (profile !== undefined && !(await isKnownProfile(profile))) {
+    throw new Error(`unknown excel profile: ${profile}${source}`);
   }
-  return wb;
+  const Module = await formulonModule();
+  return profile === undefined
+    ? Module.Workbook.createDefault()
+    : Module.Workbook.createForProfile(profile);
 }
 
 /** Resolves either a zero-based sheet index or a sheet name to a zero-based sheet index. */
 export function findSheetIndex(wb: Workbook, sheet: number | string | undefined): number {
-  const sheetCount = requireNumberResult(wb.sheetCount(), "read sheet count");
+  const sheetCount = wb.sheetCount;
   if (sheet === undefined) {
     if (sheetCount === 0) {
       throw new Error("workbook has no sheets");
@@ -400,14 +377,16 @@ export function findSheetIndex(wb: Workbook, sheet: number | string | undefined)
     }
     return sheet;
   }
-  for (let idx = 0; idx < sheetCount; idx += 1) {
-    const name = wb.sheetName(idx);
-    assertStatus(name.status, `read sheet ${idx} name`);
-    if (name.value === sheet) {
-      return idx;
-    }
+  const found = wb.listSheets().find((handle) => handle.name === sheet);
+  if (found === undefined) {
+    throw new Error(`sheet not found: ${sheet}`);
   }
-  throw new Error(`sheet not found: ${sheet}`);
+  return found.index;
+}
+
+/** The `Sheet` handle of a sheet index or name (the first sheet when omitted). */
+export function sheetAt(wb: Workbook, sheet: number | string | undefined): Sheet {
+  return wb.sheet(findSheetIndex(wb, sheet));
 }
 
 /**
@@ -419,91 +398,86 @@ export const WORKBOOK_SCOPE = -1;
 /** Builds a summary of workbook sheets, defined names, tables, and optionally sparse cells. */
 export function workbookSummary(wb: Workbook, includeCells: boolean, maxCells: number) {
   const sheets: SheetJson[] = [];
-  const sheetCount = requireNumberResult(wb.sheetCount(), "read sheet count");
-  for (let sheet = 0; sheet < sheetCount; sheet += 1) {
-    const name = wb.sheetName(sheet);
-    assertStatus(name.status, `read sheet ${sheet} name`);
-    const cellCount = requireNumberResult(wb.cellCount(sheet), `read sheet ${sheet} cell count`);
-    const sheetJson: {
-      index: number;
-      name: string;
-      cellCount: number;
-      cells?: unknown[];
-      cellsTruncated?: boolean;
-    } = {
-      index: sheet,
-      name: name.value,
-      cellCount,
+  for (const handle of wb.listSheets()) {
+    const cells = handle.listCells();
+    const sheetJson: SheetJson = {
+      index: handle.index,
+      name: handle.name,
+      cellCount: cells.length,
     };
     if (includeCells) {
-      const limit = Math.max(0, Math.min(maxCells, cellCount));
-      sheetJson.cells = [];
-      for (let idx = 0; idx < limit; idx += 1) {
-        const cell = requireCell(wb.cellAt(sheet, idx), `read sheet ${sheet} cell ${idx}`);
-        sheetJson.cells.push({
-          row: cell.row,
-          col: cell.col,
-          formula: cell.formula,
-          value: valueToJson(cell.value),
-        });
-      }
-      sheetJson.cellsTruncated = limit < cellCount;
+      const limit = Math.max(0, Math.min(maxCells, cells.length));
+      sheetJson.cells = cells.slice(0, limit).map((cell) => ({
+        row: cell.row,
+        col: cell.col,
+        formula: cell.formula ?? "",
+        value: nativeToJson(cell.value),
+      }));
+      sheetJson.cellsTruncated = limit < cells.length;
     }
     sheets.push(sheetJson);
   }
 
-  const definedNames = [];
-  const definedNameCount = requireNumberResult(wb.definedNameCount(), "read defined name count");
-  for (let idx = 0; idx < definedNameCount; idx += 1) {
-    const entry = wb.definedNameAt(idx);
-    assertStatus(entry.status, `read defined name ${idx}`);
-    // Scope is reported because a sheet-local name such as `_xlnm.Print_Area`
-    // exists once per sheet: without it, several entries share one name and
-    // differ only in the sheet their formula happens to mention.
-    definedNames.push({
-      name: entry.name,
-      formula: entry.formula,
-      localSheetId: entry.localSheetId ?? WORKBOOK_SCOPE,
-      ...(entry.comment ? { comment: entry.comment } : {}),
-      ...(entry.hidden ? { hidden: true } : {}),
-    });
-  }
+  // Scope is reported because a sheet-local name such as `_xlnm.Print_Area`
+  // exists once per sheet: without it, several entries share one name and
+  // differ only in the sheet their formula happens to mention.
+  const definedNames = wb.listDefinedNames().map((entry) => ({
+    name: entry.name,
+    formula: entry.formula,
+    localSheetId: entry.scope ?? WORKBOOK_SCOPE,
+    ...(entry.comment ? { comment: entry.comment } : {}),
+    ...(entry.hidden ? { hidden: true } : {}),
+  }));
 
   const tables = [];
-  const tableCount = requireNumberResult(wb.tableCount(), "read table count");
-  for (let idx = 0; idx < tableCount; idx += 1) {
-    const entry = wb.tableAt(idx);
-    assertStatus(entry.status, `read table ${idx}`);
-    tables.push({
-      index: idx,
-      name: entry.name,
-      displayName: entry.displayName,
-      ref: entry.ref,
-      sheetIndex: entry.sheetIndex,
-    });
+  for (const handle of wb.listSheets()) {
+    for (const table of handle.listTables()) {
+      const properties = table.getProperties();
+      tables.push({
+        index: tables.length,
+        name: properties.name,
+        displayName: properties.name,
+        ref: rectA1(properties.range.rect),
+        sheetIndex: properties.range.sheet,
+      });
+    }
   }
 
   return { sheets, definedNames, tables };
 }
 
-/** Applies a concrete zero-based cell mutation to a workbook. */
-export function applyMutation(wb: Workbook, mutation: CellMutation): Status {
+/** The A1 text of a rectangle (`A1` for one cell, `A1:C3` otherwise). */
+export function rectA1(rect: {
+  firstRow: number;
+  firstCol: number;
+  lastRow: number;
+  lastCol: number;
+}): string {
+  const first = cellToA1(rect.firstRow, rect.firstCol);
+  return rect.firstRow === rect.lastRow && rect.firstCol === rect.lastCol
+    ? first
+    : `${first}:${cellToA1(rect.lastRow, rect.lastCol)}`;
+}
+
+/** Applies a concrete zero-based cell mutation to a workbook; a refusal throws `FormulonError`. */
+export function applyMutation(wb: Workbook, mutation: CellMutation): void {
+  const sheet = wb.sheet(mutation.sheet);
   switch (mutation.type) {
     case "number":
-      return wb.setNumber(mutation.sheet, mutation.row, mutation.col, mutation.value);
+      sheet.setNumber(mutation.row, mutation.col, mutation.value);
+      return;
     case "bool":
-      return wb.setBool(mutation.sheet, mutation.row, mutation.col, mutation.value);
+      sheet.setBool(mutation.row, mutation.col, mutation.value);
+      return;
     case "text":
-      return wb.setText(mutation.sheet, mutation.row, mutation.col, mutation.value);
+      sheet.setText(mutation.row, mutation.col, mutation.value);
+      return;
     case "blank":
-      return wb.setBlank(mutation.sheet, mutation.row, mutation.col);
+      sheet.setBlank(mutation.row, mutation.col);
+      return;
     case "formula":
-      return wb.setFormula(
-        mutation.sheet,
-        mutation.row,
-        mutation.col,
-        normalizeFormula(mutation.formula),
-      );
+      sheet.setFormula(mutation.row, mutation.col, normalizeFormula(mutation.formula));
+      return;
   }
 }
 
@@ -521,10 +495,7 @@ function reportedLosses(counters: LossCounters): LossCounters | undefined {
 
 /** Reports what a load could not decode, or undefined for a clean load. */
 export function readLosses(wb: Workbook): LossCounters | undefined {
-  const diagnostics: ReadDiagnosticsResult = wb.readDiagnostics();
-  if (!diagnostics.status.ok) {
-    return undefined;
-  }
+  const diagnostics: ReadDiagnostics = wb.getDiagnostics();
   return reportedLosses({
     undecodedFormulas: diagnostics.undecodedFormulaCount,
     undecodedDefinedNames: diagnostics.undecodedDefinedNameCount,
@@ -559,11 +530,7 @@ export type SavedWorkbook = {
  */
 export async function saveWorkbook(wb: Workbook, outputPath: string): Promise<SavedWorkbook> {
   const format = workbookFormatFor(outputPath);
-  const saved: SaveDiagnosticsResult = wb.saveWithDiagnostics(format);
-  assertStatus(saved.status, "save workbook");
-  if (!saved.bytes) {
-    throw new Error("save workbook failed: no bytes returned");
-  }
+  const saved: SaveDiagnostics = wb.saveWithDiagnostics(format);
   const resolved = resolveUserPath(outputPath);
   // Write to a sibling temp file then atomically rename, so a crash or error
   // mid-write never truncates or corrupts an existing workbook at `resolved`.
