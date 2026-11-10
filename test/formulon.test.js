@@ -317,6 +317,14 @@ test("creates, updates, and removes a worksheet table", async () => {
 
     call(table, "update", [{ range: "A1:B3" }]);
     assert.equal(call(table, "getProperties").range.rect.lastRow, 2);
+    call(table, "insertRows");
+    call(table, "insertColumns");
+    const grown = call(table, "getProperties");
+    assert.deepEqual(grown.range.rect, { firstRow: 0, firstCol: 0, lastRow: 3, lastCol: 2 });
+    assert.deepEqual(
+      grown.columns.map((column) => column.name),
+      ["item", "qty", "Column1"],
+    );
     call(SHEET, "removeTable", ["Items"]);
     assert.equal(call(SHEET, "listTables").length, 0);
   } finally {
