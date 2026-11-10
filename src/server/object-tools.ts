@@ -124,7 +124,7 @@ export function registerObjectTools(server: McpServer): void {
             .setComment(
               row,
               col,
-              operation === "remove" ? null : { text: text ?? "", author: author ?? "" },
+              operation === "remove" ? null : { text: text ?? "", author: author ?? null },
             ),
         );
       } catch (error) {
