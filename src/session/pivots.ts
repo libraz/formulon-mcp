@@ -113,22 +113,13 @@ export function createSessionPivot(id: string, options: CreatePivotOptions) {
       range: { sheet: source.range.sheet, rect: { firstRow, firstCol, lastRow, lastCol } },
     });
 
-    for (const [index, header] of source.headers.entries()) {
-      const added = cache.addField(header);
-      if (added !== index) {
-        throw new Error(`pivot cache field order mismatch: expected ${index}, received ${added}`);
-      }
-    }
-    for (const [recordIndex, record] of source.records.entries()) {
-      const added = cache.addRecord();
-      if (added !== recordIndex) {
-        throw new Error(
-          `pivot cache record order mismatch: expected ${recordIndex}, received ${added}`,
-        );
-      }
-      for (const [fieldIndex, value] of record.entries()) {
-        cache.setRecordValue(recordIndex, fieldIndex, value);
-      }
+    // The engine reads the records from the worksheet source, as Excel's Refresh does.
+    cache.refresh();
+    const fields = cache.listFields().map((field) => field.name);
+    if (fields.join("\u0000") !== source.headers.join("\u0000")) {
+      throw new Error(
+        `pivot cache fields ${JSON.stringify(fields)} differ from the source headers ${JSON.stringify(source.headers)}`,
+      );
     }
 
     const pivot = session.workbook.sheet(request.target.sheet).addPivot({
