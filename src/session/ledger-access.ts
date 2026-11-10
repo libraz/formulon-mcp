@@ -293,6 +293,7 @@ export const LEDGER_ACCESS: Readonly<Record<string, "read" | "write">> = {
   getSheetCount: "read",
   getSheetPrXml: "read",
   getSheetProtection: "read",
+  getShowPhoneticCells: "read",
   getSlicer: "read",
   getSparklineGroup: "read",
   getSpill: "read",
