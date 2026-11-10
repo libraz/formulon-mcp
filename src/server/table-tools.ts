@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { tableOperation } from "../session/tables.js";
+import { TABLE_TOTALS_FUNCTION_NAMES, tableOperation } from "../session/tables.js";
 import { fail, ok, sheetRefSchema } from "./shared.js";
 
 /** Registers native worksheet-table authoring rather than presentation blocks. */
@@ -34,10 +34,43 @@ export function registerTableTools(server: McpServer): void {
             "Native table name for create; on update, renames the table and the formulas that reference it.",
           ),
         columns: z
-          .array(z.string())
+          .array(
+            z.object({
+              name: z
+                .string()
+                .optional()
+                .describe(
+                  "Create only: the column's unique non-empty name. Name every column or none; none derives the names from the header row. Rename an existing column with Table.renameColumn through formulon_workbook_call.",
+                ),
+              totalsRowFunction: z
+                .enum(TABLE_TOTALS_FUNCTION_NAMES)
+                .nullable()
+                .optional()
+                .describe(
+                  "The totals-row function (Excel writes SUBTOTAL over the column); custom needs totalsRowFormula; null is none.",
+                ),
+              totalsRowLabel: z
+                .string()
+                .nullable()
+                .optional()
+                .describe("Totals-row label text; null clears it."),
+              totalsRowFormula: z
+                .string()
+                .nullable()
+                .optional()
+                .describe("The custom function's formula, leading = included; null clears it."),
+              calculatedFormula: z
+                .string()
+                .nullable()
+                .optional()
+                .describe(
+                  "The calculated-column formula as entered in the first data row (=[@Qty]*10). A formula that differs from the column's current one fills every data cell, constants included; the same formula changes nothing; null removes the mark and keeps the cells.",
+                ),
+            }),
+          )
           .optional()
           .describe(
-            "One unique non-empty column name per range column; omitted means derive from the header row.",
+            "Per-column settings, element i for column i; it may be shorter than the table and {} changes nothing. An omitted key keeps the setting and null clears it. On update it applies after range, headerRow and totalsRow. Totals settings are stored while the totals row is off and written into its cells while it is shown.",
           ),
         style: z
           .string()
@@ -59,35 +92,6 @@ export function registerTableTools(server: McpServer): void {
           .optional()
           .describe("Band rows; a styled table starts with this on."),
         showColumnStripes: z.boolean().optional().describe("Band columns."),
-        totals: z
-          .array(
-            z.object({
-              column: z
-                .union([z.string(), z.number().int().nonnegative()])
-                .describe("Column name or zero-based column index within the table."),
-              function: z
-                .enum([
-                  "none",
-                  "sum",
-                  "min",
-                  "max",
-                  "average",
-                  "count",
-                  "countNums",
-                  "stdDev",
-                  "var",
-                  "custom",
-                ])
-                .optional()
-                .describe("Totals function; Excel writes SUBTOTAL over the column."),
-              label: z.string().optional().describe("Text shown instead of a function."),
-              formula: z.string().optional().describe("Formula for the custom function."),
-            }),
-          )
-          .optional()
-          .describe(
-            "Per-column totals-row settings, applied after range, headerRow and totalsRow; stored while the totals row is off and written into its cells while it is shown.",
-          ),
       },
     },
     ({

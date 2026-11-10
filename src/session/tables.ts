@@ -12,27 +12,31 @@ import { getSession, publicInfo, touch } from "./state.js";
 
 export type TableOperation = "list" | "create" | "update" | "remove";
 
-const TOTALS_FUNCTIONS = {
-  none: TableTotalsRowFunction.None,
-  sum: TableTotalsRowFunction.Sum,
-  min: TableTotalsRowFunction.Min,
-  max: TableTotalsRowFunction.Max,
-  average: TableTotalsRowFunction.Average,
-  count: TableTotalsRowFunction.Count,
-  countNums: TableTotalsRowFunction.CountNumbers,
-  stdDev: TableTotalsRowFunction.StdDev,
-  var: TableTotalsRowFunction.Var,
-  custom: TableTotalsRowFunction.Custom,
-} as const;
+const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
 
-export type TableTotalsFunctionName = keyof typeof TOTALS_FUNCTIONS;
+// The tool's totals-function names, derived from the engine enum (`CountNumbers` is `countNumbers`); `None` is null.
+const TOTALS_FUNCTION_ORDINALS: ReadonlyMap<string, TableTotalsRowFunction> = new Map(
+  Object.entries(TableTotalsRowFunction)
+    .filter(([key]) => key !== "None")
+    .map(([key, ordinal]) => [lowerFirst(key), ordinal]),
+);
+const TOTALS_FUNCTION_NAMES: ReadonlyMap<TableTotalsRowFunction, string> = new Map(
+  [...TOTALS_FUNCTION_ORDINALS].map(([name, ordinal]) => [ordinal, name]),
+);
 
-/** One column's totals-row cell: a function, a text label, or a custom formula. */
-export type TableColumnTotals = {
-  column: string | number;
-  function?: TableTotalsFunctionName;
-  label?: string;
-  formula?: string;
+/** Every totals-function name the table tool accepts and reports. */
+export const TABLE_TOTALS_FUNCTION_NAMES = [...TOTALS_FUNCTION_ORDINALS.keys()] as [
+  string,
+  ...string[],
+];
+
+/** One element of the tool's `columns`: element i is column i. `name` names it on create; `null` clears a setting. */
+export type TableColumnSettings = {
+  name?: string;
+  totalsRowFunction?: string | null;
+  totalsRowLabel?: string | null;
+  totalsRowFormula?: string | null;
+  calculatedFormula?: string | null;
 };
 
 export type TableStyleToggles = {
@@ -47,12 +51,11 @@ export type TableOperationOptions = TableStyleToggles & {
   range?: string;
   ref?: string;
   name?: string;
-  columns?: string[];
+  columns?: TableColumnSettings[];
   style?: string;
   styleName?: string;
   headerRow?: boolean;
   totalsRow?: boolean;
-  totals?: TableColumnTotals[];
   index?: number;
 };
 
@@ -73,40 +76,35 @@ function styleToggles(options: TableStyleToggles): TableStyleToggles {
   return toggles;
 }
 
-function columnIndex(columns: string[], column: string | number): number {
-  if (typeof column === "number") {
-    if (!Number.isInteger(column) || column < 0 || column >= columns.length) {
-      throw new Error(`table column index must be in 0..${columns.length - 1}: ${column}`);
-    }
-    return column;
+function totalsFunctionOrdinal(name: string): TableTotalsRowFunction {
+  const ordinal = TOTALS_FUNCTION_ORDINALS.get(name);
+  if (ordinal === undefined) {
+    throw new Error(
+      `unknown totalsRowFunction ${JSON.stringify(name)}; expected one of ${TABLE_TOTALS_FUNCTION_NAMES.join(", ")} or null`,
+    );
   }
-  const key = column.toLocaleLowerCase();
-  const index = columns.findIndex((name) => name.toLocaleLowerCase() === key);
-  if (index < 0) {
-    throw new Error(`table has no column named ${JSON.stringify(column)}`);
-  }
-  return index;
+  return ordinal;
 }
 
-/** The element-wise `Table.update` columns patch for `totals`; a later entry for the same column wins key by key. */
-function totalsPatch(table: Table, totals: TableColumnTotals[]): TableColumnPatch[] {
-  const columns = table.getProperties().columns.map((column) => column.name);
-  const patch: TableColumnPatch[] = [];
-  for (const { column, function: fn, label, formula } of totals) {
-    const index = columnIndex(columns, column);
-    while (patch.length <= index) {
-      patch.push({});
-    }
-    const trimmed = formula?.trim();
-    patch[index] = {
-      ...patch[index],
-      ...(fn !== undefined ? { totalsRowFunction: TOTALS_FUNCTIONS[fn] } : {}),
-      ...(label !== undefined ? { totalsRowLabel: label } : {}),
-      ...(trimmed !== undefined ? { totalsRowFormula: trimmed } : {}),
-    };
-  }
-  return patch;
+/** The element-wise `Table.update` columns patch; an element without settings is `{}`. */
+function columnsPatch(columns: TableColumnSettings[]): TableColumnPatch[] {
+  return columns.map(
+    ({ totalsRowFunction, totalsRowLabel, totalsRowFormula, calculatedFormula }) => ({
+      ...(totalsRowFunction !== undefined
+        ? {
+            totalsRowFunction:
+              totalsRowFunction === null ? null : totalsFunctionOrdinal(totalsRowFunction),
+          }
+        : {}),
+      ...(totalsRowLabel !== undefined ? { totalsRowLabel } : {}),
+      ...(totalsRowFormula !== undefined ? { totalsRowFormula } : {}),
+      ...(calculatedFormula !== undefined ? { calculatedFormula } : {}),
+    }),
+  );
 }
+
+const hasSettings = (patch: TableColumnPatch[]) =>
+  patch.some((element) => Object.keys(element).length > 0);
 
 type TableRange = {
   sheetIndex: number;
@@ -243,8 +241,16 @@ function readTable(session: ReturnType<typeof getSession>, { index, table }: Ind
     ref: rectA1(properties.range.rect),
     sheet: sheetIndex,
     sheetName: sheetName(session, sheetIndex),
-    // The engine's record, with the style toggles the table entry carried alongside it.
-    raw: resultToJson({ ...properties, ...table.getStyleOptions() }),
+    // The engine's record, with the style toggles the table entry carried alongside it and
+    // each column's totals function under the tool's name (null for none).
+    raw: resultToJson({
+      ...properties,
+      columns: properties.columns.map((column) => ({
+        ...column,
+        totalsRowFunction: TOTALS_FUNCTION_NAMES.get(column.totalsRowFunction) ?? null,
+      })),
+      ...table.getStyleOptions(),
+    }),
   };
 }
 
@@ -262,14 +268,25 @@ function createTable(session: ReturnType<typeof getSession>, options: TableOpera
   const range = resolveTableRange(session, reference, options.sheet);
   const width = range.lastCol - range.firstCol + 1;
   const headerRow = options.headerRow ?? true;
+  const settings = options.columns ?? [];
+  if (settings.length > width) {
+    throw new Error(`table columns count ${settings.length} exceeds range width ${width}`);
+  }
+  const names = settings.flatMap(({ name }) => (name === undefined ? [] : [name]));
+  if (names.length > 0 && names.length !== width) {
+    throw new Error(
+      "give every column a name in columns, one per range column, or none to derive them from the header row",
+    );
+  }
   const columns =
-    options.columns === undefined
-      ? headerRow
+    names.length > 0
+      ? validateColumns(names, width)
+      : headerRow
         ? deriveColumns(session, range)
         : (() => {
-            throw new Error("columns are required when headerRow is false");
-          })()
-      : validateColumns(options.columns, width);
+            throw new Error("column names are required in columns when headerRow is false");
+          })();
+  const patch = columnsPatch(settings);
   const name = requiredText(options.name, "name");
   const styleName = options.styleName ?? options.style;
   const input: TableInput = {
@@ -285,8 +302,8 @@ function createTable(session: ReturnType<typeof getSession>, options: TableOpera
   // session as dirty before entering the engine and keep that state on error.
   touch(session, true);
   const created = sheetAt(session.workbook, range.sheetIndex).addTable(input);
-  if (options.totals !== undefined) {
-    created.update({ columns: totalsPatch(created, options.totals) });
+  if (hasSettings(patch)) {
+    created.update({ columns: patch });
   }
   const entry = workbookTables(session).find(({ table }) => table === created);
   if (entry === undefined) {
@@ -312,10 +329,16 @@ function updateTable(session: ReturnType<typeof getSession>, options: TableOpera
     Object.keys(toggles).length === 0 &&
     options.headerRow === undefined &&
     options.totalsRow === undefined &&
-    options.totals === undefined
+    options.columns === undefined
   ) {
     throw new Error(
-      "table update requires at least one of range, name, style, a style toggle, headerRow, totalsRow, or totals",
+      "table update requires at least one of range, name, style, a style toggle, headerRow, totalsRow, or columns",
+    );
+  }
+  const named = options.columns?.findIndex((column) => column.name !== undefined) ?? -1;
+  if (named >= 0) {
+    throw new Error(
+      `columns[${named}].name names a column on create only; rename a column with Table.renameColumn through formulon_workbook_call`,
     );
   }
   const patch: {
@@ -341,8 +364,8 @@ function updateTable(session: ReturnType<typeof getSession>, options: TableOpera
   if (options.totalsRow !== undefined) {
     patch.totalsRow = options.totalsRow;
   }
-  if (options.totals !== undefined) {
-    patch.columns = totalsPatch(entry.table, options.totals);
+  if (options.columns !== undefined) {
+    patch.columns = columnsPatch(options.columns);
   }
   const styleOptions: TableStyleOptionsPatch = {
     ...toggles,

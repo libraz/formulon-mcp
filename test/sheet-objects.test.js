@@ -439,19 +439,16 @@ test("tables take style toggles, totals-row cells and a rename that rewrites ref
     // Settings given while the totals row is off are stored for when it is shown.
     const stored = tableOperation("table-totals", "update", {
       index: 0,
-      totals: [{ column: "Qty", function: "max" }],
+      columns: [{}, { totalsRowFunction: "max" }],
     });
     assert.equal(stored.table.ref, "A1:B3");
-    assert.equal(stored.table.raw.columns[1].totalsRowFunction, 3);
+    assert.equal(stored.table.raw.columns[1].totalsRowFunction, "max");
     const updated = tableOperation("table-totals", "update", {
       index: 0,
       range: "A1:B4",
       totalsRow: true,
       name: "Goods",
-      totals: [
-        { column: 0, label: "Total" },
-        { column: "qty", function: "sum" },
-      ],
+      columns: [{ totalsRowLabel: "Total" }, { totalsRowFunction: "sum" }],
     });
     assert.equal(updated.table.name, "Goods");
     assert.deepEqual(
@@ -461,21 +458,91 @@ test("tables take style toggles, totals-row cells and a rename that rewrites ref
         column.calculatedFormula,
       ]),
       [
-        [0, "Total", null],
-        [1, null, null],
+        [null, "Total", null],
+        ["sum", null, null],
       ],
     );
     assert.equal(getSessionCellByA1("table-totals", "E1", 0, true).formula, "=SUM(Goods[Qty])");
     assert.equal(getSessionCellByA1("table-totals", "B4", 0, true).value.value, 5);
     assert.equal(getSessionCellByA1("table-totals", "A4").value.value, "Total");
+    const cleared = tableOperation("table-totals", "update", {
+      index: 0,
+      columns: [{ totalsRowLabel: null }, { totalsRowFunction: null }],
+    });
+    assert.deepEqual(
+      cleared.table.raw.columns.map((column) => [column.totalsRowFunction, column.totalsRowLabel]),
+      [
+        [null, null],
+        [null, null],
+      ],
+    );
+    assert.throws(
+      () => tableOperation("table-totals", "update", { index: 0, columns: [{ name: "Thing" }] }),
+      /columns\[0\]\.name names a column on create only/,
+    );
     assert.throws(
       () =>
         tableOperation("table-totals", "update", {
           index: 0,
-          totals: [{ column: "Missing", function: "sum" }],
+          columns: [{ totalsRowFunction: "none" }],
         }),
-      /no column named/,
+      /unknown totalsRowFunction "none"/,
     );
+  });
+});
+
+test("table columns name the columns on create and carry the calculated-column mark", async () => {
+  await withSession("table-calc", () => {
+    setSessionRange(
+      "table-calc",
+      "A2",
+      [
+        [2, 0],
+        [3, 0],
+      ],
+      0,
+      true,
+    );
+    assert.throws(
+      () =>
+        tableOperation("table-calc", "create", {
+          range: "A1:B3",
+          name: "Calc",
+          columns: [{ name: "Qty" }, {}],
+        }),
+      /give every column a name/,
+    );
+    const created = tableOperation("table-calc", "create", {
+      range: "A1:B3",
+      name: "Calc",
+      columns: [{ name: "Qty" }, { name: "Ten", calculatedFormula: "=[@Qty]*10" }],
+    });
+    assert.deepEqual(
+      created.table.raw.columns.map((column) => [column.name, column.calculatedFormula]),
+      [
+        ["Qty", null],
+        ["Ten", "=[@Qty]*10"],
+      ],
+    );
+    assert.equal(getSessionCellByA1("table-calc", "A1").value.value, "Qty");
+    assert.equal(getSessionCellByA1("table-calc", "B2").value.value, 20);
+    assert.equal(getSessionCellByA1("table-calc", "B3").value.value, 30);
+
+    // The same formula refills nothing: a constant typed over one cell stays.
+    setSessionRange("table-calc", "B3", [[7]], 0, true);
+    tableOperation("table-calc", "update", {
+      index: 0,
+      columns: [{}, { calculatedFormula: "=[@Qty]*10" }],
+    });
+    assert.equal(getSessionCellByA1("table-calc", "B3").value.value, 7);
+
+    // Removing the mark keeps the cells.
+    const unmarked = tableOperation("table-calc", "update", {
+      index: 0,
+      columns: [{}, { calculatedFormula: null }],
+    });
+    assert.equal(unmarked.table.raw.columns[1].calculatedFormula, null);
+    assert.equal(getSessionCellByA1("table-calc", "B2").value.value, 20);
   });
 });
 
