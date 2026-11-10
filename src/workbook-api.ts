@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { LEDGER_ACCESS } from "./session/ledger-access.js";
+import { lowerFirst } from "./session/shared.js";
 import type {
   WorkbookApiDeclaration,
   WorkbookApiMethod,
@@ -171,8 +172,6 @@ type ParsedCatalog = {
 };
 
 let cached: ParsedCatalog | undefined;
-
-const lowerFirst = (name: string) => name.charAt(0).toLowerCase() + name.slice(1);
 
 /** The interface's own members merged over those of every interface it extends. */
 function withInherited(

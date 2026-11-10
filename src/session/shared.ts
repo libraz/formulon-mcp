@@ -53,28 +53,17 @@ const SPILL_CAUSE_NAMES: ReadonlyMap<SpillCause, string> = new Map(
   Object.entries(SpillCause).map(([key, ordinal]) => [ordinal, lowerFirst(key)]),
 );
 
-const sameRect = (a: CellRect, b: CellRect) =>
-  a.firstRow === b.firstRow &&
-  a.firstCol === b.firstCol &&
-  a.lastRow === b.lastRow &&
-  a.lastCol === b.lastCol;
-
 /**
  * The spill or PivotTable report region `Sheet.getSpill` reads at a cell, with A1 references;
  * `null` when the cell is in none.
  */
 export function spillRecord(session: WorkbookOwner, sheet: number, row: number, col: number) {
-  const handle = session.workbook.sheet(sheet);
-  const info = handle.getSpill(row, col);
+  const info = session.workbook.sheet(sheet).getSpill(row, col);
   if (info === null) {
     return null;
   }
   const { firstRow, firstCol, lastRow, lastCol } = info.range;
-  // A formula's region reads the same at its top-left anchor; a report reads only at its anchor,
-  // which sits below any page-field rows.
-  const topLeft = firstRow === row && firstCol === col ? info : handle.getSpill(firstRow, firstCol);
-  const [anchorRow, anchorCol] =
-    topLeft !== null && sameRect(topLeft.range, info.range) ? [firstRow, firstCol] : [row, col];
+  const { row: anchorRow, col: anchorCol } = info.anchor;
   const name = sheetName(session, sheet);
   return {
     blocked: info.blocked,
