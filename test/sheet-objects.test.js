@@ -436,14 +436,13 @@ test("tables take style toggles, totals-row cells and a rename that rewrites ref
     assert.equal(styleOptions.showFirstColumn, true);
     assert.equal(styleOptions.showRowStripes, false);
     assert.equal(created.table.name, "Items");
-    assert.throws(
-      () =>
-        tableOperation("table-totals", "update", {
-          index: 0,
-          totals: [{ column: "Qty", function: "sum" }],
-        }),
-      /totals row/,
-    );
+    // Settings given while the totals row is off are stored for when it is shown.
+    const stored = tableOperation("table-totals", "update", {
+      index: 0,
+      totals: [{ column: "Qty", function: "max" }],
+    });
+    assert.equal(stored.table.ref, "A1:B3");
+    assert.equal(stored.table.raw.columns[1].totalsRowFunction, 3);
     const updated = tableOperation("table-totals", "update", {
       index: 0,
       range: "A1:B4",
@@ -456,10 +455,14 @@ test("tables take style toggles, totals-row cells and a rename that rewrites ref
     });
     assert.equal(updated.table.name, "Goods");
     assert.deepEqual(
-      updated.table.raw.columns.map((column) => [column.totalsRowFunction, column.totalsRowLabel]),
+      updated.table.raw.columns.map((column) => [
+        column.totalsRowFunction,
+        column.totalsRowLabel,
+        column.calculatedFormula,
+      ]),
       [
-        [0, "Total"],
-        [1, null],
+        [0, "Total", null],
+        [1, null, null],
       ],
     );
     assert.equal(getSessionCellByA1("table-totals", "E1", 0, true).formula, "=SUM(Goods[Qty])");

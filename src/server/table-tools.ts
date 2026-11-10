@@ -85,7 +85,9 @@ export function registerTableTools(server: McpServer): void {
             }),
           )
           .optional()
-          .describe("Totals-row cells to write; requires the table's totals row."),
+          .describe(
+            "Per-column totals-row settings, applied after range, headerRow and totalsRow; stored while the totals row is off and written into its cells while it is shown.",
+          ),
       },
     },
     ({

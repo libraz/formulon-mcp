@@ -1,5 +1,6 @@
 import {
   type Table,
+  type TableColumnPatch,
   type TableInput,
   type TableStyleOptionsPatch,
   TableTotalsRowFunction,
@@ -87,21 +88,24 @@ function columnIndex(columns: string[], column: string | number): number {
   return index;
 }
 
-/** Writes each column's totals cell; the table must already show its totals row. */
-function applyTotals(table: Table, totals: TableColumnTotals[]): void {
-  const properties = table.getProperties();
-  if (!properties.totalsRow) {
-    throw new Error("totals need the table's totals row; pass totalsRow: true");
-  }
-  const columns = properties.columns.map((column) => column.name);
+/** The element-wise `Table.update` columns patch for `totals`; a later entry for the same column wins key by key. */
+function totalsPatch(table: Table, totals: TableColumnTotals[]): TableColumnPatch[] {
+  const columns = table.getProperties().columns.map((column) => column.name);
+  const patch: TableColumnPatch[] = [];
   for (const { column, function: fn, label, formula } of totals) {
+    const index = columnIndex(columns, column);
+    while (patch.length <= index) {
+      patch.push({});
+    }
     const trimmed = formula?.trim();
-    table.setColumnTotals(columnIndex(columns, column), {
+    patch[index] = {
+      ...patch[index],
       ...(fn !== undefined ? { totalsRowFunction: TOTALS_FUNCTIONS[fn] } : {}),
       ...(label !== undefined ? { totalsRowLabel: label } : {}),
       ...(trimmed !== undefined ? { totalsRowFormula: trimmed } : {}),
-    });
+    };
   }
+  return patch;
 }
 
 type TableRange = {
@@ -282,7 +286,7 @@ function createTable(session: ReturnType<typeof getSession>, options: TableOpera
   touch(session, true);
   const created = sheetAt(session.workbook, range.sheetIndex).addTable(input);
   if (options.totals !== undefined) {
-    applyTotals(created, options.totals);
+    created.update({ columns: totalsPatch(created, options.totals) });
   }
   const entry = workbookTables(session).find(({ table }) => table === created);
   if (entry === undefined) {
@@ -314,7 +318,12 @@ function updateTable(session: ReturnType<typeof getSession>, options: TableOpera
       "table update requires at least one of range, name, style, a style toggle, headerRow, totalsRow, or totals",
     );
   }
-  const patch: { range?: string; headerRow?: boolean; totalsRow?: boolean } = {};
+  const patch: {
+    range?: string;
+    headerRow?: boolean;
+    totalsRow?: boolean;
+    columns?: TableColumnPatch[];
+  } = {};
   const name = options.name === undefined ? undefined : requiredText(options.name, "name");
   if (hasRange) {
     const range = resolveTableRange(session, tableRef(options), current.sheet);
@@ -332,6 +341,9 @@ function updateTable(session: ReturnType<typeof getSession>, options: TableOpera
   if (options.totalsRow !== undefined) {
     patch.totalsRow = options.totalsRow;
   }
+  if (options.totals !== undefined) {
+    patch.columns = totalsPatch(entry.table, options.totals);
+  }
   const styleOptions: TableStyleOptionsPatch = {
     ...toggles,
     ...(hasStyle ? { styleName: options.styleName ?? options.style ?? "" } : {}),
@@ -346,9 +358,6 @@ function updateTable(session: ReturnType<typeof getSession>, options: TableOpera
   }
   if (name !== undefined) {
     table.rename(name);
-  }
-  if (options.totals !== undefined) {
-    applyTotals(table, options.totals);
   }
   return {
     session: publicInfo(session),
