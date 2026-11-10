@@ -8,6 +8,7 @@ import {
   callWorkbookMethod,
   closeSession,
   detectSessionRegions,
+  getSession,
   inspectSessionLayout,
   openSession,
   styleSessionRange,
@@ -17,7 +18,17 @@ import {
 test("lists formatted cells with no content alongside the stored cells' styles", async () => {
   await openSession(undefined, "formatted-cells");
   try {
-    applySessionMutations("formatted-cells", [{ type: "number", a1: "Sheet1!A1", value: 1 }], true);
+    applySessionMutations(
+      "formatted-cells",
+      [
+        { type: "number", a1: "Sheet1!A1", value: 1 },
+        { type: "number", a1: "Sheet1!B1", value: 2 },
+        { type: "number", a1: "Sheet1!B2", value: 3 },
+      ],
+      true,
+    );
+    // B1 is never styled; B2 carries an explicit XF 0. Both read XF 0, the default style.
+    getSession("formatted-cells").workbook.sheet(0).ooxml.setCellXfIndex(1, 1, 0);
     styleSessionRange("formatted-cells", "A1", { numberFormat: "0.00" }, undefined, "existing");
     styleSessionRange("formatted-cells", "C3", { numberFormat: "0.0%" }, undefined, "existing");
 
@@ -26,16 +37,21 @@ test("lists formatted cells with no content alongside the stored cells' styles",
       includeStyles: true,
       maxCells: 100,
     }).sheets;
-    assert.equal(sheet.cells.length, 1);
-    assert.notEqual(sheet.cells[0].style.xfIndex, null);
+    const byA1 = Object.fromEntries(sheet.cells.map((cell) => [cell.a1, cell]));
+    assert.deepEqual(Object.keys(byA1).sort(), ["A1", "B1", "B2"]);
+    assert.notEqual(byA1.A1.style.xfIndex, 0);
+    for (const a1 of ["B1", "B2"]) {
+      assert.equal(byA1[a1].style.xfIndex, 0);
+      assert.notEqual(byA1[a1].style.xf, null);
+    }
     assert.equal(sheet.formattedCellCount, 1);
     assert.equal(sheet.formattedTruncated, false);
     assert.deepEqual(
       sheet.formattedCells.map((cell) => cell.a1),
       ["C3"],
     );
-    assert.notEqual(sheet.formattedCells[0].style.xfIndex, null);
-    assert.notEqual(sheet.formattedCells[0].style.xfIndex, sheet.cells[0].style.xfIndex);
+    assert.notEqual(sheet.formattedCells[0].style.xfIndex, 0);
+    assert.notEqual(sheet.formattedCells[0].style.xfIndex, byA1.A1.style.xfIndex);
 
     const plain = inspectSessionLayout("formatted-cells", {
       includeCells: true,

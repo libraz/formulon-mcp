@@ -240,19 +240,20 @@ export function stableCells(
   const handle = session.workbook.sheet(sheet);
   const all = handle.listCells();
   const limit = Math.max(0, Math.min(maxCells, all.length));
-  // One read of every cell carrying its own XF; a cell absent from it has the default style.
+  // One read of every cell with a non-default XF; a stored cell absent from it has XF 0, as
+  // `getCellXfIndex` reads it.
   const ownXfCells = includeStyles ? (safeRead(() => handle.ooxml.getCellXfIndices()) ?? []) : [];
   const ownXf = new Map(ownXfCells.map((entry) => [refA1(entry.row, entry.col), entry.xfIndex]));
   const xfJson = new Map<number, unknown>();
   const styleOf = (a1: string) => {
-    const xfIndex = ownXf.get(a1) ?? null;
-    if (xfIndex !== null && !xfJson.has(xfIndex)) {
+    const xfIndex = ownXf.get(a1) ?? 0;
+    if (!xfJson.has(xfIndex)) {
       xfJson.set(
         xfIndex,
         safeReadJson(() => session.workbook.ooxml.getCellXf(xfIndex)),
       );
     }
-    return { xfIndex, xf: xfIndex === null ? null : xfJson.get(xfIndex) };
+    return { xfIndex, xf: xfJson.get(xfIndex) };
   };
   const cells = [];
   const stored = new Set<string>();
