@@ -138,7 +138,7 @@ export function registerObjectTools(server: McpServer): void {
     {
       title: "Hyperlink operation",
       description:
-        "List, add, remove, remove by index, or clear hyperlinks on a sheet. An added link covers one cell, or the rectangle through lastRow/lastCol.",
+        "List, add, remove, remove by index, or clear hyperlinks on a sheet. An added link covers one cell, or the rectangle through lastRow/lastCol; it replaces a link covering exactly the same cells and is otherwise added beside the links already anchored at row/col. remove deletes every link anchored at row/col; removeAt deletes only the link at that list index.",
       inputSchema: {
         ...sheetInputSchema,
         operation: z.enum(["list", "add", "remove", "removeAt", "clear"]),
@@ -207,7 +207,14 @@ export function registerObjectTools(server: McpServer): void {
                 `hyperlink index out of range: ${index} (${links.length} hyperlinks)`,
               );
             }
-            handle.setHyperlink(links[index].range.firstRow, links[index].range.firstCol, null);
+            // A cell can anchor several links and the engine removes them together, so rebuild the list
+            // without the one at `index`, keeping the order of the rest.
+            handle.clearHyperlinks();
+            links.forEach((link, at) => {
+              if (at !== index) {
+                handle.setHyperlink(link.range.firstRow, link.range.firstCol, link);
+              }
+            });
           });
         }
         if (row === undefined || col === undefined) {

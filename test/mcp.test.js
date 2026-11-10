@@ -643,6 +643,36 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
         ],
       );
 
+      // A second link anchored at A3 sits beside the first; removeAt drops only the one at its index.
+      await client.callTool({
+        name: "formulon_hyperlink_operation",
+        arguments: {
+          sessionId: "advanced-session",
+          operation: "add",
+          row: 2,
+          col: 0,
+          lastCol: 1,
+          target: "https://example.org",
+        },
+      });
+      await client.callTool({
+        name: "formulon_hyperlink_operation",
+        arguments: { sessionId: "advanced-session", operation: "removeAt", index: 0 },
+      });
+      const afterRemoveAt = textPayload(
+        await client.callTool({
+          name: "formulon_hyperlink_operation",
+          arguments: { sessionId: "advanced-session", operation: "list" },
+        }),
+      );
+      assert.deepEqual(
+        afterRemoveAt.result.map((link) => [link.range.firstRow, link.range.lastCol, link.target]),
+        [
+          [3, 2, null],
+          [2, 1, "https://example.org"],
+        ],
+      );
+
       const validationAdd = textPayload(
         await client.callTool({
           name: "formulon_validation_operation",
