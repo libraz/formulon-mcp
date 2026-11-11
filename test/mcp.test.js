@@ -1381,6 +1381,58 @@ test("function lookup follows the operation, argument and profile matrix", async
   });
 });
 
+test("function lookup translates a formula's references to and from the profile's R1C1", async () => {
+  await withClient(async (client) => {
+    const sessionId = "lookup-r1c1";
+    textPayload(await callTool(client, "formulon_open_workbook", { sessionId }));
+    try {
+      const lookup = (args) => callTool(client, "formulon_function_lookup", { sessionId, ...args });
+      const base = { r1c1: true, baseRow: 4, baseCol: 4 };
+      const localize = { operation: "localizeFormula", formula: "=SUM(C3,$B$2)" };
+      assert.equal(
+        textPayload(await lookup({ ...localize, ...base, profile: "win-365-de_DE" })).result,
+        "=SUMME(Z(-2)S(-2);Z2S2)",
+      );
+      assert.equal(
+        textPayload(await lookup({ ...localize, ...base })).result,
+        "=SUM(R[-2]C[-2],R2C2)",
+      );
+      assert.equal(
+        textPayload(
+          await lookup({
+            operation: "canonicalizeFormula",
+            formula: "=SUMME(Z(-2)S(-2);Z2S2)",
+            profile: "win-365-de_DE",
+            ...base,
+          }),
+        ).result,
+        "=SUM(C3,$B$2)",
+      );
+      // Absolute references need no base; omitting r1c1 keeps A1 whatever the base.
+      assert.equal(
+        textPayload(await lookup({ operation: "localizeFormula", formula: "=$C$3", r1c1: true }))
+          .result,
+        "=R3C3",
+      );
+      assert.equal(
+        textPayload(await lookup({ ...localize, baseRow: 4, baseCol: 4 })).result,
+        "=SUM(C3,$B$2)",
+      );
+      assert.match(errorPayload(await lookup({ ...localize, r1c1: true })), /invalid reference/);
+      assert.match(
+        errorPayload(await lookup({ ...localize, r1c1: true, baseRow: 4 })),
+        /baseRow and options.baseCol must be given together/,
+      );
+      assert.match(
+        errorPayload(await lookup({ ...localize, r1c1: true, baseRow: -1, baseCol: 0 })),
+        /baseRow/,
+      );
+    } finally {
+      await callTool(client, "formulon_close_workbook", { sessionId });
+    }
+  });
+});
+
 test("function lookup defaults to the session profile and follows a profile switch", async () => {
   await withClient(async (client) => {
     const sessionId = "lookup-switch";

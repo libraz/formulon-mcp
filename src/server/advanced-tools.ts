@@ -12,7 +12,7 @@ export function registerAdvancedTools(server: McpServer): void {
     {
       title: "Function and locale lookup",
       description:
-        "List functions, read name/arity/availability metadata, translate a function name or a whole formula between the stored English form and a profile's spelling, or read a profile's locale facts (separators, boolean names, date order, currency, error names).",
+        "List functions, read name/arity/availability metadata, translate a function name or a whole formula between the stored English form and a profile's spelling (a formula's references in A1, or in the profile's R1C1 with r1c1), or read a profile's locale facts (separators, boolean names, date order, currency, error names).",
       inputSchema: {
         sessionId: z.string(),
         operation: z.enum([
@@ -32,12 +32,34 @@ export function registerAdvancedTools(server: McpServer): void {
           .string()
           .optional()
           .describe("Formula text for localizeFormula and canonicalizeFormula."),
+        r1c1: z
+          .boolean()
+          .optional()
+          .describe(
+            "For localizeFormula and canonicalizeFormula: spell references on the profile side in R1C1, with the profile's row/column letters and brackets (de Z(-1)S(1), es F[-1]C[1]); omitted keeps A1.",
+          ),
+        baseRow: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe(
+            "Zero-based row that R1C1 relative references are measured from; given together with baseCol. A relative reference with no base fails.",
+          ),
+        baseCol: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe(
+            "Zero-based column that R1C1 relative references are measured from; given together with baseRow.",
+          ),
         profile: profileSchema
           .optional()
           .describe("Profile to translate into or describe; defaults to the session's profile."),
       },
     },
-    async ({ sessionId, operation, name, formula, profile }) => {
+    async ({ sessionId, operation, name, formula, profile, r1c1, baseRow, baseCol }) => {
       try {
         const engine = await formulonModule();
         if (operation === "names") {
@@ -55,8 +77,13 @@ export function registerAdvancedTools(server: McpServer): void {
           if (formula === undefined) {
             throw new Error(`formula is required for ${operation}`);
           }
+          const notation = {
+            ...(r1c1 !== undefined ? { r1c1 } : {}),
+            ...(baseRow !== undefined ? { baseRow } : {}),
+            ...(baseCol !== undefined ? { baseCol } : {}),
+          };
           return labeledOk(sessionId, `Formulon.${operation}`, "read", () =>
-            engine[operation](formula, profileId),
+            engine[operation](formula, profileId, notation),
           );
         }
         if (!name) {
