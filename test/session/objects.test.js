@@ -37,13 +37,14 @@ test("supports layout, comments, hyperlinks, validations, and conditional format
     });
 
     call("objects", sheet0, "setHyperlink", [
-      0,
-      1,
-      { target: "https://example.com", display: "Example", tooltip: "Example tooltip" },
+      {
+        target: "https://example.com",
+        display: "Example",
+        tooltip: "Example tooltip",
+        range: "B1",
+      },
     ]);
     call("objects", sheet0, "setHyperlink", [
-      2,
-      0,
       {
         target: null,
         location: "Sheet1!A1",
@@ -76,7 +77,7 @@ test("supports layout, comments, hyperlinks, validations, and conditional format
     call("objects", sheet0, "addCfRule", [{ ranges: [column0], type: 0, formula1: "=A1>0" }]);
     assert.equal(call("objects", sheet0, "listCfRules").length, 1);
 
-    call("objects", sheet0, "setHyperlink", [0, 1, null]);
+    call("objects", sheet0, "removeHyperlink", ["B1"]);
     assert.equal(call("objects", sheet0, "listHyperlinks").length, 1);
     call("objects", sheet0, "clearHyperlinks");
     assert.equal(call("objects", sheet0, "listHyperlinks").length, 0);
@@ -100,9 +101,12 @@ test("round-trips comments, validations, conditional formats, and protection thr
     const id = "objects-roundtrip";
     call(id, sheet0, "setComment", [0, 0, { author: "tester", text: "hello" }]);
     call(id, sheet0, "setHyperlink", [
-      0,
-      1,
-      { target: "https://example.com", display: "Example", tooltip: "Example tooltip" },
+      {
+        target: "https://example.com",
+        display: "Example",
+        tooltip: "Example tooltip",
+        range: "B1",
+      },
     ]);
     call(id, sheet0, "addValidation", [
       { ranges: [column0], type: 1, operator: 0, formula1: "1", formula2: "10" },

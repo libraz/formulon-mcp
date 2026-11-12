@@ -89,7 +89,7 @@ export function registerMutationTools(server: McpServer): void {
     {
       title: "Set range block",
       description:
-        'Write a 2D block of values starting at an anchor cell. Each element\'s JSON type picks the cell type: number, boolean, or string. Use {"f":"=SUM(A1:A3)"} for a formula, {"blank":true} to clear a cell, and null to leave it untouched. Far more compact than set_cells for tables.',
+        'Write a 2D block of values starting at an anchor cell. Each element\'s JSON type picks the cell type: number, boolean, or string. Use {"f":"=SUM(A1:A3)"} for a formula, {"blank":true} to clear the content of a cell (a cell left with neither content nor a format of its own stops existing), and null to leave it untouched. Far more compact than set_cells for tables.',
       inputSchema: {
         sessionId: z.string(),
         start: z.string().describe("Anchor (top-left) A1 cell, for example Sheet1!B2 or B2."),

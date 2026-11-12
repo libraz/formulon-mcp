@@ -284,7 +284,7 @@ export function stableCells(
   const limit = Math.max(0, Math.min(maxCells, all.length));
   // One read of every cell with a non-default XF; a stored cell absent from it has XF 0, as
   // `getCellXfIndex` reads it.
-  const ownXfCells = includeStyles ? (safeRead(() => handle.ooxml.getCellXfIndices()) ?? []) : [];
+  const ownXfCells = includeStyles ? (safeRead(() => handle.ooxml.listCellXfIndices()) ?? []) : [];
   const ownXf = new Map(ownXfCells.map((entry) => [refA1(entry.row, entry.col), entry.xfIndex]));
   const xfJson = new Map<number, unknown>();
   const styleOf = (a1: string) => {

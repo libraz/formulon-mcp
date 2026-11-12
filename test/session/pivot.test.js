@@ -70,7 +70,12 @@ test("groups pivot dates in seven-day intervals and formats aggregated values", 
     call("pivot-days", cacheOf(cacheId), "addField", ["Amount"]);
     for (const [index, serial] of [45_000, 45_003, 45_009].entries()) {
       call("pivot-days", cacheOf(cacheId), "addRecord");
-      call("pivot-days", cacheOf(cacheId), "setRecordValue", [index, 0, serial]);
+      // A date group needs dates, so the serial goes in as a date rather than a plain number.
+      call("pivot-days", cacheOf(cacheId), "setRecordValue", [
+        index,
+        0,
+        { value: serial, isDate: true },
+      ]);
       call("pivot-days", cacheOf(cacheId), "setRecordValue", [index, 1, (index + 1) * 10]);
     }
     call("pivot-days", sheetOf, "addPivot", [{ name: "ByDays", cacheId, anchor: "A1" }]);

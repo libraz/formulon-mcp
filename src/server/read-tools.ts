@@ -128,7 +128,7 @@ export function registerReadTools(server: McpServer): void {
     {
       title: "Save session workbook",
       description:
-        "Save an open workbook session as .xlsx or .xlsb. XLSB output can lose or downgrade tables, pivots, print settings, comments, and other features; choose .xlsx where possible and inspect `losses` before relying on the file.",
+        "Save an open workbook session as .xlsx or .xlsb. XLSB output can lose or downgrade tables, pivots, print settings, comments, and other features; choose .xlsx where possible and inspect `losses` before relying on the file. The session stays as it was: where the save writes formatted blanks in Excel's saved form (a row of default-format blanks as a row format, a blank equal to the format it inherits left out), the session still reports those blanks and no row format until the file is reopened; values, display text and effective styles are unaffected.",
       inputSchema: {
         sessionId: z.string(),
         outputPath: z.string().optional(),

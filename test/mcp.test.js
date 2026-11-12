@@ -643,7 +643,7 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
         ],
       );
 
-      // A second link anchored at A3 sits beside the first; removeAt drops only the one at its index.
+      // A second link at A3:B3 sits beside the A3 link; removeAt drops only the one at its index.
       await client.callTool({
         name: "formulon_hyperlink_operation",
         arguments: {
@@ -669,8 +669,27 @@ test("MCP stdio exposes advanced dedicated workbook tools", async () => {
         afterRemoveAt.result.map((link) => [link.range.firstRow, link.range.lastCol, link.target]),
         [
           [3, 2, null],
-          [2, 1, "https://example.org"],
+          [2, 1, "https://example.org/"],
         ],
+      );
+
+      // remove deletes every link the cells intersect, whole: B4 reaches the A4:C4 link only.
+      const hyperlinkRemove = textPayload(
+        await client.callTool({
+          name: "formulon_hyperlink_operation",
+          arguments: { sessionId: "advanced-session", operation: "remove", row: 3, col: 1 },
+        }),
+      );
+      assert.equal(hyperlinkRemove.method, "Sheet.removeHyperlink");
+      const afterRemove = textPayload(
+        await client.callTool({
+          name: "formulon_hyperlink_operation",
+          arguments: { sessionId: "advanced-session", operation: "list" },
+        }),
+      );
+      assert.deepEqual(
+        afterRemove.result.map((link) => [link.range.firstRow, link.range.lastCol]),
+        [[2, 1]],
       );
 
       const validationAdd = textPayload(

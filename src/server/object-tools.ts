@@ -138,7 +138,7 @@ export function registerObjectTools(server: McpServer): void {
     {
       title: "Hyperlink operation",
       description:
-        "List, add, remove, remove by index, or clear hyperlinks on a sheet. An added link covers one cell, or the rectangle through lastRow/lastCol; it replaces a link covering exactly the same cells and is otherwise added beside the links already anchored at row/col. remove deletes every link anchored at row/col; removeAt deletes only the link at that list index.",
+        "List, add, remove, remove by index, or clear hyperlinks on a sheet. add and remove take one cell at row/col, or the rectangle through lastRow/lastCol. An added link replaces a link covering exactly the same cells and is otherwise added beside the others, overlapping ones included; every cell it covers takes Excel's Hyperlink cell style (the font becomes the Normal font underlined in theme colour 10, other formatting is kept), and an empty top-left cell receives display, else the target, else the location, as text. remove deletes every link that intersects the cells, each one whole, and resets every cell of each removed link to the default format; clear does the same for every link. removeAt deletes only the link at that list index and touches no cell formats.",
       inputSchema: {
         ...sheetInputSchema,
         operation: z.enum(["list", "add", "remove", "removeAt", "clear"]),
@@ -149,13 +149,13 @@ export function registerObjectTools(server: McpServer): void {
           .int()
           .nonnegative()
           .optional()
-          .describe("Inclusive last row of a multi-cell hyperlink; defaults to row."),
+          .describe("Inclusive last row of the cells to add or remove; defaults to row."),
         lastCol: z
           .number()
           .int()
           .nonnegative()
           .optional()
-          .describe("Inclusive last column of a multi-cell hyperlink; defaults to col."),
+          .describe("Inclusive last column of the cells to add or remove; defaults to col."),
         index: z.number().int().nonnegative().optional(),
         target: z
           .string()
@@ -206,28 +206,24 @@ export function registerObjectTools(server: McpServer): void {
         if (row === undefined || col === undefined) {
           throw new Error("row and col are required");
         }
+        const range = {
+          firstRow: row,
+          firstCol: col,
+          lastRow: lastRow ?? row,
+          lastCol: lastCol ?? col,
+        };
         if (operation === "remove") {
-          return labeledOk(sessionId, "Sheet.setHyperlink", "write", (wb) =>
-            wb.sheet(sheetIndex).setHyperlink(row, col, null),
+          return labeledOk(sessionId, "Sheet.removeHyperlink", "write", (wb) =>
+            wb.sheet(sheetIndex).removeHyperlink(range),
           );
         }
-        const ranged = lastRow !== undefined || lastCol !== undefined;
         return labeledOk(sessionId, "Sheet.setHyperlink", "write", (wb) =>
-          wb.sheet(sheetIndex).setHyperlink(row, col, {
+          wb.sheet(sheetIndex).setHyperlink({
             target: target || null,
             display: display || null,
             tooltip: tooltip || null,
             location: location || null,
-            ...(ranged
-              ? {
-                  range: {
-                    firstRow: row,
-                    firstCol: col,
-                    lastRow: lastRow ?? row,
-                    lastCol: lastCol ?? col,
-                  },
-                }
-              : {}),
+            range,
           }),
         );
       } catch (error) {
