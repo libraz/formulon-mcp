@@ -36,10 +36,13 @@ export {
 } from "./session/data-tables.js";
 export type { ImageInsertInput, ImageMoveInput } from "./session/images.js";
 export {
+  getSessionCellPicture,
   getSessionImage,
+  insertSessionCellPicture,
   insertSessionImage,
   listSessionImages,
   moveSessionImage,
+  removeSessionCellPicture,
   removeSessionImage,
   reorderSessionImage,
 } from "./session/images.js";

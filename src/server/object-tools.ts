@@ -2,10 +2,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { formulonModule, jsonText } from "../formulon.js";
 import {
+  getSessionCellPicture,
   getSessionImage,
+  insertSessionCellPicture,
   insertSessionImage,
   listSessionImages,
   moveSessionImage,
+  removeSessionCellPicture,
   removeSessionImage,
   reorderSessionImage,
   resolveSessionSheet,
@@ -18,6 +21,24 @@ import {
   validationSchema,
 } from "./object-schemas.js";
 import { fail, imageLengthSchema, labeledOk, ok, rangeSchema, sheetInputSchema } from "./shared.js";
+
+/** A picture read as an image content item (when its format has a MIME type) plus its metadata. */
+function imageContent(image: { bytes: Buffer; mimeType: string | undefined; metadata: unknown }) {
+  return {
+    content: [
+      ...(image.mimeType
+        ? [
+            {
+              type: "image" as const,
+              data: image.bytes.toString("base64"),
+              mimeType: image.mimeType,
+            },
+          ]
+        : []),
+      { type: "text" as const, text: jsonText(image.metadata) },
+    ],
+  };
+}
 
 export function registerObjectTools(server: McpServer): void {
   server.registerTool(
@@ -374,22 +395,35 @@ export function registerObjectTools(server: McpServer): void {
     {
       title: "Image operation",
       description:
-        "List a sheet's drawing objects (pictures, shapes, charts) with A1 anchors and sizes, get a picture's bytes (returned as an image, optionally written to outputPath), insert a PNG/JPEG/GIF/BMP file anchored at a cell, move/resize a picture or chart in place, change the stacking order, or remove a picture or chart; shapes are edited with formulon_shape_operation. Insertion keeps existing drawings; an omitted width or height keeps the aspect ratio, and omitting both uses the pixel size at 96 DPI. A move changes only what it states and keeps the object's id; a picture also keeps its crop and rotation.",
+        "List a sheet's drawing objects (pictures, shapes, charts) with A1 anchors and sizes, get a picture's bytes (returned as an image, optionally written to outputPath), insert a PNG/JPEG/GIF/BMP file anchored at a cell, move/resize a picture or chart in place, change the stacking order, or remove a picture or chart; shapes are edited with formulon_shape_operation. insertInCell, getInCell and removeInCell place, read and remove the PNG/JPEG picture held in the anchor cell itself (Excel's Place in Cell), which sizes with the cell. Placing replaces whatever the cell held, a formula included, and formulas that read the cell see #VALUE!; removing empties the cell. `description` is its alternative text. Insertion keeps existing drawings; an omitted width or height keeps the aspect ratio, and omitting both uses the pixel size at 96 DPI. A move changes only what it states and keeps the object's id; a picture also keeps its crop and rotation.",
       inputSchema: {
         ...sheetInputSchema,
-        operation: z.enum(["list", "get", "insert", "move", "reorder", "remove"]),
+        operation: z.enum([
+          "list",
+          "get",
+          "insert",
+          "move",
+          "reorder",
+          "remove",
+          "insertInCell",
+          "getInCell",
+          "removeInCell",
+        ]),
         objectId: z
           .number()
           .int()
           .positive()
           .optional()
           .describe("Drawing object id from list; required for get, move, reorder and remove."),
-        path: z.string().optional().describe("Image file to insert; required for insert."),
+        path: z
+          .string()
+          .optional()
+          .describe("Image file to insert; required for insert and insertInCell."),
         anchor: z
           .string()
           .optional()
           .describe(
-            "Top-left cell on the selected sheet, for example B2; required for insert, optional for move.",
+            "Top-left cell on the selected sheet, for example B2; required for insert, optional for move. For the InCell operations, the cell that holds the picture.",
           ),
         offsetX: imageLengthSchema.optional().describe("Offset from the anchor cell's left edge."),
         offsetY: imageLengthSchema.optional().describe("Offset from the anchor cell's top edge."),
@@ -411,7 +445,10 @@ export function registerObjectTools(server: McpServer): void {
           ),
         name: z.string().optional(),
         description: z.string().optional().describe("Alternative text."),
-        outputPath: z.string().optional().describe("For get: write the image bytes to this path."),
+        outputPath: z
+          .string()
+          .optional()
+          .describe("For get and getInCell: write the image bytes to this path."),
       },
     },
     async ({
@@ -428,6 +465,38 @@ export function registerObjectTools(server: McpServer): void {
       try {
         if (operation === "list") {
           return ok(listSessionImages(sessionId, sheet));
+        }
+        if (
+          operation === "insertInCell" ||
+          operation === "getInCell" ||
+          operation === "removeInCell"
+        ) {
+          if (anchor === undefined) {
+            throw new Error(`anchor is required for ${operation}`);
+          }
+          const { description, ...rest } = placement;
+          const stray = Object.entries(rest).filter(([, value]) => value !== undefined);
+          if (stray.length > 0 || objectId !== undefined || index !== undefined) {
+            throw new Error(
+              `${operation} takes anchor, path, description and outputPath only; a picture in a cell sizes with the cell`,
+            );
+          }
+          if (operation === "getInCell") {
+            return imageContent(getSessionCellPicture(sessionId, sheet, anchor, outputPath));
+          }
+          if (operation === "removeInCell") {
+            return ok(removeSessionCellPicture(sessionId, sheet, anchor));
+          }
+          if (path === undefined) {
+            throw new Error("path is required for insertInCell");
+          }
+          return ok(
+            await insertSessionCellPicture(sessionId, sheet, {
+              path,
+              anchor,
+              description,
+            }),
+          );
         }
         if (operation === "insert") {
           if (path === undefined || anchor === undefined) {
@@ -454,21 +523,7 @@ export function registerObjectTools(server: McpServer): void {
           }
           return ok(reorderSessionImage(sessionId, sheet, objectId, index));
         }
-        const image = getSessionImage(sessionId, sheet, objectId, outputPath);
-        return {
-          content: [
-            ...(image.mimeType
-              ? [
-                  {
-                    type: "image" as const,
-                    data: image.bytes.toString("base64"),
-                    mimeType: image.mimeType,
-                  },
-                ]
-              : []),
-            { type: "text" as const, text: jsonText(image.metadata) },
-          ],
-        };
+        return imageContent(getSessionImage(sessionId, sheet, objectId, outputPath));
       } catch (error) {
         return fail(error);
       }

@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "vitest";
+import { tinyJpeg } from "./helpers/jpeg.js";
 import { callTool, errorPayload, textPayload, withClient } from "./helpers/mcp.js";
 import { solidPng } from "./helpers/png.js";
 
@@ -811,6 +812,115 @@ test("a move refuses a name or description instead of dropping it", async () => 
       }
       // Nothing moved: the refusal happens before the placement is touched.
       assert.deepEqual(await listPictures(client, sessionId), before);
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("places, reads, replaces and removes a picture held in a cell", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-images-"));
+  try {
+    const wide = path.join(dir, "wide.png");
+    const photo = path.join(dir, "photo.jpg");
+    const widePng = solidPng(40, 20);
+    await writeFile(wide, widePng);
+    await writeFile(photo, tinyJpeg());
+    const saved = path.join(dir, "in-cell.xlsx");
+    await withClient(async (client) => {
+      const sessionId = "in-cell";
+      textPayload(await callTool(client, "formulon_open_workbook", { sessionId }));
+      const op = (args) => callTool(client, "formulon_image_operation", { sessionId, ...args });
+
+      const placed = textPayload(
+        await op({ operation: "insertInCell", path: wide, anchor: "B2", description: "Logo" }),
+      );
+      assert.equal(placed.anchor, "B2");
+      assert.deepEqual(placed.source, { path: wide, format: "png", pxWidth: 40, pxHeight: 20 });
+      // A picture in a cell is not a drawing object.
+      assert.equal(textPayload(await op({ operation: "list" })).count, 0);
+
+      const got = await op({
+        operation: "getInCell",
+        anchor: "B2",
+        outputPath: path.join(dir, "copy.png"),
+      });
+      assert.equal(got.content[0].mimeType, "image/png");
+      assert.deepEqual(Buffer.from(got.content[0].data, "base64"), widePng);
+      assert.deepEqual(await readFile(path.join(dir, "copy.png")), widePng);
+      const metadata = JSON.parse(got.content[1].text);
+      assert.equal(metadata.altText, "Logo");
+      assert.equal(metadata.pxWidth, 40);
+
+      // Placing again replaces the picture, a JPEG as well as a PNG; no alternative text is null.
+      textPayload(await op({ operation: "insertInCell", path: photo, anchor: "B2" }));
+      const replacedRead = await op({ operation: "getInCell", anchor: "B2" });
+      assert.equal(replacedRead.content[0].mimeType, "image/jpeg");
+      assert.deepEqual(Buffer.from(replacedRead.content[0].data, "base64"), tinyJpeg());
+      const replaced = JSON.parse(replacedRead.content[1].text);
+      assert.equal(replaced.format, "jpeg");
+      assert.equal(replaced.pxHeight, 3);
+      assert.equal(replaced.altText, null);
+
+      assert.match(
+        errorPayload(
+          await op({ operation: "insertInCell", path: wide, anchor: "C3", width: { size: 10 } }),
+        ),
+        /sizes with the cell/,
+      );
+      assert.match(
+        errorPayload(await op({ operation: "getInCell", anchor: "C3" })),
+        /no picture in cell C3/,
+      );
+      const gif = path.join(dir, "not-a-png.gif");
+      await writeFile(gif, Buffer.from("GIF89a"));
+      assert.match(
+        errorPayload(await op({ operation: "insertInCell", path: gif, anchor: "C3" })),
+        /^IoImageUnsupported:/,
+      );
+
+      // Placing replaces a formula, a formula reading the picture cell sees #VALUE!, and
+      // removing empties the cell.
+      textPayload(
+        await callTool(client, "formulon_set_cells", {
+          sessionId,
+          mutations: [
+            { type: "formula", a1: "D4", formula: "=1+1" },
+            { type: "formula", a1: "E4", formula: "=ISERROR(D4)" },
+          ],
+        }),
+      );
+      textPayload(await op({ operation: "insertInCell", path: wide, anchor: "D4" }));
+      const read = (a1) =>
+        callTool(client, "formulon_get_cell", { sessionId, a1, recalc: true }).then(textPayload);
+      assert.equal((await read("D4")).formula, "");
+      assert.deepEqual((await read("E4")).value, { kind: "bool", value: true });
+      assert.equal(
+        textPayload(await op({ operation: "removeInCell", anchor: "D4" })).removed,
+        true,
+      );
+      assert.match(errorPayload(await op({ operation: "getInCell", anchor: "D4" })), /no picture/);
+      assert.equal((await read("D4")).value.kind, "blank");
+      assert.deepEqual((await read("E4")).value, { kind: "bool", value: false });
+      assert.equal(
+        textPayload(await op({ operation: "removeInCell", anchor: "D4" })).removed,
+        false,
+      );
+
+      textPayload(
+        await callTool(client, "formulon_save_session", { sessionId, outputPath: saved }),
+      );
+      textPayload(
+        await callTool(client, "formulon_open_workbook", { sessionId: "in-cell-2", path: saved }),
+      );
+      const reopened = await callTool(client, "formulon_image_operation", {
+        sessionId: "in-cell-2",
+        operation: "getInCell",
+        anchor: "B2",
+      });
+      // The JPEG stays a JPEG through the save.
+      assert.equal(reopened.content[0].mimeType, "image/jpeg");
+      assert.equal(JSON.parse(reopened.content[1].text).pxHeight, 3);
     });
   } finally {
     await rm(dir, { recursive: true, force: true });

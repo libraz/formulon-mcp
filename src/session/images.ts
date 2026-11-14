@@ -177,6 +177,26 @@ export function getSessionImage(
   };
 }
 
+/** A cell on the selected sheet named by `anchor`, which must not carry a sheet name. */
+function anchorCell(anchor: string) {
+  const cell = parseCellRef(anchor);
+  if (cell.sheetName !== undefined) {
+    throw new Error("anchor must be a cell on the selected sheet, without a sheet name");
+  }
+  assertInGrid(cell.row, cell.col);
+  return cell;
+}
+
+/** Reads an image file the caller names, refusing one past the size cap. */
+function readImageFile(input: string) {
+  const path = resolveUserPath(input);
+  const bytes = new Uint8Array(readFileSync(path));
+  if (bytes.byteLength > MAX_IMAGE_BYTES) {
+    throw new Error(`image exceeds ${MAX_IMAGE_BYTES} bytes: ${path}`);
+  }
+  return { path, bytes };
+}
+
 /**
  * Inserts a PNG/JPEG/GIF/BMP file as a picture anchored at a cell. An omitted
  * width or height keeps the image's aspect ratio; omitting both uses its
@@ -189,16 +209,8 @@ export async function insertSessionImage(
 ) {
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
-  const anchor = parseCellRef(input.anchor);
-  if (anchor.sheetName !== undefined) {
-    throw new Error("anchor must be a cell on the selected sheet, without a sheet name");
-  }
-  assertInGrid(anchor.row, anchor.col);
-  const path = resolveUserPath(input.path);
-  const bytes = new Uint8Array(readFileSync(path));
-  if (bytes.byteLength > MAX_IMAGE_BYTES) {
-    throw new Error(`image exceeds ${MAX_IMAGE_BYTES} bytes: ${path}`);
-  }
+  const anchor = anchorCell(input.anchor);
+  const { path, bytes } = readImageFile(input.path);
   const info = (await formulonModule()).getImageInfo(bytes);
 
   let widthEmu = lengthToEmu(input.width, "width");
@@ -361,4 +373,92 @@ export function reorderSessionImage(
   drawing.setZOrder(index);
   const order = listSessionImages(id, sheetIndex).objects.map((object) => object.objectId);
   return { session: publicInfo(session), sheet: sheetIndex, objectId, index, order };
+}
+
+/** Places a PNG/JPEG file in a cell, replacing whatever the cell held, a formula or another picture. */
+export async function insertSessionCellPicture(
+  id: string,
+  sheet: number | string | undefined,
+  input: { path: string; anchor: string; description?: string },
+) {
+  const session = getSession(id);
+  const sheetIndex = findSheetIndex(session.workbook, sheet);
+  const cell = anchorCell(input.anchor);
+  const { path, bytes } = readImageFile(input.path);
+  const info = (await formulonModule()).getImageInfo(bytes);
+  touch(session, true);
+  sheetAt(session.workbook, sheetIndex).setCellPicture(cell.row, cell.col, {
+    bytes,
+    altText: input.description ?? null,
+  });
+  return {
+    session: publicInfo(session),
+    sheet: sheetIndex,
+    anchor: refA1(cell.row, cell.col),
+    source: {
+      path,
+      format: imageFormatName(info.format),
+      pxWidth: info.widthPx,
+      pxHeight: info.heightPx,
+    },
+  };
+}
+
+/** Reads the picture placed in a cell, optionally writing its bytes to `outputPath`. */
+export function getSessionCellPicture(
+  id: string,
+  sheet: number | string | undefined,
+  anchor: string,
+  outputPath?: string,
+) {
+  const session = getSession(id);
+  const sheetIndex = findSheetIndex(session.workbook, sheet);
+  const cell = anchorCell(anchor);
+  const picture = sheetAt(session.workbook, sheetIndex).getCellPicture(cell.row, cell.col);
+  if (picture === null) {
+    throw new Error(`no picture in cell ${refA1(cell.row, cell.col)}`);
+  }
+  const bytes = Buffer.from(picture.bytes);
+  const written = outputPath === undefined ? undefined : resolveUserPath(outputPath);
+  if (written !== undefined) {
+    writeFileSync(written, bytes);
+  }
+  return {
+    bytes,
+    mimeType: imageMimeType(picture.format),
+    metadata: {
+      session: publicInfo(session),
+      sheet: sheetIndex,
+      anchor: refA1(cell.row, cell.col),
+      format: imageFormatName(picture.format),
+      pxWidth: picture.widthPx,
+      pxHeight: picture.heightPx,
+      altText: picture.altText,
+      byteLength: bytes.byteLength,
+      ...(written ? { outputPath: written } : {}),
+    },
+  };
+}
+
+/** Removes the picture placed in a cell, which empties it; `removed` is false when it held none. */
+export function removeSessionCellPicture(
+  id: string,
+  sheet: number | string | undefined,
+  anchor: string,
+) {
+  const session = getSession(id);
+  const sheetIndex = findSheetIndex(session.workbook, sheet);
+  const cell = anchorCell(anchor);
+  const handle = sheetAt(session.workbook, sheetIndex);
+  const removed = handle.getCellPicture(cell.row, cell.col) !== null;
+  if (removed) {
+    touch(session, true);
+    handle.setCellPicture(cell.row, cell.col, null);
+  }
+  return {
+    session: publicInfo(session),
+    sheet: sheetIndex,
+    anchor: refA1(cell.row, cell.col),
+    removed,
+  };
 }

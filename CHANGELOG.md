@@ -81,6 +81,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inputs.
 - `formulon_theme_operation` applies a `.thmx` theme file to a session's
   workbook or saves the workbook's theme as one.
+- `formulon_image_operation` places, reads and removes a PNG or JPEG picture
+  held in a cell (`insertInCell`, `getInCell`, `removeInCell`), as Excel's
+  Place in Cell does; formulas that read such a cell see `#VALUE!`.
 
 ### Changed
 
