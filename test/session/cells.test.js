@@ -530,8 +530,21 @@ test("cell and range reads mark a formula left stale by manual calculation", asy
         ["B1", true],
       ],
     );
+    // A volatile formula, and one reading it, is stale while any edit is pending.
+    setSessionRange(
+      "stale",
+      "C1",
+      [[{ f: "=RAND()" }, { f: "=C1+1" }, { f: "=1+1" }]],
+      undefined,
+      true,
+    );
+    setSessionRange("stale", "A1", [[6]], undefined, false);
+    assert.deepEqual(
+      ["C1", "D1", "E1"].map((a1) => getSessionCellByA1("stale", a1).stale),
+      [true, true, undefined],
+    );
     const recalculated = getSessionCellByA1("stale", "B1", undefined, true);
-    assert.equal(recalculated.value.value, 10);
+    assert.equal(recalculated.value.value, 12);
     assert.equal(recalculated.stale, undefined);
   } finally {
     closeSession("stale");
