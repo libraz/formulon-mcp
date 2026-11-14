@@ -74,9 +74,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `formulon_sparkline_operation` takes and lists `rightToLeft`, which plots a
   group's points from right to left.
+- `formulon_recalc_session` returns `circularReferences`, every cell
+  (`Sheet!A1`) that sits in an unresolved circular reference.
+- `formulon_get_cell` and `formulon_get_range` mark a formula cell
+  `stale: true` when manual calculation left its value behind a change to its
+  inputs.
 
 ### Changed
 
+- `LEN`, `MID`, `FIND`, `SEARCH` and `REPLACE` count a character outside the
+  Basic Multilingual Plane (an emoji, a rare CJK ideograph) by the workbook's
+  Compatibility Version, as the engine now does: a new workbook and a file
+  stamped with version 2 count it as one position, and a file without the
+  stamp or stamped with version 1 counts it as two. Before, the default
+  profile always counted two.
+- `formulon_save_session` reports that `.xlsb` output leaves out a
+  PivotTable built in the session and a note on the third or later sheet;
+  tables, print settings, notes on the first two sheets, AutoFilter and the
+  other features the tools author are kept.
 - `formulon_inspect_workbook` and `formulon_get_cell` with a `path` and
   `recalc: false` read the values the file cached, as Excel shows them in
   Manual calculation; the workbook is not recalculated on open.

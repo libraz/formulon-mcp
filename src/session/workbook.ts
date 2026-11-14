@@ -35,7 +35,12 @@ export function recalcSession(id: string) {
   const session = getSession(id);
   touch(session, true);
   session.workbook.recalc();
-  return { session: publicInfo(session), status: okStatus() };
+  const circularReferences = session.workbook
+    .listSheets()
+    .flatMap((handle) =>
+      handle.listCircularReferences().map((cell) => `${handle.name}!${refA1(cell.row, cell.col)}`),
+    );
+  return { session: publicInfo(session), status: okStatus(), circularReferences };
 }
 
 /** Applies a sheet add/remove/rename/move operation. */

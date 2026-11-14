@@ -111,7 +111,8 @@ export function registerSessionTools(server: McpServer): void {
     "formulon_recalc_session",
     {
       title: "Recalculate session",
-      description: "Recalculate an open workbook session.",
+      description:
+        "Recalculate an open workbook session. `circularReferences` lists every cell (Sheet!A1) that sits in an unresolved circular reference, where Excel warns and names only one of them; a cell that only reads a cycle is not listed, and nothing is listed under iterative calculation.",
       inputSchema: {
         sessionId: z.string(),
       },

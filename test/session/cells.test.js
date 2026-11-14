@@ -475,3 +475,65 @@ test("formatted numbers carry the engine display text", async () => {
     closeSession("range-text");
   }
 });
+
+test("recalculation lists every cell in an unresolved circular reference", async () => {
+  await openSession(undefined, "circular");
+  try {
+    applySheetOperation("circular", "add", { name: "Other" });
+    applySessionMutations(
+      "circular",
+      [
+        { type: "formula", a1: "A1", formula: "=B1+1" },
+        { type: "formula", a1: "B1", formula: "=A1+1" },
+        // C1 only reads the cycle, so it is not part of it.
+        { type: "formula", a1: "C1", formula: "=A1" },
+        { type: "formula", sheet: "Other", a1: "B2", formula: "=Sheet1!D1" },
+        { type: "formula", a1: "D1", formula: "=Other!B2" },
+      ],
+      false,
+    );
+    assert.deepEqual(recalcSession("circular").circularReferences, [
+      "Sheet1!A1",
+      "Sheet1!B1",
+      "Sheet1!D1",
+      "Other!B2",
+    ]);
+    applySessionMutations("circular", [{ type: "number", a1: "B1", value: 1 }], false);
+    applySessionMutations("circular", [{ type: "number", a1: "D1", value: 1 }], false);
+    assert.deepEqual(recalcSession("circular").circularReferences, []);
+  } finally {
+    closeSession("circular");
+  }
+});
+
+test("cell and range reads mark a formula left stale by manual calculation", async () => {
+  await openSession(undefined, "stale");
+  try {
+    setSessionRange("stale", "A1", [[1, { f: "=A1*2" }]], undefined, true);
+    getSession("stale").workbook.setCalcMode(1);
+    assert.equal(getSessionCellByA1("stale", "B1").stale, undefined);
+    setSessionRange("stale", "A1", [[5]], undefined, false);
+    const cell = getSessionCellByA1("stale", "B1");
+    assert.equal(cell.value.value, 2);
+    assert.equal(cell.stale, true);
+    // A constant is never stale.
+    assert.equal(getSessionCellByA1("stale", "A1").stale, undefined);
+    const range = getSessionRange("stale", "A1:B1", {
+      maxCells: 10,
+      recalc: false,
+      includeFormulas: false,
+    });
+    assert.deepEqual(
+      range.cells.map((entry) => [entry.a1, entry.stale]),
+      [
+        ["A1", undefined],
+        ["B1", true],
+      ],
+    );
+    const recalculated = getSessionCellByA1("stale", "B1", undefined, true);
+    assert.equal(recalculated.value.value, 10);
+    assert.equal(recalculated.stale, undefined);
+  } finally {
+    closeSession("stale");
+  }
+});

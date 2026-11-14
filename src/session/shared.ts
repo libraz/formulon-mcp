@@ -215,6 +215,23 @@ export function decodeNumberCell(
 }
 
 /**
+ * `{ stale: true }` for a formula cell whose value predates a change to its inputs, which only
+ * manual or automatic-except-tables calculation leaves behind; empty otherwise, so the output
+ * stays sparse.
+ */
+export function staleMark(
+  session: WorkbookOwner,
+  sheet: number,
+  row: number,
+  col: number,
+  formula: string,
+): { stale?: true } {
+  return formula !== "" && session.workbook.sheet(sheet).isCellStale(row, col)
+    ? { stale: true }
+    : {};
+}
+
+/**
  * Runs an optional engine read for an inspection payload and converts its result to JSON;
  * a read the engine refuses yields `null` instead of failing the whole tool call.
  */

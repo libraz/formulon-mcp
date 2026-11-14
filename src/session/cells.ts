@@ -15,6 +15,7 @@ import {
   type PrimitiveCellValue,
   rectCells,
   sheetName,
+  staleMark,
   type WorkbookOwner,
 } from "./shared.js";
 import { getSession, publicInfo, touch, type WorkbookSession } from "./state.js";
@@ -152,11 +153,13 @@ export function readWorkbookCell(
   const value = valueToJson(
     owner.workbook.sheet(sheetIndex).getTypedValue(row, col),
   ) as PrimitiveCellValue;
+  const formula = formulaAt(owner, sheetIndex, row, col);
   return {
     address: { sheet: sheetIndex, row, col, a1: cellToA1(row, col) },
     status: okStatus(),
     value,
-    formula: formulaAt(owner, sheetIndex, row, col),
+    formula,
+    ...staleMark(owner, sheetIndex, row, col, formula),
     ...decodeNumberCell(owner, sheetIndex, row, col, value),
   };
 }
@@ -314,6 +317,7 @@ export function getSessionRange(id: string, ref: string, options: RangeReadOptio
       row: cell.row,
       col: cell.col,
       value,
+      ...staleMark(session, sheetIndex, cell.row, cell.col, cell.formula),
       ...decodeNumberCell(session, sheetIndex, cell.row, cell.col, value),
       ...(options.includeFormulas ? { formula: cell.formula } : {}),
     });

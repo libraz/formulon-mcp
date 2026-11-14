@@ -184,7 +184,7 @@ test("MCP stdio lists and calls core tools", async () => {
         arguments: { formula: '=LEN("\u{1F600}a")' },
       }),
     );
-    assert.deepEqual(lenResult.value, { kind: "number", value: 3 });
+    assert.deepEqual(lenResult.value, { kind: "number", value: 2 });
     const unstamped = textPayload(
       await client.callTool({
         name: "formulon_get_cell",
@@ -192,7 +192,7 @@ test("MCP stdio lists and calls core tools", async () => {
       }),
     );
     assert.equal(unstamped.formula, '=LEN("\u{1F600}a")');
-    assert.deepEqual(unstamped.value, { kind: "number", value: 3 });
+    assert.deepEqual(unstamped.value, { kind: "number", value: 2 });
   });
 });
 
