@@ -170,6 +170,15 @@ test("MCP stdio lists and calls core tools", async () => {
       }),
     );
     assert.deepEqual(evalResult.value, { kind: "number", value: 6 });
+
+    // Pins how the default profile counts a character outside the Basic Multilingual Plane.
+    const lenResult = textPayload(
+      await client.callTool({
+        name: "formulon_eval_formula",
+        arguments: { formula: '=LEN("\u{1F600}a")' },
+      }),
+    );
+    assert.deepEqual(lenResult.value, { kind: "number", value: 3 });
   });
 });
 
