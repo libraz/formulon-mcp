@@ -95,10 +95,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stamp or stamped with version 1 counts it as two. Before, the default
   profile always counted two.
 - `formulon_save_session` reports that `.xlsb` output leaves out a
-  PivotTable built in the session, a note on the third or later sheet and
-  the custom views of a workbook opened from `.xlsx`;
-  tables, print settings, notes on the first two sheets, AutoFilter and the
-  other features the tools author are kept.
+  PivotTable built in the session and the custom views of a workbook opened
+  from `.xlsx`; tables, print settings, notes, AutoFilter and the other
+  features the tools author are kept. An `.xlsb` save of a data bar whose
+  minimum or maximum is a formula fails with `IoFeatureNotWritable` and
+  writes nothing.
 - `formulon_inspect_workbook` and `formulon_get_cell` with a `path` and
   `recalc: false` read the values the file cached, as Excel shows them in
   Manual calculation; the workbook is not recalculated on open.
