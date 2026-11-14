@@ -44,7 +44,7 @@ test("authors a printable page and reads every setting back", async () => {
     assert.equal(settings.margins.top, 0.75);
     assert.equal(settings.printArea, "A1:B20");
     assert.equal(settings.printTitles.repeatRows, "1:1");
-    assert.match(settings.printOptionsXml, /horizontalCentered="true"/);
+    assert.match(settings.printOptionsXml, /horizontalCentered="1"/);
     assert.ok(settings.pageCount >= 1);
   } finally {
     closeSession("print-author");
