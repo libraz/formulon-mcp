@@ -4,10 +4,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "vitest";
 import { callTool, errorPayload, textPayload, withClient } from "./helpers/mcp.js";
 
 const require = createRequire(import.meta.url);
+/** A workbook whose A1 holds =LEN("😀a") and which carries no Compatibility Version stamp. */
+const UNSTAMPED_LEN_FIXTURE = fileURLToPath(
+  new URL("./fixtures/unstamped-len.xlsx", import.meta.url),
+);
 const FORMULON_VERSION = require("@libraz/formulon/package.json").version;
 const SERVER_VERSION = require("../package.json").version;
 
@@ -171,7 +176,8 @@ test("MCP stdio lists and calls core tools", async () => {
     );
     assert.deepEqual(evalResult.value, { kind: "number", value: 6 });
 
-    // Pins how the default profile counts a character outside the Basic Multilingual Plane.
+    // Pins how a character outside the Basic Multilingual Plane is counted on the default
+    // profile: in a new workbook, and in an opened file that carries no Compatibility Version.
     const lenResult = textPayload(
       await client.callTool({
         name: "formulon_eval_formula",
@@ -179,6 +185,14 @@ test("MCP stdio lists and calls core tools", async () => {
       }),
     );
     assert.deepEqual(lenResult.value, { kind: "number", value: 3 });
+    const unstamped = textPayload(
+      await client.callTool({
+        name: "formulon_get_cell",
+        arguments: { path: UNSTAMPED_LEN_FIXTURE, a1: "A1", recalc: true },
+      }),
+    );
+    assert.equal(unstamped.formula, '=LEN("\u{1F600}a")');
+    assert.deepEqual(unstamped.value, { kind: "number", value: 3 });
   });
 });
 
