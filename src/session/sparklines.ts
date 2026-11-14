@@ -38,6 +38,7 @@ const FLAGS = [
   "negative",
   "displayXAxis",
   "displayHidden",
+  "rightToLeft",
 ] as const;
 
 export type SparklineTypeName = (typeof TYPE_NAMES)[number];

@@ -70,6 +70,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   followed by a JSON content item with `code`, `message`, `context` and, for a
   formula syntax error, `parseError` with its positions.
 
+### Added
+
+- `formulon_sparkline_operation` takes and lists `rightToLeft`, which plots a
+  group's points from right to left.
+
 ### Changed
 
 - `formulon_inspect_workbook` and `formulon_get_cell` with a `path` and

@@ -208,12 +208,15 @@ test("adds, updates and removes sparkline groups without resetting unstated sett
       assert.equal(added.group.high, true);
       assert.equal(added.group.colors.series, "#1F77B4");
       assert.equal(added.group.maxAxis, "group");
+      assert.equal(added.group.rightToLeft, undefined);
 
       const updated = updateSessionSparklines("sparklines", 0, 0, undefined, {
         negative: true,
         minAxis: -2,
+        rightToLeft: true,
       });
       assert.equal(updated.group.negative, true);
+      assert.equal(updated.group.rightToLeft, true);
       assert.equal(updated.group.minAxis, -2);
       // The engine rewrites every modelled field on update; these must survive.
       assert.equal(updated.group.type, "column");
@@ -243,6 +246,7 @@ test("adds, updates and removes sparkline groups without resetting unstated sett
       const listed = listSessionSparklines("sparklines-reopen", 0);
       assert.equal(listed.count, 1);
       assert.equal(listed.groups[0].type, "column");
+      assert.equal(listed.groups[0].rightToLeft, true);
       removeSessionSparklines("sparklines-reopen", 0, 0);
       assert.equal(listSessionSparklines("sparklines-reopen", 0).count, 0);
     } finally {

@@ -126,6 +126,7 @@ export function registerSheetObjectTools(server: McpServer): void {
         negative: z.boolean().optional().describe("Mark negative points."),
         displayXAxis: z.boolean().optional().describe("Draw the horizontal axis."),
         displayHidden: z.boolean().optional().describe("Plot data in hidden rows and columns."),
+        rightToLeft: z.boolean().optional().describe("Plot the points from right to left."),
         colors: z
           .object({
             series: colorSchema.optional(),
