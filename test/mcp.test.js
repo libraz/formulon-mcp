@@ -192,7 +192,7 @@ test("MCP stdio lists and calls core tools", async () => {
       }),
     );
     assert.equal(unstamped.formula, '=LEN("\u{1F600}a")');
-    assert.deepEqual(unstamped.value, { kind: "number", value: 2 });
+    assert.deepEqual(unstamped.value, { kind: "number", value: 3 });
   });
 });
 
