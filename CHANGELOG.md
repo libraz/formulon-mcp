@@ -78,7 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`Sheet!A1`) that sits in an unresolved circular reference.
 - `formulon_get_cell` and `formulon_get_range` mark a formula cell
   `stale: true` when manual calculation left its value behind a change to its
-  inputs.
+  inputs. Saving the session computes such formulas first, which clears the
+  mark, unless the workbook's `calcOnSave` is off.
 - `formulon_theme_operation` applies a `.thmx` theme file to a session's
   workbook or saves the workbook's theme as one.
 - `formulon_image_operation` places, reads and removes a PNG or JPEG picture
@@ -94,7 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stamp or stamped with version 1 counts it as two. Before, the default
   profile always counted two.
 - `formulon_save_session` reports that `.xlsb` output leaves out a
-  PivotTable built in the session and a note on the third or later sheet;
+  PivotTable built in the session, a note on the third or later sheet and
+  the custom views of a workbook opened from `.xlsx`;
   tables, print settings, notes on the first two sheets, AutoFilter and the
   other features the tools author are kept.
 - `formulon_inspect_workbook` and `formulon_get_cell` with a `path` and

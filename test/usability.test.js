@@ -261,7 +261,7 @@ test("get_cell requires exactly one source and formula evaluation resolves sessi
   });
 });
 
-test("lossy XLSB saves stay dirty while a clean XLSX save clears dirty", async () => {
+test("XLSB and XLSX saves that lose nothing clear dirty", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-usability-save-"));
   const xlsbPath = path.join(dir, "table.xlsb");
   const xlsxPath = path.join(dir, "table.xlsx");
@@ -293,7 +293,7 @@ test("lossy XLSB saves stay dirty while a clean XLSX save clears dirty", async (
         );
         assert.equal(created.result.handle, "Table");
         assert.equal(created.result.properties.name, "Items");
-        // A custom table style is one of the parts the XLSB writer defers.
+        // The XLSB writer keeps a custom table style.
         const styled = textPayload(
           await callTool(client, "formulon_workbook_call", {
             sessionId,
@@ -310,8 +310,8 @@ test("lossy XLSB saves stay dirty while a clean XLSX save clears dirty", async (
           }),
         );
         assert.equal(xlsb.format, "xlsb");
-        assert.equal(xlsb.session.dirty, true);
-        assert.ok((xlsb.losses?.deferredFeatures ?? 0) > 0);
+        assert.equal(xlsb.losses, undefined);
+        assert.equal(xlsb.session.dirty, false);
 
         const reloadedXlsb = textPayload(
           await callTool(client, "formulon_inspect_workbook", {

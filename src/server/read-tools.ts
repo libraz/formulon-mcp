@@ -18,7 +18,7 @@ export function registerReadTools(server: McpServer): void {
     {
       title: "Get cell",
       description:
-        "Get one cell from either an open session or a workbook path. Pass exactly one of `sessionId` or `path`; A1 refs and sheet names work for both. Date/currency/percent cells carry a decoded `formatted` string alongside the raw value; formatted numbers also carry `text`, exactly what Excel displays (`textStatus` flags overflow or an invalid format). A formula cell whose value was not recalculated since its inputs changed (manual or automatic-except-tables calculation with `recalc` false) carries `stale: true`.",
+        "Get one cell from either an open session or a workbook path. Pass exactly one of `sessionId` or `path`; A1 refs and sheet names work for both. Date/currency/percent cells carry a decoded `formatted` string alongside the raw value; formatted numbers also carry `text`, exactly what Excel displays (`textStatus` flags overflow or an invalid format). A formula cell whose value was not recalculated since its inputs changed (manual or automatic-except-tables calculation with `recalc` false) carries `stale: true`; saving the session computes such formulas first, which clears the mark, unless the workbook's `calcOnSave` is off.",
       inputSchema: {
         sessionId: z.string().optional(),
         path: z.string().optional(),
@@ -99,7 +99,7 @@ export function registerReadTools(server: McpServer): void {
     {
       title: "Get range",
       description:
-        "Get a rectangular A1 range from an open workbook session. Output is sparse (blank cells omitted) and capped at maxCells. Cells with a date/currency/percent number format carry a decoded `formatted` string (for example an ISO date) alongside the raw value; formatted numbers also carry `text`, exactly what Excel displays. A formula cell whose value was not recalculated since its inputs changed (manual or automatic-except-tables calculation with `recalc` false) carries `stale: true`.",
+        "Get a rectangular A1 range from an open workbook session. Output is sparse (blank cells omitted) and capped at maxCells. Cells with a date/currency/percent number format carry a decoded `formatted` string (for example an ISO date) alongside the raw value; formatted numbers also carry `text`, exactly what Excel displays. A formula cell whose value was not recalculated since its inputs changed (manual or automatic-except-tables calculation with `recalc` false) carries `stale: true`; saving the session computes such formulas first, which clears the mark, unless the workbook's `calcOnSave` is off.",
       inputSchema: {
         sessionId: z.string(),
         range: z.string().describe("A1 range, for example Sheet1!A1:C10 or A1:C10."),
@@ -128,7 +128,7 @@ export function registerReadTools(server: McpServer): void {
     {
       title: "Save session workbook",
       description:
-        "Save an open workbook session as .xlsx or .xlsb. XLSB output leaves out a PivotTable built in the session, with its cache, and a note on the third or later sheet, each counted in `losses.deferredFeatures`; choose .xlsx when the workbook has either, and inspect `losses` before relying on the file. The session stays as it was: where the save writes formatted blanks in Excel's saved form (a row of default-format blanks as a row format, a blank equal to the format it inherits left out), the session still reports those blanks and no row format until the file is reopened; values, display text and effective styles are unaffected. The reopened file can also number its cell and differential formats differently, hold fewer conditional-format rules where Excel merges them on open, and list them in another order; what they resolve to is unchanged.",
+        "Save an open workbook session as .xlsx or .xlsb. XLSB output leaves out a PivotTable built in the session, with its cache, a note on the third or later sheet, and the custom views of a workbook opened from .xlsx, each counted in `losses.deferredFeatures`; choose .xlsx when the workbook has any of them, and inspect `losses` before relying on the file. Under manual calculation the save first computes formulas left pending, unless the workbook's `calcOnSave` is off, in which case they are written as pending. Otherwise the session stays as it was: where the save writes formatted blanks in Excel's saved form (a row of default-format blanks as a row format, a blank equal to the format it inherits left out), the session still reports those blanks and no row format until the file is reopened; values, display text and effective styles are unaffected. The reopened file can also number its cell and differential formats differently, hold fewer conditional-format rules where Excel merges them on open, and list them in another order; what they resolve to is unchanged.",
       inputSchema: {
         sessionId: z.string(),
         outputPath: z.string().optional(),

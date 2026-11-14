@@ -550,3 +550,29 @@ test("cell and range reads mark a formula left stale by manual calculation", asy
     closeSession("stale");
   }
 });
+
+test("saving a manual-calculation session computes stale formulas unless calcOnSave is off", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-stale-save-"));
+  await openSession(undefined, "stale-save");
+  try {
+    setSessionRange("stale-save", "A1", [[1, { f: "=A1*2" }]], undefined, true);
+    const { workbook } = getSession("stale-save");
+    workbook.setCalcMode(1);
+
+    workbook.setCalcOnSave(false);
+    setSessionRange("stale-save", "A1", [[5]], undefined, false);
+    await saveSession("stale-save", path.join(dir, "kept.xlsx"));
+    const kept = getSessionCellByA1("stale-save", "B1");
+    assert.equal(kept.value.value, 2);
+    assert.equal(kept.stale, true);
+
+    workbook.setCalcOnSave(true);
+    await saveSession("stale-save", path.join(dir, "computed.xlsx"));
+    const computed = getSessionCellByA1("stale-save", "B1");
+    assert.equal(computed.value.value, 10);
+    assert.equal(computed.stale, undefined);
+  } finally {
+    closeSession("stale-save");
+    await rm(dir, { recursive: true, force: true });
+  }
+});
