@@ -56,6 +56,7 @@ export {
   buildSessionDocument,
   sessionDefaultFont,
   sessionPrintSettings,
+  sessionTheme,
   styleSessionRange,
 } from "./session/presentation.js";
 export { previewSessionRange } from "./session/preview.js";

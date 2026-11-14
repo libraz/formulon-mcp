@@ -12,6 +12,7 @@ import {
   sessionDefaultFont,
   sessionDimension,
   sessionPrintSettings,
+  sessionTheme,
   styleSessionRange,
 } from "../sessions.js";
 import { STYLE_VOCABULARY } from "../styles.js";
@@ -330,6 +331,27 @@ export function registerPresentationTools(server: McpServer): void {
     ({ sessionId, font }) => {
       try {
         return ok(sessionDefaultFont(sessionId, font));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "formulon_theme_operation",
+    {
+      title: "Theme operation",
+      description:
+        "Apply a .thmx theme file to the workbook, replacing its theme colours and fonts, or save the workbook's theme as a .thmx file. On save, fonts linked to the theme take the new theme's face for the profile's script; column widths, row heights and charts are left as they are. Only the default theme of a .thmx is applied, and a file that is not a theme fails without changing the workbook. To undo an apply, save the theme first and apply that file again. Both operations report the resulting theme colours.",
+      inputSchema: {
+        sessionId: z.string(),
+        operation: z.enum(["apply", "save"]),
+        path: z.string().describe("The .thmx file to apply, or the file to write on save."),
+      },
+    },
+    ({ sessionId, operation, path }) => {
+      try {
+        return ok(sessionTheme(sessionId, operation, path));
       } catch (error) {
         return fail(error);
       }

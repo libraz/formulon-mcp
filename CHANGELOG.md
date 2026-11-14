@@ -79,6 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `formulon_get_cell` and `formulon_get_range` mark a formula cell
   `stale: true` when manual calculation left its value behind a change to its
   inputs.
+- `formulon_theme_operation` applies a `.thmx` theme file to a session's
+  workbook or saves the workbook's theme as one.
 
 ### Changed
 

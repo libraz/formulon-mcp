@@ -145,6 +145,9 @@ const UNEXPOSED_MEMBERS = new Set([
   "iterRows",
   "addPicture",
   "restoreDrawing",
+  // Theme files are bytes; formulon_theme_operation reads and writes them.
+  "applyTheme",
+  "saveTheme",
   // The engine module's image probe takes bytes and its log sink a callback.
   "getImageInfo",
   "setLogSink",

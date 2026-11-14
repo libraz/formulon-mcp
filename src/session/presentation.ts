@@ -1,6 +1,7 @@
+import { readFileSync, writeFileSync } from "node:fs";
 import { cellToA1, normalizeRange, parseCellRef, parseSelectionRef } from "../a1.js";
 import { buildDocument, type DocumentSpec } from "../document.js";
-import { findSheetIndex } from "../formulon.js";
+import { findSheetIndex, resolveUserPath, resultToJson } from "../formulon.js";
 import { type PrintSettingsInput, readPrintSettings, writePrintSettings } from "../print.js";
 import {
   applyDefaultFont,
@@ -89,6 +90,28 @@ export function sessionDefaultFont(id: string, font?: FontStyleInput) {
   touch(session, true);
   const applied = applyDefaultFont(session.workbook, font);
   return { session: publicInfo(session), font: applied };
+}
+
+/**
+ * Applies a `.thmx` theme file to the workbook, replacing its theme, or saves the workbook's
+ * theme as a `.thmx` file. A failed apply leaves the workbook unchanged.
+ */
+export function sessionTheme(id: string, operation: "apply" | "save", path: string) {
+  const session = getSession(id);
+  const resolved = resolveUserPath(path);
+  if (operation === "apply") {
+    const bytes = new Uint8Array(readFileSync(resolved));
+    touch(session, true);
+    session.workbook.applyTheme(bytes);
+  } else {
+    writeFileSync(resolved, session.workbook.saveTheme());
+  }
+  return {
+    session: publicInfo(session),
+    operation,
+    path: resolved,
+    colors: resultToJson(session.workbook.getThemeColors()),
+  };
 }
 
 /**
