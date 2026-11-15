@@ -136,7 +136,7 @@ test("path cell reads report invalid addresses as MCP errors", async () => {
       );
       assert.deepEqual(valid.value, { kind: "number", value: 7 });
       for (const [address, expectedError] of [
-        [{ sheet: 9, row: 0, col: 0 }, /sheet index out of bounds/],
+        [{ sheet: 9, row: 0, col: 0 }, /sheet index out of range/],
         [{ sheet: 0, row: 1_048_576, col: 0 }, /exceeds Excel sheet limits/],
       ]) {
         assert.match(

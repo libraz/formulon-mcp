@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { StatusCode, statusError } from "../formulon.js";
 import {
   addSessionDataTable,
   addSessionSparklines,
@@ -74,12 +75,12 @@ export function registerSheetObjectTools(server: McpServer): void {
         }
         if (operation === "insert") {
           if (anchor === undefined) {
-            throw new Error("anchor is required for insert");
+            throw statusError(StatusCode.InvalidArgument, "anchor is required for insert");
           }
           return ok(insertSessionShape(sessionId, sheet, { anchor, ...fields }));
         }
         if (objectId === undefined) {
-          throw new Error(`objectId is required for ${operation}`);
+          throw statusError(StatusCode.InvalidArgument, `objectId is required for ${operation}`);
         }
         if (operation === "remove") {
           return ok(removeSessionShape(sessionId, sheet, objectId));
@@ -159,12 +160,12 @@ export function registerSheetObjectTools(server: McpServer): void {
         }
         if (operation === "add") {
           if (sparklines === undefined) {
-            throw new Error("sparklines are required for add");
+            throw statusError(StatusCode.InvalidArgument, "sparklines are required for add");
           }
           return ok(addSessionSparklines(sessionId, sheet, sparklines, options));
         }
         if (index === undefined) {
-          throw new Error(`index is required for ${operation}`);
+          throw statusError(StatusCode.InvalidArgument, `index is required for ${operation}`);
         }
         if (operation === "remove") {
           return ok(removeSessionSparklines(sessionId, sheet, index));
@@ -210,12 +211,12 @@ export function registerSheetObjectTools(server: McpServer): void {
         }
         if (operation === "add") {
           if (range === undefined) {
-            throw new Error("range is required for add");
+            throw statusError(StatusCode.InvalidArgument, "range is required for add");
           }
           return ok(addSessionDataTable(sessionId, sheet, { range, rowInput, colInput }));
         }
         if (cell === undefined) {
-          throw new Error(`cell is required for ${operation}`);
+          throw statusError(StatusCode.InvalidArgument, `cell is required for ${operation}`);
         }
         return ok(
           operation === "get"

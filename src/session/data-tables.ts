@@ -1,6 +1,6 @@
 import type { DataTable, DataTableInputCell } from "@libraz/formulon";
 import { parseCellRef, parseRangeRef } from "../a1.js";
-import { findSheetIndex, okStatus, sheetAt } from "../formulon.js";
+import { findSheetIndex, okStatus, StatusCode, sheetAt, statusError } from "../formulon.js";
 import { assertInGrid, rangeA1, refA1 } from "./shared.js";
 import { getSession, publicInfo, touch } from "./state.js";
 
@@ -9,7 +9,10 @@ type Session = ReturnType<typeof getSession>;
 function sheetCell(ref: string, label: string) {
   const cell = parseCellRef(ref);
   if (cell.sheetName !== undefined) {
-    throw new Error(`${label} must be a cell on the selected sheet, without a sheet name`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `${label} must be a cell on the selected sheet, without a sheet name`,
+    );
   }
   assertInGrid(cell.row, cell.col);
   return { row: cell.row, col: cell.col };
@@ -62,11 +65,17 @@ export function addSessionDataTable(
   const sheetIndex = findSheetIndex(session.workbook, sheet);
   const range = parseRangeRef(input.range);
   if (range.sheetName !== undefined) {
-    throw new Error("range must be on the selected sheet, without a sheet name");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "range must be on the selected sheet, without a sheet name",
+    );
   }
   assertInGrid(range.end.row, range.end.col);
   if (input.rowInput === undefined && input.colInput === undefined) {
-    throw new Error("a data table needs a rowInput, a colInput, or both");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "a data table needs a rowInput, a colInput, or both",
+    );
   }
   const rowInput = input.rowInput === undefined ? null : sheetCell(input.rowInput, "rowInput");
   const colInput = input.colInput === undefined ? null : sheetCell(input.colInput, "colInput");
@@ -100,7 +109,7 @@ export function removeSessionDataTable(
   const target = sheetCell(cell, "cell");
   const removed = tableAt(session, sheetIndex, target);
   if (!removed) {
-    throw new Error(`no data table covers ${cell}`);
+    throw statusError(StatusCode.NotFound, `no data table covers ${cell}`);
   }
   touch(session, true);
   sheetAt(session.workbook, sheetIndex).removeDataTable(target.row, target.col);

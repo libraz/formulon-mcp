@@ -1,5 +1,5 @@
 import { cellToA1 } from "../a1.js";
-import { okStatus } from "../formulon.js";
+import { okStatus, StatusCode, statusError } from "../formulon.js";
 import { cellDisplayText, searchSheets, sheetName, taggedValue, textValue } from "./shared.js";
 import { getSession, publicInfo, touch } from "./state.js";
 
@@ -82,7 +82,7 @@ function replaceText(
 export function findSessionCells(id: string, query: string, options: SearchOptions) {
   const session = getSession(id);
   if (query.length === 0) {
-    throw new Error("query must not be empty");
+    throw statusError(StatusCode.InvalidArgument, "query must not be empty");
   }
   const matcher = makeMatcher(query, options);
   const results: CellSearchResult[] = [];
@@ -147,7 +147,7 @@ export function findSessionCells(id: string, query: string, options: SearchOptio
 export function replaceSessionCells(id: string, query: string, options: ReplaceOptions) {
   const session = getSession(id);
   if (query.length === 0) {
-    throw new Error("query must not be empty");
+    throw statusError(StatusCode.InvalidArgument, "query must not be empty");
   }
   const matcher = makeMatcher(query, options);
   const replacements: CellReplaceResult[] = [];

@@ -1,6 +1,13 @@
 import { HorizontalAlign, type ResolvedColor, VerticalAlign } from "@libraz/formulon";
 import { cellToA1, normalizeRange, parseRangeRef } from "../a1.js";
-import { ColorResolution, DisplayStatus, GeometryMode, type Workbook } from "../formulon.js";
+import {
+  ColorResolution,
+  DisplayStatus,
+  GeometryMode,
+  StatusCode,
+  statusError,
+  type Workbook,
+} from "../formulon.js";
 import type { ColumnMetrics } from "./geometry.js";
 import type { PreviewCell, PreviewCellMetadata, PreviewStyle } from "./types.js";
 
@@ -92,7 +99,8 @@ export function clipMerge(
 export function readMergesInRange(workbook: Workbook, sheet: number, rect: Rect): MergeRange[] {
   const merges = workbook.sheet(sheet).getMergesInRange(rect);
   if (merges.length > MAX_PREVIEW_MERGES) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `preview range has ${merges.length} merged cells (limit ${MAX_PREVIEW_MERGES})`,
     );
   }
@@ -129,7 +137,10 @@ export function chooseRect(
   }
   const pagination = workbook.sheet(sheet).getPagination();
   if (pagination.printArea.length > 1) {
-    throw new Error("preview range is required when the sheet has multiple print areas");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "preview range is required when the sheet has multiple print areas",
+    );
   }
   if (pagination.printArea.length === 1) {
     const area = pagination.printArea[0];
@@ -158,7 +169,10 @@ export function chooseRect(
     };
   }, undefined);
   if (!(used || merged)) {
-    throw new Error("cannot preview an empty sheet without an explicit range");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "cannot preview an empty sheet without an explicit range",
+    );
   }
   const rect = used
     ? merged
@@ -171,7 +185,10 @@ export function chooseRect(
       : used
     : merged;
   if (!rect) {
-    throw new Error("cannot preview an empty sheet without an explicit range");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "cannot preview an empty sheet without an explicit range",
+    );
   }
   return {
     rect,

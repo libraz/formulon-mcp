@@ -237,7 +237,7 @@ test("adds, updates and removes sparkline groups without resetting unstated sett
       assert.throws(() => addSessionSparklines("sparklines", 0, [], {}), /at least one/);
       assert.throws(
         () => updateSessionSparklines("sparklines", 0, 3, undefined, { high: true }),
-        /no sparkline group 3/,
+        /sparkline group index out of range/,
       );
       await saveSession("sparklines", file);
     });

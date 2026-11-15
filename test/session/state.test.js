@@ -445,7 +445,7 @@ test("reports a malformed environment profile as unknown rather than ignoring it
   await withProfileEnv("ja_JP", async () => {
     await assert.rejects(
       openSession(undefined, "profile-env-malformed"),
-      /^Error: unknown excel profile: ja_JP \(from FORMULON_MCP_PROFILE\)$/,
+      /^FormulonError \[InvalidArgument\]: unknown excel profile: ja_JP \(from FORMULON_MCP_PROFILE\)$/,
     );
     // An explicit well-formed profile still wins over the broken value.
     await openSession(undefined, "profile-env-malformed", "win-365-de_DE");

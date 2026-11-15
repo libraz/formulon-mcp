@@ -1,3 +1,4 @@
+import { StatusCode, statusError } from "../formulon.js";
 /** The engine's display width model for a sheet's Normal font. */
 export type ColumnMetrics = {
   fontName: string;
@@ -12,7 +13,10 @@ const POINTS_PER_MM = 72 / 25.4;
 
 function nonNegativeFinite(value: number, what: string): number {
   if (!Number.isFinite(value) || value < 0) {
-    throw new Error(`${what} must be a finite nonnegative number: ${value}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `${what} must be a finite nonnegative number: ${value}`,
+    );
   }
   return value;
 }

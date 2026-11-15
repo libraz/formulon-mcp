@@ -1063,7 +1063,7 @@ function resolveMcpProfile(requestedKey, envKey) {
 function assertProfileError(message, expected, source) {
   const head = source === "new" ? "unknown excel profile: " : "set excel profile ";
   const suffix = expected.fromEnv ? ` (from ${PROFILE_ENV})` : "";
-  assert.ok(message.startsWith(`${head}${expected.chosen}${suffix}`), message);
+  assert.ok(message.startsWith(`InvalidArgument: ${head}${expected.chosen}${suffix}`), message);
   assert.equal(message.includes(PROFILE_ENV), expected.fromEnv, message);
 }
 

@@ -7,8 +7,10 @@ import {
   rectA1,
   resultToJson,
   type Sheet,
+  StatusCode,
   type StatusJson,
   sheetAt,
+  statusError,
   type Workbook,
 } from "./formulon.js";
 import { rangeA1 } from "./session/shared.js";
@@ -355,7 +357,7 @@ export function writePrintSettings(wb: Workbook, sheetIndex: number, input: Prin
   }
 
   if (applied.length === 0) {
-    throw new Error("no print setting was given to set");
+    throw statusError(StatusCode.InvalidArgument, "no print setting was given to set");
   }
   return applied;
 }

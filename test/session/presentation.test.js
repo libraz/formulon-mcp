@@ -431,7 +431,7 @@ test("resetSize rejects missing or out-of-grid targets before touching the sessi
     );
     assert.throws(
       () => sessionDimension("reset-invalid", "row", "resetSize", { sheet: 5, row: 0 }),
-      /sheet index out of bounds/,
+      /sheet index out of range/,
     );
     assert.equal(dirty(), false);
   } finally {

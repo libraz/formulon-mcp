@@ -1,5 +1,5 @@
 import { colToIndex, normalizeRange, parseRangeRef, parseSelectionRef } from "../a1.js";
-import { findSheetIndex, type Workbook } from "../formulon.js";
+import { findSheetIndex, StatusCode, statusError, type Workbook } from "../formulon.js";
 import { mmToPoints, pixelsToPoints } from "../preview/geometry.js";
 import type { PrintSettingsInput } from "../print.js";
 import { columnPointsToChars } from "../session/geometry.js";
@@ -19,13 +19,19 @@ import {
 
 function finiteNonnegative(value: unknown, name: string): asserts value is number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    throw new Error(`${name} must be a finite nonnegative number: ${String(value)}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `${name} must be a finite nonnegative number: ${String(value)}`,
+    );
   }
 }
 
 function integerInGrid(value: unknown, name: string, max: number): asserts value is number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > max) {
-    throw new Error(`${name} must be an integer in 0..${max}: ${String(value)}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `${name} must be an integer in 0..${max}: ${String(value)}`,
+    );
   }
 }
 
@@ -37,12 +43,15 @@ function resolvedRange(
   wholeLines = false,
 ): ResolvedLayoutRange {
   if (typeof ref !== "string" || ref.trim().length === 0) {
-    throw new Error(`${label} must be a non-empty A1 range`);
+    throw statusError(StatusCode.InvalidArgument, `${label} must be a non-empty A1 range`);
   }
   const parsed = normalizeRange((wholeLines ? parseSelectionRef : parseRangeRef)(ref));
   const rangeSheet = findSheetIndex(workbook, parsed.sheetName ?? selectedSheet);
   if (rangeSheet !== selectedSheet) {
-    throw new Error(`${label} must refer to the selected sheet; got ${ref}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `${label} must refer to the selected sheet; got ${ref}`,
+    );
   }
   assertInGrid(parsed.start.row, parsed.start.col);
   assertInGrid(parsed.end.row, parsed.end.col);
@@ -76,7 +85,8 @@ function columnStoredSize(
             : undefined;
   const stored = points === undefined ? size : columnPointsToChars(workbook, selectedSheet, points);
   if (stored > MAX_LAYOUT_COLUMN_WIDTH_CHARS) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `column width exceeds the ${MAX_LAYOUT_COLUMN_WIDTH_CHARS}-character Excel limit: ${stored}`,
     );
   }
@@ -88,7 +98,10 @@ function rowStoredSize(size: number, unit: "pt" | "px" | "mm" | undefined): numb
   const stored =
     resolvedUnit === "pt" ? size : resolvedUnit === "px" ? pixelsToPoints(size) : mmToPoints(size);
   if (stored > MAX_LAYOUT_ROW_HEIGHT_PT) {
-    throw new Error(`row height exceeds the ${MAX_LAYOUT_ROW_HEIGHT_PT}pt Excel limit: ${stored}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `row height exceeds the ${MAX_LAYOUT_ROW_HEIGHT_PT}pt Excel limit: ${stored}`,
+    );
   }
   return stored;
 }
@@ -115,7 +128,8 @@ function validatePrintTitles(settings: PrintSettingsInput): void {
       Number(match[2]) < Number(match[1]) ||
       Number(match[2]) > MAX_ROW + 1
     ) {
-      throw new Error(
+      throw statusError(
+        StatusCode.InvalidArgument,
         `printTitles.repeatRows must be a whole-row span such as 1:2: ${titles.repeatRows}`,
       );
     }
@@ -123,14 +137,18 @@ function validatePrintTitles(settings: PrintSettingsInput): void {
   if (titles.repeatCols !== undefined && titles.repeatCols !== "") {
     const match = /^([A-Za-z]+):([A-Za-z]+)$/.exec(titles.repeatCols.trim());
     if (!match) {
-      throw new Error(
+      throw statusError(
+        StatusCode.InvalidArgument,
         `printTitles.repeatCols must be a whole-column span such as A:A: ${titles.repeatCols}`,
       );
     }
     const first = colToIndex(match[1]);
     const last = colToIndex(match[2]);
     if (first < 0 || last < first || last > MAX_COL) {
-      throw new Error(`printTitles.repeatCols exceeds Excel sheet limits: ${titles.repeatCols}`);
+      throw statusError(
+        StatusCode.InvalidArgument,
+        `printTitles.repeatCols exceeds Excel sheet limits: ${titles.repeatCols}`,
+      );
     }
   }
 }
@@ -172,26 +190,38 @@ export function preflightLayout(
   operations: readonly LayoutOperation[],
 ): PreparedLayoutOperation[] {
   if (operations.length === 0) {
-    throw new Error("operations must contain at least one operation");
+    throw statusError(StatusCode.InvalidArgument, "operations must contain at least one operation");
   }
   if (operations.length > MAX_LAYOUT_OPERATIONS) {
-    throw new Error(`operations exceeds the ${MAX_LAYOUT_OPERATIONS}-operation limit`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `operations exceeds the ${MAX_LAYOUT_OPERATIONS}-operation limit`,
+    );
   }
   let expandedRows = 0;
   let styledCells = 0;
   return operations.map((operation, index) => {
     if (!operation || typeof operation !== "object" || typeof operation.type !== "string") {
-      throw new Error(`operations[${index}] must have a recognized type`);
+      throw statusError(
+        StatusCode.InvalidArgument,
+        `operations[${index}] must have a recognized type`,
+      );
     }
     if (operation.type === "column") {
       if (operation.unit !== undefined && !["chars", "pt", "px", "mm"].includes(operation.unit)) {
-        throw new Error(`operations[${index}].unit must be chars, pt, px, or mm`);
+        throw statusError(
+          StatusCode.InvalidArgument,
+          `operations[${index}].unit must be chars, pt, px, or mm`,
+        );
       }
       integerInGrid(operation.first, `operations[${index}].first`, MAX_COL);
       const last = operation.last ?? operation.first;
       integerInGrid(last, `operations[${index}].last`, MAX_COL);
       if (last < operation.first) {
-        throw new Error(`operations[${index}] column span must be ordered`);
+        throw statusError(
+          StatusCode.InvalidArgument,
+          `operations[${index}] column span must be ordered`,
+        );
       }
       finiteNonnegative(operation.size, `operations[${index}].size`);
       const storedSize = columnStoredSize(workbook, selectedSheet, operation.size, operation.unit);
@@ -199,24 +229,36 @@ export function preflightLayout(
     }
     if (operation.type === "row") {
       if (operation.unit !== undefined && !["pt", "px", "mm"].includes(operation.unit)) {
-        throw new Error(`operations[${index}].unit must be pt, px, or mm`);
+        throw statusError(
+          StatusCode.InvalidArgument,
+          `operations[${index}].unit must be pt, px, or mm`,
+        );
       }
       integerInGrid(operation.first, `operations[${index}].first`, MAX_ROW);
       const last = operation.last ?? operation.first;
       integerInGrid(last, `operations[${index}].last`, MAX_ROW);
       if (last < operation.first) {
-        throw new Error(`operations[${index}] row span must be ordered`);
+        throw statusError(
+          StatusCode.InvalidArgument,
+          `operations[${index}] row span must be ordered`,
+        );
       }
       finiteNonnegative(operation.size, `operations[${index}].size`);
       expandedRows += last - operation.first + 1;
       if (expandedRows > MAX_EXPANDED_ROW_WRITES) {
-        throw new Error(`row operations exceed the ${MAX_EXPANDED_ROW_WRITES}-row write limit`);
+        throw statusError(
+          StatusCode.InvalidArgument,
+          `row operations exceed the ${MAX_EXPANDED_ROW_WRITES}-row write limit`,
+        );
       }
       return { ...operation, last, storedSize: rowStoredSize(operation.size, operation.unit) };
     }
     if (operation.type === "merge") {
       if (operation.operation !== "add" && operation.operation !== "remove") {
-        throw new Error(`operations[${index}].operation must be add or remove`);
+        throw statusError(
+          StatusCode.InvalidArgument,
+          `operations[${index}].operation must be add or remove`,
+        );
       }
       const resolved = resolvedRange(
         workbook,
@@ -230,7 +272,10 @@ export function preflightLayout(
       const style = styleSchema.parse(operation.style) as StyleInput;
       const base = operation.base ?? "existing";
       if (base !== "existing" && base !== "default") {
-        throw new Error(`operations[${index}].base must be existing or default`);
+        throw statusError(
+          StatusCode.InvalidArgument,
+          `operations[${index}].base must be existing or default`,
+        );
       }
       const resolved = resolvedRange(
         workbook,
@@ -241,7 +286,10 @@ export function preflightLayout(
       );
       styledCells += materializedStyleCells(resolved.rect, style, operation.range);
       if (styledCells > MAX_STYLED_CELLS) {
-        throw new Error(`style operations exceed the ${MAX_STYLED_CELLS}-cell limit`);
+        throw statusError(
+          StatusCode.InvalidArgument,
+          `style operations exceed the ${MAX_STYLED_CELLS}-cell limit`,
+        );
       }
       return { ...operation, style, resolved, base };
     }
@@ -249,6 +297,6 @@ export function preflightLayout(
       const settings = preparedPrintSettings(workbook, selectedSheet, operation.settings);
       return { ...operation, settings };
     }
-    throw new Error(`operations[${index}] has unknown type`);
+    throw statusError(StatusCode.InvalidArgument, `operations[${index}] has unknown type`);
   });
 }

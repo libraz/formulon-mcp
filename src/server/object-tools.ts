@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { formulonModule, jsonText } from "../formulon.js";
+import { formulonModule, jsonText, StatusCode, statusError } from "../formulon.js";
 import {
   getSessionCellPicture,
   getSessionImage,
@@ -68,19 +68,23 @@ export function registerObjectTools(server: McpServer): void {
         }
         if (operation === "removeAt") {
           if (index === undefined) {
-            throw new Error("index is required for removeAt");
+            throw statusError(StatusCode.InvalidArgument, "index is required for removeAt");
           }
           return labeledOk(sessionId, "Sheet.removeMerge", "write", (wb) => {
             const handle = wb.sheet(sheetIndex);
             const merges = handle.listMerges();
             if (index >= merges.length) {
-              throw new Error(`merge index out of range: ${index} (${merges.length} merges)`);
+              throw statusError(
+                StatusCode.IndexOutOfRange,
+                "merge index out of range",
+                `index=${index} count=${merges.length}`,
+              );
             }
             handle.removeMerge(merges[index]);
           });
         }
         if (!range) {
-          throw new Error("range is required for add/remove");
+          throw statusError(StatusCode.InvalidArgument, "range is required for add/remove");
         }
         if (operation === "add") {
           return labeledOk(sessionId, "Sheet.addMerge", "write", (wb) =>
@@ -124,7 +128,7 @@ export function registerObjectTools(server: McpServer): void {
           );
         }
         if (row === undefined || col === undefined) {
-          throw new Error("row and col are required");
+          throw statusError(StatusCode.InvalidArgument, "row and col are required");
         }
         if (operation === "get") {
           return labeledOk(sessionId, "Sheet.getComment", "read", (wb) =>
@@ -133,7 +137,7 @@ export function registerObjectTools(server: McpServer): void {
         }
         if (operation === "visibility") {
           if (visible === undefined) {
-            throw new Error("visible is required for visibility");
+            throw statusError(StatusCode.InvalidArgument, "visible is required for visibility");
           }
           return labeledOk(sessionId, "Sheet.setCommentVisible", "write", (wb) =>
             wb.sheet(sheetIndex).setCommentVisible(row, col, visible),
@@ -218,14 +222,14 @@ export function registerObjectTools(server: McpServer): void {
         }
         if (operation === "removeAt") {
           if (index === undefined) {
-            throw new Error("index is required for removeAt");
+            throw statusError(StatusCode.InvalidArgument, "index is required for removeAt");
           }
           return labeledOk(sessionId, "Sheet.removeHyperlinkAt", "write", (wb) =>
             wb.sheet(sheetIndex).removeHyperlinkAt(index),
           );
         }
         if (row === undefined || col === undefined) {
-          throw new Error("row and col are required");
+          throw statusError(StatusCode.InvalidArgument, "row and col are required");
         }
         const range = {
           firstRow: row,
@@ -281,14 +285,14 @@ export function registerObjectTools(server: McpServer): void {
         }
         if (operation === "removeAt") {
           if (index === undefined) {
-            throw new Error("index is required for removeAt");
+            throw statusError(StatusCode.InvalidArgument, "index is required for removeAt");
           }
           return labeledOk(sessionId, "Sheet.removeValidation", "write", (wb) =>
             wb.sheet(sheetIndex).removeValidation(index),
           );
         }
         if (!validation) {
-          throw new Error("validation is required for add");
+          throw statusError(StatusCode.InvalidArgument, "validation is required for add");
         }
         const input = validationInput(validation);
         return labeledOk(sessionId, "Sheet.addValidation", "write", (wb) =>
@@ -348,7 +352,7 @@ export function registerObjectTools(server: McpServer): void {
         }
         if (operation === "removeAt") {
           if (index === undefined) {
-            throw new Error("index is required for removeAt");
+            throw statusError(StatusCode.InvalidArgument, "index is required for removeAt");
           }
           return labeledOk(sessionId, "Sheet.removeCfRule", "write", (wb) =>
             wb.sheet(sheetIndex).removeCfRule(index),
@@ -361,7 +365,10 @@ export function registerObjectTools(server: McpServer): void {
             lastRow === undefined ||
             lastCol === undefined
           ) {
-            throw new Error("firstRow, firstCol, lastRow, and lastCol are required for evaluate");
+            throw statusError(
+              StatusCode.InvalidArgument,
+              "firstRow, firstCol, lastRow, and lastCol are required for evaluate",
+            );
           }
           const engine = await formulonModule();
           return labeledOk(sessionId, "Sheet.evaluateCfRange", "read", (wb) =>
@@ -378,7 +385,7 @@ export function registerObjectTools(server: McpServer): void {
           );
         }
         if (!rule) {
-          throw new Error("rule is required for add");
+          throw statusError(StatusCode.InvalidArgument, "rule is required for add");
         }
         const input = conditionalFormatInput(rule);
         return labeledOk(sessionId, "Sheet.addCfRule", "write", (wb) =>
@@ -472,12 +479,13 @@ export function registerObjectTools(server: McpServer): void {
           operation === "removeInCell"
         ) {
           if (anchor === undefined) {
-            throw new Error(`anchor is required for ${operation}`);
+            throw statusError(StatusCode.InvalidArgument, `anchor is required for ${operation}`);
           }
           const { description, ...rest } = placement;
           const stray = Object.entries(rest).filter(([, value]) => value !== undefined);
           if (stray.length > 0 || objectId !== undefined || index !== undefined) {
-            throw new Error(
+            throw statusError(
+              StatusCode.InvalidArgument,
               `${operation} takes anchor, path, description and outputPath only; a picture in a cell sizes with the cell`,
             );
           }
@@ -488,7 +496,7 @@ export function registerObjectTools(server: McpServer): void {
             return ok(removeSessionCellPicture(sessionId, sheet, anchor));
           }
           if (path === undefined) {
-            throw new Error("path is required for insertInCell");
+            throw statusError(StatusCode.InvalidArgument, "path is required for insertInCell");
           }
           return ok(
             await insertSessionCellPicture(sessionId, sheet, {
@@ -500,12 +508,15 @@ export function registerObjectTools(server: McpServer): void {
         }
         if (operation === "insert") {
           if (path === undefined || anchor === undefined) {
-            throw new Error("path and anchor are required for insert");
+            throw statusError(
+              StatusCode.InvalidArgument,
+              "path and anchor are required for insert",
+            );
           }
           return ok(await insertSessionImage(sessionId, sheet, { path, anchor, ...placement }));
         }
         if (objectId === undefined) {
-          throw new Error(`objectId is required for ${operation}`);
+          throw statusError(StatusCode.InvalidArgument, `objectId is required for ${operation}`);
         }
         if (operation === "remove") {
           return ok(removeSessionImage(sessionId, sheet, objectId));
@@ -513,13 +524,16 @@ export function registerObjectTools(server: McpServer): void {
         if (operation === "move") {
           const { name, description, ...move } = placement;
           if (name !== undefined || description !== undefined) {
-            throw new Error("name and description apply to insert only; move keeps them");
+            throw statusError(
+              StatusCode.InvalidArgument,
+              "name and description apply to insert only; move keeps them",
+            );
           }
           return ok(moveSessionImage(sessionId, sheet, objectId, { anchor, ...move }));
         }
         if (operation === "reorder") {
           if (index === undefined) {
-            throw new Error("index is required for reorder");
+            throw statusError(StatusCode.InvalidArgument, "index is required for reorder");
           }
           return ok(reorderSessionImage(sessionId, sheet, objectId, index));
         }

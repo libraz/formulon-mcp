@@ -8,7 +8,7 @@ import {
   ValueKind,
 } from "@libraz/formulon";
 import { normalizeRange, parseCellRef, parseRangeRef } from "../a1.js";
-import { findSheetIndex, sheetAt } from "../formulon.js";
+import { findSheetIndex, StatusCode, sheetAt, statusError } from "../formulon.js";
 import { assertInGrid, rangeA1, rectCells, sheetName } from "./shared.js";
 import type { WorkbookSession } from "./state.js";
 
@@ -104,7 +104,7 @@ const AGGREGATION_LABELS: Record<PivotAggregationName, string> = {
 export function requiredText(value: string | undefined, name: string): string {
   const trimmed = value?.trim() ?? "";
   if (!trimmed) {
-    throw new Error(`${name} is required`);
+    throw statusError(StatusCode.InvalidArgument, `${name} is required`);
   }
   return trimmed;
 }
@@ -113,7 +113,7 @@ export function sourceReference(options: CreatePivotOptions): string {
   const sourceRange = options.sourceRange?.trim();
   const source = options.source?.trim();
   if (sourceRange && source) {
-    throw new Error("provide only one of sourceRange or source");
+    throw statusError(StatusCode.InvalidArgument, "provide only one of sourceRange or source");
   }
   return requiredText(sourceRange ?? source, "sourceRange");
 }
@@ -122,7 +122,7 @@ export function targetReference(options: CreatePivotOptions): string {
   const target = options.target?.trim();
   const targetAnchor = options.targetAnchor?.trim();
   if (target && targetAnchor) {
-    throw new Error("provide only one of target or targetAnchor");
+    throw statusError(StatusCode.InvalidArgument, "provide only one of target or targetAnchor");
   }
   return requiredText(target ?? targetAnchor, "target");
 }
@@ -166,14 +166,20 @@ export function validateRangeSize(range: PivotRange, sourceLimit: number): void 
   const rows = range.lastRow - range.firstRow + 1;
   const cols = range.lastCol - range.firstCol + 1;
   if (rows < 2) {
-    throw new Error("pivot source must include a header row and at least one data row");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "pivot source must include a header row and at least one data row",
+    );
   }
   if (cols < 1) {
-    throw new Error("pivot source must include at least one column");
+    throw statusError(StatusCode.InvalidArgument, "pivot source must include at least one column");
   }
   const cells = rows * cols;
   if (cells > sourceLimit) {
-    throw new Error(`pivot source has ${cells} cells; sourceLimit is ${sourceLimit}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `pivot source has ${cells} cells; sourceLimit is ${sourceLimit}`,
+    );
   }
 }
 
@@ -187,14 +193,18 @@ export function sourceValue(value: NativeValue, ref: string): SourceValue {
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
-      throw new Error(`pivot source cell ${ref} is not a finite number`);
+      throw statusError(
+        StatusCode.InvalidArgument,
+        `pivot source cell ${ref} is not a finite number`,
+      );
     }
     return value;
   }
   if (value instanceof ExcelError) {
     return { kind: ValueKind.Error, errorCode: value.code };
   }
-  throw new Error(
+  throw statusError(
+    StatusCode.InvalidArgument,
     `pivot source cell ${ref} has an unsupported value; resolve arrays, references, and lambdas before creating the pivot`,
   );
 }
@@ -225,7 +235,10 @@ export function readSource(
     records.push(record);
   }
   if (records.length === 0) {
-    throw new Error("pivot source must include at least one data row");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "pivot source must include at least one data row",
+    );
   }
   return { range, headers, records };
 }
@@ -236,7 +249,10 @@ export function normalizeFieldList(fields: string[] | undefined, axis: string): 
     const name = requiredText(field, `${axis} field`);
     const key = name.toLocaleLowerCase();
     if (seen.has(key)) {
-      throw new Error(`${axis} fields must not repeat ${JSON.stringify(name)}`);
+      throw statusError(
+        StatusCode.InvalidArgument,
+        `${axis} fields must not repeat ${JSON.stringify(name)}`,
+      );
     }
     seen.add(key);
     return name;
@@ -247,7 +263,8 @@ export function resolveFieldIndex(headers: string[], name: string): number {
   const lowered = name.toLocaleLowerCase();
   const index = headers.findIndex((header) => header.toLocaleLowerCase() === lowered);
   if (index < 0) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `pivot field ${JSON.stringify(name)} is not present in source headers: ${headers.join(", ")}`,
     );
   }
@@ -267,7 +284,8 @@ export function assignAxes(
       const index = resolveFieldIndex(headers, field);
       const previous = assignments.get(index);
       if (previous !== undefined) {
-        throw new Error(
+        throw statusError(
+          StatusCode.InvalidArgument,
           `pivot field ${JSON.stringify(headers[index])} is assigned to more than one axis (${label} and ${axisName(previous)}); assign each source header exactly once`,
         );
       }
@@ -282,7 +300,8 @@ export function assignAxes(
     const index = resolveFieldIndex(headers, requiredText(value.field, "value field"));
     const previous = assignments.get(index);
     if (previous !== undefined && previous !== PivotAxis.Value) {
-      throw new Error(
+      throw statusError(
+        StatusCode.InvalidArgument,
         `pivot field ${JSON.stringify(headers[index])} is assigned to ${axisName(previous)} and values; assign each source header exactly once`,
       );
     }
@@ -291,7 +310,8 @@ export function assignAxes(
 
   const unused = headers.filter((_, index) => !assignments.has(index));
   if (unused.length > 0) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `pivot source headers are unused: ${unused.join(", ")}; assign every header to rows, columns, pages, or values`,
     );
   }
@@ -313,23 +333,35 @@ export function axisName(axis: PivotAxis): string {
 
 export function normalizedValues(values: PivotValueOption[] | undefined) {
   if (!values || values.length === 0) {
-    throw new Error("values must contain at least one pivot value field");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "values must contain at least one pivot value field",
+    );
   }
   const names = new Set<string>();
   return values.map((value, index) => {
     const field = requiredText(value.field, `values[${index}].field`);
     const aggregation = value.aggregation ?? "sum";
     if (!(aggregation in AGGREGATIONS)) {
-      throw new Error(`values[${index}].aggregation is unsupported: ${aggregation}`);
+      throw statusError(
+        StatusCode.InvalidArgument,
+        `values[${index}].aggregation is unsupported: ${aggregation}`,
+      );
     }
     const format = value.numberFormat ?? value.format;
     if (format !== undefined && !format.trim()) {
-      throw new Error(`values[${index}].numberFormat must be a non-empty format code`);
+      throw statusError(
+        StatusCode.InvalidArgument,
+        `values[${index}].numberFormat must be a non-empty format code`,
+      );
     }
     const name = (value.name?.trim() || `${AGGREGATION_LABELS[aggregation]} of ${field}`).trim();
     const key = name.toLocaleLowerCase();
     if (names.has(key)) {
-      throw new Error(`pivot value names must be unique; duplicate ${JSON.stringify(name)}`);
+      throw statusError(
+        StatusCode.InvalidArgument,
+        `pivot value names must be unique; duplicate ${JSON.stringify(name)}`,
+      );
     }
     names.add(key);
     return { field, aggregation, format, name };
@@ -345,7 +377,7 @@ export function layoutKind(layout: CreatePivotOptions["layout"]): PivotReportLay
     case "outline":
       return PivotReportLayout.Outline;
     default:
-      throw new Error(`unsupported pivot layout: ${layout}`);
+      throw statusError(StatusCode.InvalidArgument, `unsupported pivot layout: ${layout}`);
   }
 }
 
@@ -371,12 +403,13 @@ function sourceHeaders(session: WorkbookSession, range: PivotRange): string[] {
     const value = sheet.getValue(range.firstRow, col);
     const ref = cellRef(range, range.firstRow, col);
     if (typeof value !== "string" || !value.trim()) {
-      throw new Error(`pivot header ${ref} must be non-empty text`);
+      throw statusError(StatusCode.InvalidArgument, `pivot header ${ref} must be non-empty text`);
     }
     const header = value.trim();
     const key = header.toLocaleLowerCase();
     if (seen.has(key)) {
-      throw new Error(
+      throw statusError(
+        StatusCode.InvalidArgument,
         `pivot headers must be unique; duplicate ${JSON.stringify(header)} at ${ref}`,
       );
     }

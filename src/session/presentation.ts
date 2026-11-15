@@ -1,7 +1,13 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { cellToA1, normalizeRange, parseCellRef, parseSelectionRef } from "../a1.js";
 import { buildDocument, type DocumentSpec } from "../document.js";
-import { findSheetIndex, resolveUserPath, resultToJson } from "../formulon.js";
+import {
+  findSheetIndex,
+  resolveUserPath,
+  resultToJson,
+  StatusCode,
+  statusError,
+} from "../formulon.js";
 import { type PrintSettingsInput, readPrintSettings, writePrintSettings } from "../print.js";
 import {
   applyDefaultFont,
@@ -58,7 +64,7 @@ export function sessionPrintSettings(
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
   if (input && Object.values(input).every((value) => value === undefined)) {
-    throw new Error("no print setting was given to set");
+    throw statusError(StatusCode.InvalidArgument, "no print setting was given to set");
   }
   if (input) {
     touch(session, true);
@@ -140,7 +146,8 @@ export function styleSessionRange(
   // is refused; whole rows and columns are styled as rows and columns instead.
   const cells = materializedStyleCells(rect, style, ref);
   if (cells > MAX_RANGE_CELLS) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `range ${ref} spans ${cells} cells (limit ${MAX_RANGE_CELLS}); style a smaller range or whole rows/columns`,
     );
   }

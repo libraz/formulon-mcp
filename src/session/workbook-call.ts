@@ -1,4 +1,10 @@
-import { loadedFormulon, resultToJson, type Workbook } from "../formulon.js";
+import {
+  loadedFormulon,
+  resultToJson,
+  StatusCode,
+  statusError,
+  type Workbook,
+} from "../formulon.js";
 import { getWorkbookApiCatalog, MODULE_KIND } from "../workbook-api.js";
 import { getSession, publicInfo, touch } from "./state.js";
 
@@ -45,7 +51,8 @@ export function callWorkbookMethod(
   const kindName = target?.kind ?? "Workbook";
   const kind = catalog.kinds.find((entry) => entry.kind === kindName);
   if (!kind) {
-    throw new Error(
+    throw statusError(
+      StatusCode.NotFound,
       `unknown target kind: ${kindName}; one of ${catalog.kinds.map((entry) => entry.kind).join(", ")}`,
     );
   }
@@ -53,7 +60,10 @@ export function callWorkbookMethod(
     (candidate) => candidate.target.kind === kind.kind && candidate.name === method,
   );
   if (!entry) {
-    throw new Error(`${kind.kind}.${method} is not a callable method (see formulon_workbook_api)`);
+    throw statusError(
+      StatusCode.NotFound,
+      `${kind.kind}.${method} is not a callable method (see formulon_workbook_api)`,
+    );
   }
   const session = getSession(id);
   let receiver: unknown = kind.kind === MODULE_KIND ? loadedFormulon() : session.workbook;
@@ -65,7 +75,7 @@ export function callWorkbookMethod(
     }
     const key = target?.[hop.key];
     if (key === undefined) {
-      throw new Error(`target ${kind.kind} needs the key ${hop.key}`);
+      throw statusError(StatusCode.InvalidArgument, `target ${kind.kind} needs the key ${hop.key}`);
     }
     receiver = (current[hop.method] as (key: unknown) => unknown).call(current, key);
   }

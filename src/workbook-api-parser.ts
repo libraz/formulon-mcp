@@ -1,3 +1,4 @@
+import { StatusCode, statusError } from "./formulon.js";
 /** How `formulon_workbook_call` reaches a handle: its kind and the keys its accessors take, in order. */
 export interface WorkbookApiTarget {
   kind: string;
@@ -106,7 +107,10 @@ function matchingDelimiter(tokens: Token[], openIndex: number): number {
   const opening = tokens[openIndex]?.value;
   const closing = opening === "{" ? "}" : opening === "(" ? ")" : opening === "[" ? "]" : "";
   if (!closing) {
-    throw new Error(`internal parser error: ${opening} is not an opening delimiter`);
+    throw statusError(
+      StatusCode.InternalError,
+      `internal parser error: ${opening} is not an opening delimiter`,
+    );
   }
   let depth = 0;
   for (let index = openIndex; index < tokens.length; index += 1) {
@@ -119,7 +123,10 @@ function matchingDelimiter(tokens: Token[], openIndex: number): number {
       }
     }
   }
-  throw new Error(`unbalanced ${opening} delimiter in Formulon declaration file`);
+  throw statusError(
+    StatusCode.InternalError,
+    `unbalanced ${opening} delimiter in Formulon declaration file`,
+  );
 }
 
 function normalizeDoc(raw: string): string {
@@ -184,7 +191,8 @@ function findTopLevelDeclarationEnd(tokens: Token[], startIndex: number): number
       return tokens[index].end;
     }
   }
-  throw new Error(
+  throw statusError(
+    StatusCode.InternalError,
     `unterminated exported type declaration near offset ${tokens[startIndex]?.start}`,
   );
 }
@@ -248,7 +256,10 @@ export function parseExportedDeclarations(
     }
     const nameToken = tokens[kindIndex + 1];
     if (!(nameToken && /^[A-Za-z_$]/.test(nameToken.value))) {
-      throw new Error(`exported ${kind} declaration has no name near offset ${token.start}`);
+      throw statusError(
+        StatusCode.InternalError,
+        `exported ${kind} declaration has no name near offset ${token.start}`,
+      );
     }
 
     let bodyStart = kindIndex + 2;
@@ -258,7 +269,10 @@ export function parseExportedDeclarations(
         bodyStart += 1;
       }
       if (!tokens[bodyStart]) {
-        throw new Error(`exported type ${nameToken.value} has no equals sign`);
+        throw statusError(
+          StatusCode.InternalError,
+          `exported type ${nameToken.value} has no equals sign`,
+        );
       }
       end = findTopLevelDeclarationEnd(tokens, bodyStart + 1);
     } else {
@@ -266,7 +280,10 @@ export function parseExportedDeclarations(
         bodyStart += 1;
       }
       if (!tokens[bodyStart]) {
-        throw new Error(`exported ${kind} ${nameToken.value} has no body`);
+        throw statusError(
+          StatusCode.InternalError,
+          `exported ${kind} ${nameToken.value} has no body`,
+        );
       }
       const close = matchingDelimiter(tokens, bodyStart);
       end = tokens[close].end;
@@ -318,7 +335,7 @@ export function parseInterface(
     open += 1;
   }
   if (!tokens[open]) {
-    throw new Error(`exported interface ${name} has no body`);
+    throw statusError(StatusCode.InternalError, `exported interface ${name} has no body`);
   }
   const close = matchingDelimiter(tokens, open);
   const declarationNames = new Set(declarations.keys());

@@ -7,6 +7,8 @@ import {
   type ProfileId,
   resultToJson,
   SheetVisibility,
+  StatusCode,
+  statusError,
   WORKBOOK_SCOPE,
   type Workbook,
 } from "../formulon.js";
@@ -102,7 +104,10 @@ export function setSessionDefinedName(
   const refersTo = trimmed.startsWith("=") ? trimmed.slice(1) : trimmed;
   const hasAttrs = attrs.comment !== undefined || attrs.hidden !== undefined;
   if (refersTo === "" && hasAttrs) {
-    throw new Error("comment and hidden cannot be set while removing a defined name");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "comment and hidden cannot be set while removing a defined name",
+    );
   }
   const localSheetId =
     sheet === undefined ? WORKBOOK_SCOPE : findSheetIndex(session.workbook, sheet);
@@ -204,13 +209,15 @@ export function setSessionSheetView(
     (options.freezeRows !== undefined || options.freezeCols !== undefined) &&
     (options.splitX !== undefined || options.splitY !== undefined)
   ) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       "a view is either frozen or split; pass freezeRows/freezeCols or splitX/splitY",
     );
   }
   const topLeft = options.topLeft === undefined ? undefined : parseCellRef(options.topLeft);
   if (topLeft?.sheetName !== undefined) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `topLeft is a cell on the selected sheet, without a sheet name: ${options.topLeft}`,
     );
   }
@@ -312,7 +319,10 @@ export function traceSession(
   const sheetIndex = findSheetIndex(session.workbook, sheet);
   assertInGrid(row, col);
   if (!Number.isInteger(depth) || depth < 1 || depth > 32) {
-    throw new Error(`trace depth must be an integer in 1..32: ${depth}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `trace depth must be an integer in 1..32: ${depth}`,
+    );
   }
   const cellRef = (s: number, r: number, c: number) => ({
     sheet: s,
@@ -359,7 +369,7 @@ type DisplayGeometry = {
 function dimensionSize(value: number | undefined, name: string): number {
   const size = requiredNumber(value, name);
   if (size < 0) {
-    throw new Error(`${name} must be nonnegative`);
+    throw statusError(StatusCode.InvalidArgument, `${name} must be nonnegative`);
   }
   return size;
 }
@@ -374,11 +384,12 @@ function displayGeometry(points: number): DisplayGeometry {
 
 function columnStoredSize(workbook: Workbook, sheet: number, size: number, unit: DimensionUnit) {
   if (!["chars", "pt", "px", "mm"].includes(unit)) {
-    throw new Error("column size unit must be chars, pt, px, or mm");
+    throw statusError(StatusCode.InvalidArgument, "column size unit must be chars, pt, px, or mm");
   }
   if (unit === "chars") {
     if (size > MAX_LAYOUT_COLUMN_WIDTH_CHARS) {
-      throw new Error(
+      throw statusError(
+        StatusCode.InvalidArgument,
         `column width exceeds the ${MAX_LAYOUT_COLUMN_WIDTH_CHARS}-character Excel limit: ${size}`,
       );
     }
@@ -387,7 +398,8 @@ function columnStoredSize(workbook: Workbook, sheet: number, size: number, unit:
   const points = unit === "pt" ? size : unit === "px" ? pixelsToPoints(size) : mmToPoints(size);
   const stored = columnPointsToChars(workbook, sheet, points);
   if (stored > MAX_LAYOUT_COLUMN_WIDTH_CHARS) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `column width exceeds the ${MAX_LAYOUT_COLUMN_WIDTH_CHARS}-character Excel limit: ${stored}`,
     );
   }
@@ -457,7 +469,7 @@ export function sessionDimension(
     assertInGrid(0, first);
     assertInGrid(0, last);
     if (last < first) {
-      throw new Error(`last (${last}) must be >= first (${first})`);
+      throw statusError(StatusCode.InvalidArgument, `last (${last}) must be >= first (${first})`);
     }
     if (operation === "size") {
       const size = dimensionSize(params.size, "size");
@@ -499,12 +511,16 @@ export function sessionDimension(
       const size = dimensionSize(params.size, "size");
       const unit = params.unit ?? "pt";
       if (!["pt", "px", "mm"].includes(unit)) {
-        throw new Error("row size unit must be pt, px, or mm; chars is unsupported");
+        throw statusError(
+          StatusCode.InvalidArgument,
+          "row size unit must be pt, px, or mm; chars is unsupported",
+        );
       }
       const storedSize =
         unit === "pt" ? size : unit === "px" ? pixelsToPoints(size) : mmToPoints(size);
       if (storedSize > MAX_LAYOUT_ROW_HEIGHT_PT) {
-        throw new Error(
+        throw statusError(
+          StatusCode.InvalidArgument,
           `row height exceeds the ${MAX_LAYOUT_ROW_HEIGHT_PT}pt Excel limit: ${storedSize}`,
         );
       }

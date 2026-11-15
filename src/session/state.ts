@@ -5,7 +5,9 @@ import {
   type LossCounters,
   type ProfileId,
   readLosses,
+  StatusCode,
   saveWorkbook,
+  statusError,
   type Workbook,
   workbookSummary,
 } from "../formulon.js";
@@ -61,7 +63,7 @@ export async function openSession(
   profile?: ProfileId,
 ): Promise<SessionInfo> {
   if (sessions.has(id)) {
-    throw new Error(`session already exists: ${id}`);
+    throw statusError(StatusCode.AlreadyExists, "session already exists", `session=${id}`);
   }
   const workbook = await createOrLoadWorkbook(inputPath, profile);
   let registered = false;
@@ -70,7 +72,7 @@ export async function openSession(
     // work. Re-check after the await so a duplicate id cannot overwrite the
     // existing handle, and always release this handle on any setup failure.
     if (sessions.has(id)) {
-      throw new Error(`session already exists: ${id}`);
+      throw statusError(StatusCode.AlreadyExists, "session already exists", `session=${id}`);
     }
     // Excel caches formula results, but the engine leaves formula cells blank
     // until recalculated. Recalc once on open so the first read of a formula
@@ -108,7 +110,7 @@ export function listSessions(): SessionInfo[] {
 export function getSession(id: string): WorkbookSession {
   const session = sessions.get(id);
   if (!session) {
-    throw new Error(`session not found: ${id}`);
+    throw statusError(StatusCode.NotFound, "session not found", `session=${id}`);
   }
   return session;
 }
@@ -135,7 +137,10 @@ export async function saveSession(id: string, outputPath?: string) {
   const session = getSession(id);
   const destination = outputPath ?? session.outputPath ?? session.sourcePath;
   if (!destination) {
-    throw new Error("outputPath is required for a new workbook session");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "outputPath is required for a new workbook session",
+    );
   }
   const saveRevision = revisionOf(session);
   const saved = await saveWorkbook(session.workbook, destination);

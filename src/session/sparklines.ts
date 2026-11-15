@@ -6,7 +6,15 @@ import type {
   SparklineGroupPatch,
 } from "@libraz/formulon";
 import { cellToA1, parseCellRef, parseRangeRef } from "../a1.js";
-import { findSheetIndex, rectA1, SparklineAxisType, SparklineType, sheetAt } from "../formulon.js";
+import {
+  findSheetIndex,
+  rectA1,
+  SparklineAxisType,
+  SparklineType,
+  StatusCode,
+  sheetAt,
+  statusError,
+} from "../formulon.js";
 import { formatColor, parseColor } from "../styles/input.js";
 import { assertInGrid, sheetName } from "./shared.js";
 import { getSession, publicInfo, touch } from "./state.js";
@@ -72,7 +80,10 @@ function sparklineItem(item: SparklineItemInput) {
   parseRangeRef(source);
   const location = parseCellRef(item.location);
   if (location.sheetName !== undefined) {
-    throw new Error(`sparkline location must be a cell on the selected sheet: ${item.location}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `sparkline location must be a cell on the selected sheet: ${item.location}`,
+    );
   }
   assertInGrid(location.row, location.col);
   return { source, location: cellToA1(location.row, location.col) };
@@ -106,7 +117,7 @@ function axisSpec(
   }
   if (typeof bound === "number") {
     if (!Number.isFinite(bound)) {
-      throw new Error(`${label} must be finite: ${bound}`);
+      throw statusError(StatusCode.InvalidArgument, `${label} must be finite: ${bound}`);
     }
     return { type: SparklineAxisType.Custom, manual: bound };
   }
@@ -199,7 +210,11 @@ function groups(session: Session, sheetIndex: number) {
 function groupAt(session: Session, sheetIndex: number, index: number) {
   const group = groups(session, sheetIndex)[index];
   if (!group) {
-    throw new Error(`no sparkline group ${index} on sheet ${sheetIndex}`);
+    throw statusError(
+      StatusCode.IndexOutOfRange,
+      "sparkline group index out of range",
+      `index=${index} sheet_index=${sheetIndex}`,
+    );
   }
   return describeGroup(session, group, index);
 }
@@ -231,7 +246,7 @@ export function addSessionSparklines(
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
   if (sparklines.length === 0) {
-    throw new Error("a sparkline group needs at least one sparkline");
+    throw statusError(StatusCode.InvalidArgument, "a sparkline group needs at least one sparkline");
   }
   const spec = {
     ...groupSpec(options),
@@ -258,15 +273,22 @@ export function updateSessionSparklines(
   const session = getSession(id);
   const sheetIndex = findSheetIndex(session.workbook, sheet);
   if (!groups(session, sheetIndex)[index]) {
-    throw new Error(`no sparkline group ${index} on sheet ${sheetIndex}`);
+    throw statusError(
+      StatusCode.IndexOutOfRange,
+      "sparkline group index out of range",
+      `index=${index} sheet_index=${sheetIndex}`,
+    );
   }
   const spec = groupSpec(options);
   const items = sparklines?.map(sparklineItem);
   if (items?.length === 0) {
-    throw new Error("a sparkline group needs at least one sparkline");
+    throw statusError(StatusCode.InvalidArgument, "a sparkline group needs at least one sparkline");
   }
   if (Object.keys(spec).length === 0 && items === undefined) {
-    throw new Error("sparkline update requires at least one setting or sparklines");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "sparkline update requires at least one setting or sparklines",
+    );
   }
   touch(session, true);
   sheetAt(session.workbook, sheetIndex).updateSparklineGroup(index, {

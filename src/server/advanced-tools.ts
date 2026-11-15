@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { formulonModule, type ProfileId } from "../formulon.js";
+import { formulonModule, type ProfileId, StatusCode, statusError } from "../formulon.js";
 import { callWorkbookMethod, sessionProfileId } from "../sessions.js";
 import { fail, labeledOk, ok, profileSchema } from "./shared.js";
 
@@ -75,7 +75,7 @@ export function registerAdvancedTools(server: McpServer): void {
         }
         if (operation === "localizeFormula" || operation === "canonicalizeFormula") {
           if (formula === undefined) {
-            throw new Error(`formula is required for ${operation}`);
+            throw statusError(StatusCode.InvalidArgument, `formula is required for ${operation}`);
           }
           const notation = {
             ...(r1c1 !== undefined ? { r1c1 } : {}),
@@ -87,7 +87,7 @@ export function registerAdvancedTools(server: McpServer): void {
           );
         }
         if (!name) {
-          throw new Error("name is required");
+          throw statusError(StatusCode.InvalidArgument, "name is required");
         }
         if (operation === "metadata") {
           return labeledOk(sessionId, "Formulon.getFunctionMetadata", "read", () =>

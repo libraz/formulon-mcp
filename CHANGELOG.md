@@ -145,6 +145,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Errors the server itself raises (an index out of range, a missing or invalid
+  argument, an unknown session or sheet) now use the same
+  `<StatusName>: <message> (<context>)` text and second JSON content item
+  (`{code, message, context}`) as engine errors. Removing a merge that does not
+  exist used to read `merge index out of range: 9 (1 merges)`; it now reads
+  `IndexOutOfRange: merge index out of range (index=9 count=1)`.
+
 - `LEN`, `MID`, `FIND`, `SEARCH` and `REPLACE` count a character outside the
   Basic Multilingual Plane (an emoji, a rare CJK ideograph) by the workbook's
   Compatibility Version, as the engine now does: a new workbook and a file

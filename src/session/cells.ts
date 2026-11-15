@@ -3,8 +3,11 @@ import {
   applyMutation,
   type CellMutation,
   errorName,
+  FormulonError,
   findSheetIndex,
   okStatus,
+  StatusCode,
+  statusError,
   valueToJson,
 } from "../formulon.js";
 import {
@@ -44,7 +47,7 @@ function resolveCell(session: WorkbookSession, mutation: FlexibleCellMutation) {
     };
   }
   if (mutation.row === undefined || mutation.col === undefined) {
-    throw new Error("mutation requires either a1 or row/col");
+    throw statusError(StatusCode.InvalidArgument, "mutation requires either a1 or row/col");
   }
   assertInGrid(mutation.row, mutation.col);
   return {
@@ -63,7 +66,7 @@ export function applySessionMutations(
   const session = getSession(id);
   for (const [idx, mutation] of mutations.entries()) {
     if (mutation.type === "number" && !Number.isFinite(mutation.value)) {
-      throw new Error(`mutation ${idx}: number value must be finite`);
+      throw statusError(StatusCode.InvalidArgument, `mutation ${idx}: number value must be finite`);
     }
   }
   // Resolve (and bounds-check) every address up front so a bad ref or sheet
@@ -72,7 +75,11 @@ export function applySessionMutations(
     try {
       return resolveCell(session, mutation);
     } catch (error) {
-      throw new Error(`mutation ${idx}: ${error instanceof Error ? error.message : String(error)}`);
+      const message = `mutation ${idx}: ${error instanceof Error ? error.message : String(error)}`;
+      if (error instanceof FormulonError) {
+        throw statusError(error.code, message, error.context);
+      }
+      throw statusError(StatusCode.InvalidArgument, message);
     }
   });
   const applied = [];
@@ -206,7 +213,8 @@ export function setSessionRange(
       } else if (typeof cell === "object" && "blank" in cell && cell.blank === true) {
         mutations.push({ ...base, type: "blank" });
       } else {
-        throw new Error(
+        throw statusError(
+          StatusCode.InvalidArgument,
           `invalid cell at row ${r}, col ${c}: expected number|boolean|string|{f}|{blank:true}|null`,
         );
       }

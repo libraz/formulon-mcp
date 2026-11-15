@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { type Pagination, ValueKind } from "@libraz/formulon";
 import { cellToA1, normalizeRange, parseRangeRef } from "../a1.js";
-import { findSheetIndex } from "../formulon.js";
+import { findSheetIndex, StatusCode, statusError } from "../formulon.js";
 import { pointsToPixels } from "../preview/geometry.js";
 import { readObjects } from "../preview/objects.js";
 import {
@@ -48,12 +48,14 @@ function validateDimensions(
   const width = Math.max(1, Math.ceil(Math.ceil(pointsToPixels(logicalWidth)) * scale));
   const height = Math.max(1, Math.ceil(Math.ceil(pointsToPixels(logicalHeight)) * scale));
   if (width > MAX_PREVIEW_DIMENSION || height > MAX_PREVIEW_DIMENSION) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `preview dimensions ${width}x${height} exceed the ${MAX_PREVIEW_DIMENSION}px limit`,
     );
   }
   if (width * height > MAX_PREVIEW_PIXELS) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `preview image ${width}x${height} exceeds the ${MAX_PREVIEW_PIXELS}-pixel limit`,
     );
   }
@@ -62,7 +64,7 @@ function validateDimensions(
 
 function pngDimensions(png: Buffer): { width: number; height: number } {
   if (png.length < 24 || png.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") {
-    throw new Error("preview renderer returned an invalid PNG");
+    throw statusError(StatusCode.InternalError, "preview renderer returned an invalid PNG");
   }
   return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
 }
@@ -108,7 +110,7 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
   const workbook = session.workbook;
   const scale = options.scale ?? 1;
   if (!Number.isFinite(scale) || scale < 0.25 || scale > 2) {
-    throw new Error("scale must be between 0.25 and 2");
+    throw statusError(StatusCode.InvalidArgument, "scale must be between 0.25 and 2");
   }
 
   // Resolve and validate the request before any optional recalc can dirty the
@@ -125,7 +127,10 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
     qualifiedSheetIndex !== undefined &&
     requestedSheet !== qualifiedSheetIndex
   ) {
-    throw new Error("range sheet and sheet argument refer to different worksheets");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "range sheet and sheet argument refer to different worksheets",
+    );
   }
   const sheet = qualifiedSheetIndex ?? requestedSheet ?? 0;
   const name = workbook.sheet(sheet).name;
@@ -138,14 +143,18 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
   if (options.range) {
     const cutMerge = rangeCutsMerge(chosen.rect, merges);
     if (cutMerge) {
-      throw new Error(
+      throw statusError(
+        StatusCode.InvalidArgument,
         `range ${options.range} cuts merged cell ${cellToA1(cutMerge.firstRow, cutMerge.firstCol)}:${cellToA1(cutMerge.lastRow, cutMerge.lastCol)}`,
       );
     }
   }
   const area = rectArea(chosen.rect);
   if (area > MAX_PREVIEW_CELLS) {
-    throw new Error(`preview range spans ${area} cells (limit ${MAX_PREVIEW_CELLS})`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `preview range spans ${area} cells (limit ${MAX_PREVIEW_CELLS})`,
+    );
   }
 
   const metrics = resolveColumnMetrics(workbook, sheet);
@@ -153,7 +162,7 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
   const logicalWidth = size.columns.reduce((sum, value) => sum + value, 0);
   const logicalHeight = size.rows.reduce((sum, value) => sum + value, 0);
   if (logicalWidth <= 0 || logicalHeight <= 0) {
-    throw new Error("preview range has no visible rows or columns");
+    throw statusError(StatusCode.InvalidArgument, "preview range has no visible rows or columns");
   }
   validateDimensions(logicalWidth, logicalHeight, scale);
 
@@ -162,7 +171,7 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
   if (options.outputPath !== undefined) {
     outputExtension = options.outputPath.toLowerCase().slice(-4);
     if (outputExtension !== ".png" && outputExtension !== ".svg") {
-      throw new Error("outputPath must end with .png or .svg");
+      throw statusError(StatusCode.InvalidArgument, "outputPath must end with .png or .svg");
     }
     outputPath = options.outputPath;
   }
@@ -243,7 +252,10 @@ export function previewSessionRange(id: string, options: PreviewOptions = {}): P
   };
   const svg = renderPreviewSvg(model);
   if (Buffer.byteLength(svg, "utf8") > MAX_SVG_BYTES) {
-    throw new Error(`preview SVG exceeds the ${MAX_SVG_BYTES}-byte limit`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `preview SVG exceeds the ${MAX_SVG_BYTES}-byte limit`,
+    );
   }
   const png = renderPreviewPng(svg, scale);
   const renderedDimensions = pngDimensions(png);

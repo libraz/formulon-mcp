@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
+import { StatusCode, statusError } from "./formulon.js";
 import { LEDGER_ACCESS } from "./session/ledger-access.js";
 import { lowerFirst } from "./session/shared.js";
 import type {
@@ -133,7 +134,8 @@ function resolveEngineDeclarations(): { version: string; typesPath: string } {
   try {
     packagePath = require.resolve("@libraz/formulon/package.json");
   } catch (error) {
-    throw new Error(
+    throw statusError(
+      StatusCode.PreconditionFailed,
       `cannot resolve installed @libraz/formulon/package.json: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
@@ -142,22 +144,30 @@ function resolveEngineDeclarations(): { version: string; typesPath: string } {
   try {
     packageMetadata = JSON.parse(readFileSync(packagePath, "utf8")) as PackageMetadata;
   } catch (error) {
-    throw new Error(
+    throw statusError(
+      StatusCode.PreconditionFailed,
       `cannot read installed @libraz/formulon/package.json: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   if (typeof packageMetadata.version !== "string" || packageMetadata.version.length === 0) {
-    throw new Error("installed @libraz/formulon/package.json has no usable version");
+    throw statusError(
+      StatusCode.PreconditionFailed,
+      "installed @libraz/formulon/package.json has no usable version",
+    );
   }
   if (typeof packageMetadata.types !== "string" || packageMetadata.types.length === 0) {
-    throw new Error("installed @libraz/formulon/package.json has no usable types path");
+    throw statusError(
+      StatusCode.PreconditionFailed,
+      "installed @libraz/formulon/package.json has no usable types path",
+    );
   }
 
   const typesPath = resolve(dirname(packagePath), packageMetadata.types);
   try {
     readFileSync(typesPath, "utf8");
   } catch (error) {
-    throw new Error(
+    throw statusError(
+      StatusCode.PreconditionFailed,
       `cannot read installed @libraz/formulon declaration file ${typesPath}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
@@ -211,7 +221,8 @@ function discoverKinds(
 ): Map<string, { kind: WorkbookApiKind; members: ParsedInterface }> {
   const root = withInherited(ROOT_KIND, parse);
   if (!root) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       "installed @libraz/formulon declaration file has no exported Workbook interface",
     );
   }
@@ -282,7 +293,8 @@ function getParsedCatalog(): ParsedCatalog {
   const kinds = discoverKinds(parse);
   const module = parse(MODULE_KIND);
   if (!module) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       "installed @libraz/formulon declaration file has no exported Formulon interface",
     );
   }
@@ -326,7 +338,8 @@ function getParsedCatalog(): ParsedCatalog {
     }
   }
   if (unclassified.length > 0) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `installed @libraz/formulon declares methods neither the ledger nor a name prefix classifies as read or write: ${unclassified.join(", ")}`,
     );
   }
@@ -347,7 +360,10 @@ function boundedLimit(limit: number | undefined): number {
     return 20;
   }
   if (!Number.isInteger(limit) || limit < 1) {
-    throw new Error(`limit must be an integer in 1..${WORKBOOK_API_MAX_LIMIT}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `limit must be an integer in 1..${WORKBOOK_API_MAX_LIMIT}`,
+    );
   }
   return Math.min(limit, WORKBOOK_API_MAX_LIMIT);
 }
@@ -357,7 +373,7 @@ function boundedOffset(offset: number | undefined): number {
     return 0;
   }
   if (!Number.isInteger(offset) || offset < 0) {
-    throw new Error("offset must be a non-negative integer");
+    throw statusError(StatusCode.InvalidArgument, "offset must be a non-negative integer");
   }
   return offset;
 }
@@ -417,10 +433,11 @@ export function describeWorkbookApi(methodName: string): WorkbookApiDescribeResu
       : entry.target.kind === methodName.slice(0, dot) && entry.name === methodName.slice(dot + 1),
   );
   if (candidates.length === 0) {
-    throw new Error(`unknown or unavailable Formulon method: ${methodName}`);
+    throw statusError(StatusCode.NotFound, `unknown or unavailable Formulon method: ${methodName}`);
   }
   if (candidates.length > 1) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `${methodName} exists on several targets; name one of ${candidates.map((entry) => `${entry.target.kind}.${entry.name}`).join(", ")}`,
     );
   }

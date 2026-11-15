@@ -7,7 +7,9 @@ import {
   ColorContext,
   type Fill,
   type Font,
+  StatusCode,
   sheetAt,
+  statusError,
   type Workbook,
 } from "../formulon.js";
 import type {
@@ -56,7 +58,7 @@ function applyFont(base: Font, input: FontStyleInput): FontPatch {
   }
   if (input.size !== undefined) {
     if (!(input.size > 0)) {
-      throw new Error(`invalid font size: ${input.size}`);
+      throw statusError(StatusCode.InvalidArgument, `invalid font size: ${input.size}`);
     }
     font.sizePt = input.size;
   }
@@ -316,7 +318,10 @@ export function materializedStyleCells(rect: StyleRect, style: StyleInput, ref: 
     return (rect.lastRow - rect.firstRow + 1) * (rect.lastCol - rect.firstCol + 1);
   }
   if (style.border?.outline !== undefined) {
-    throw new Error(`an outline border needs a bounded range, not whole rows or columns: ${ref}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `an outline border needs a bounded range, not whole rows or columns: ${ref}`,
+    );
   }
   return 0;
 }

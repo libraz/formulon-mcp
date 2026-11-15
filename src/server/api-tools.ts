@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { StatusCode, statusError } from "../formulon.js";
 import { describeWorkbookApi, searchWorkbookApi, WORKBOOK_API_MAX_LIMIT } from "../workbook-api.js";
 import { fail, ok } from "./shared.js";
 
@@ -35,7 +36,10 @@ export function registerApiTools(server: McpServer): void {
       try {
         if (operation === "describe") {
           if (!method || method.trim().length === 0) {
-            throw new Error("method is required for the describe operation");
+            throw statusError(
+              StatusCode.InvalidArgument,
+              "method is required for the describe operation",
+            );
           }
           return ok(describeWorkbookApi(method.trim()));
         }

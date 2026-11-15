@@ -1,3 +1,4 @@
+import { StatusCode, statusError } from "./formulon.js";
 export type CellAddress = {
   sheetName?: string;
   row: number;
@@ -34,13 +35,13 @@ function normalizeSheetName(sheet: string | undefined): string | undefined {
 /** Converts an Excel column label such as `A` or `AA` to a zero-based index. */
 export function colToIndex(col: string): number {
   if (col.length === 0) {
-    throw new Error("invalid column: empty");
+    throw statusError(StatusCode.InvalidArgument, "invalid column: empty");
   }
   let index = 0;
   for (const char of col.toUpperCase()) {
     const code = char.charCodeAt(0);
     if (code < 65 || code > 90) {
-      throw new Error(`invalid column: ${col}`);
+      throw statusError(StatusCode.InvalidArgument, `invalid column: ${col}`);
     }
     index = index * 26 + (code - 64);
   }
@@ -50,7 +51,7 @@ export function colToIndex(col: string): number {
 /** Converts a zero-based column index to an Excel column label. */
 export function indexToCol(index: number): string {
   if (!Number.isInteger(index) || index < 0) {
-    throw new Error(`invalid zero-based column index: ${index}`);
+    throw statusError(StatusCode.InvalidArgument, `invalid zero-based column index: ${index}`);
   }
   let n = index + 1;
   let col = "";
@@ -65,7 +66,7 @@ export function indexToCol(index: number): string {
 /** Formats a zero-based row and column pair as an A1 reference. */
 export function cellToA1(row: number, col: number): string {
   if (!Number.isInteger(row) || row < 0) {
-    throw new Error(`invalid zero-based row index: ${row}`);
+    throw statusError(StatusCode.InvalidArgument, `invalid zero-based row index: ${row}`);
   }
   return `${indexToCol(col)}${row + 1}`;
 }
@@ -74,7 +75,7 @@ export function cellToA1(row: number, col: number): string {
 export function parseCellRef(ref: string): CellAddress {
   const match = CELL_PATTERN.exec(ref.trim());
   if (!match?.groups) {
-    throw new Error(`invalid A1 cell reference: ${ref}`);
+    throw statusError(StatusCode.InvalidArgument, `invalid A1 cell reference: ${ref}`);
   }
   return {
     sheetName: normalizeSheetName(match.groups.sheet),
@@ -87,7 +88,7 @@ export function parseCellRef(ref: string): CellAddress {
 export function parseRangeRef(ref: string): RangeAddress {
   const parts = ref.split(":");
   if (parts.length > 2) {
-    throw new Error(`invalid A1 range reference: ${ref}`);
+    throw statusError(StatusCode.InvalidArgument, `invalid A1 range reference: ${ref}`);
   }
   const [left, right] = parts;
   if (!(left && right)) {
@@ -100,7 +101,7 @@ export function parseRangeRef(ref: string): RangeAddress {
   );
   const sheetName = start.sheetName ?? end.sheetName;
   if (start.sheetName && end.sheetName && start.sheetName !== end.sheetName) {
-    throw new Error(`cross-sheet ranges are not supported: ${ref}`);
+    throw statusError(StatusCode.InvalidArgument, `cross-sheet ranges are not supported: ${ref}`);
   }
   return {
     sheetName,

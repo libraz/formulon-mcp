@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { parseCellRef } from "../a1.js";
-import { loadWorkbook, type Workbook } from "../formulon.js";
+import { loadWorkbook, StatusCode, statusError, type Workbook } from "../formulon.js";
 import { readWorkbookCell } from "../session/cells.js";
 import {
   getSessionCell,
@@ -50,7 +50,8 @@ export function registerReadTools(server: McpServer): void {
         const hasSession = sessionId !== undefined;
         const hasPath = path !== undefined;
         if (hasSession === hasPath) {
-          throw new Error(
+          throw statusError(
+            StatusCode.InvalidArgument,
             hasSession
               ? "provide exactly one of sessionId or path, not both"
               : "exactly one of sessionId or path is required",
@@ -61,12 +62,18 @@ export function registerReadTools(server: McpServer): void {
             return ok(getSessionCellByA1(sessionId, a1, sheet, recalc));
           }
           if (row === undefined || col === undefined) {
-            throw new Error("row and col are required when a1 is omitted");
+            throw statusError(
+              StatusCode.InvalidArgument,
+              "row and col are required when a1 is omitted",
+            );
           }
           return ok(getSessionCell(sessionId, sheet, row, col, recalc));
         }
         if (path === undefined) {
-          throw new Error("path is required when sessionId is omitted");
+          throw statusError(
+            StatusCode.InvalidArgument,
+            "path is required when sessionId is omitted",
+          );
         }
         if (a1 !== undefined) {
           const parsed = parseCellRef(a1);
@@ -82,7 +89,10 @@ export function registerReadTools(server: McpServer): void {
           );
         }
         if (row === undefined || col === undefined) {
-          throw new Error("row and col are required when a1 is omitted");
+          throw statusError(
+            StatusCode.InvalidArgument,
+            "row and col are required when a1 is omitted",
+          );
         }
         workbook = await loadWorkbook(path, { cachedValues: !recalc });
         return ok(readWorkbookCell({ workbook }, sheet, row, col, recalc));

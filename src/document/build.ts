@@ -1,4 +1,5 @@
 import type { Workbook } from "../formulon.js";
+import { StatusCode, statusError } from "../formulon.js";
 import { PRINT_PRESETS, type PrintSettingsInput, writePrintSettings } from "../print.js";
 import {
   documentWidth,
@@ -25,7 +26,7 @@ export function buildDocument(
   spec: DocumentSpec,
 ): BuiltDocument {
   if (spec.blocks.length === 0) {
-    throw new Error("a document needs at least one block");
+    throw statusError(StatusCode.InvalidArgument, "a document needs at least one block");
   }
   const width = documentWidth(spec);
   const layout: Layout = {
@@ -82,7 +83,8 @@ export function buildDocument(
       (span) => result.firstCol <= span.lastCol && result.lastCol >= span.firstCol,
     );
     if (clash) {
-      throw new Error(
+      throw statusError(
+        StatusCode.InvalidArgument,
         `block ${index} (${block.type}) shares a row with block ${clash.index} and overlaps its columns; give one of them a narrower span or drop sameRow`,
       );
     }
@@ -103,7 +105,8 @@ export function buildDocument(
   if (spec.print !== undefined) {
     const preset = PRINT_PRESETS[spec.print];
     if (!preset) {
-      throw new Error(
+      throw statusError(
+        StatusCode.InvalidArgument,
         `unknown print preset: ${spec.print} (expected one of ${Object.keys(PRINT_PRESETS).join(", ")})`,
       );
     }

@@ -13,6 +13,8 @@ import {
   findSheetIndex,
   isDate1904,
   resultToJson,
+  StatusCode,
+  statusError,
   valueToJson,
 } from "../formulon.js";
 import { classifyNumberFormat, describeNumberFormat, type NumberFormatInfo } from "../numfmt.js";
@@ -84,10 +86,14 @@ export function spillRecord(session: WorkbookOwner, sheet: number, row: number, 
 /** Rejects a cell address that falls outside Excel's grid limits. */
 export function assertInGrid(row: number, col: number): void {
   if (!(Number.isInteger(row) && Number.isInteger(col)) || row < 0 || col < 0) {
-    throw new Error(`cell coordinates must be finite nonnegative integers: row ${row}, col ${col}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `cell coordinates must be finite nonnegative integers: row ${row}, col ${col}`,
+    );
   }
   if (row > MAX_ROW || col > MAX_COL) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `cell ${cellToA1(row, col)} exceeds Excel sheet limits (max row ${MAX_ROW + 1}, max col XFD)`,
     );
   }
@@ -409,24 +415,24 @@ export function cellDisplayText(value: unknown): string | undefined {
 }
 export function requiredString(value: string | undefined, name: string): string {
   if (value === undefined || value.length === 0) {
-    throw new Error(`${name} is required`);
+    throw statusError(StatusCode.InvalidArgument, `${name} is required`);
   }
   return value;
 }
 
 export function requiredNumber(value: number | undefined, name: string): number {
   if (value === undefined) {
-    throw new Error(`${name} is required`);
+    throw statusError(StatusCode.InvalidArgument, `${name} is required`);
   }
   if (!Number.isFinite(value)) {
-    throw new Error(`${name} must be finite`);
+    throw statusError(StatusCode.InvalidArgument, `${name} must be finite`);
   }
   return value;
 }
 
 export function requiredBoolean(value: boolean | undefined, name: string): boolean {
   if (value === undefined) {
-    throw new Error(`${name} is required`);
+    throw statusError(StatusCode.InvalidArgument, `${name} is required`);
   }
   return value;
 }

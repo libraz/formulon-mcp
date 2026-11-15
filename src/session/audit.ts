@@ -17,7 +17,7 @@ import type {
   FormulaAuditResult,
   RawIssue,
 } from "../audit/types.js";
-import { findSheetIndex, valueToJson } from "../formulon.js";
+import { findSheetIndex, StatusCode, statusError, valueToJson } from "../formulon.js";
 import {
   assertInGrid,
   type PrimitiveCellValue,
@@ -40,26 +40,41 @@ export type {
 function validateOptions(options: FormulaAuditOptions) {
   const direction = options.direction ?? "vertical";
   if (direction !== "vertical" && direction !== "horizontal" && direction !== "both") {
-    throw new Error(`direction must be vertical, horizontal, or both: ${direction}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `direction must be vertical, horizontal, or both: ${direction}`,
+    );
   }
   const window = options.window ?? 5;
   if (!Number.isInteger(window) || window < 2 || window > 50) {
-    throw new Error(`window must be an integer in 2..50: ${window}`);
+    throw statusError(StatusCode.InvalidArgument, `window must be an integer in 2..50: ${window}`);
   }
   const minPeers = options.minPeers ?? 3;
   if (!Number.isInteger(minPeers) || minPeers < 3 || minPeers > 20) {
-    throw new Error(`minPeers must be an integer in 3..20: ${minPeers}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `minPeers must be an integer in 3..20: ${minPeers}`,
+    );
   }
   if (minPeers > 2 * window) {
-    throw new Error(`minPeers must be no greater than twice window: ${minPeers} > ${2 * window}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `minPeers must be no greater than twice window: ${minPeers} > ${2 * window}`,
+    );
   }
   const maxCells = options.maxCells ?? 50_000;
   if (!Number.isInteger(maxCells) || maxCells < 1 || maxCells > 50_000) {
-    throw new Error(`maxCells must be an integer in 1..50000: ${maxCells}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `maxCells must be an integer in 1..50000: ${maxCells}`,
+    );
   }
   const maxFindings = options.maxFindings ?? 100;
   if (!Number.isInteger(maxFindings) || maxFindings < 1 || maxFindings > 500) {
-    throw new Error(`maxFindings must be an integer in 1..500: ${maxFindings}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `maxFindings must be an integer in 1..500: ${maxFindings}`,
+    );
   }
   return { direction, window, minPeers, maxCells, maxFindings };
 }
@@ -81,7 +96,7 @@ function resolveSheetAndRange(
       selectedSheet !== undefined &&
       qualifiedSheet !== selectedSheet
     ) {
-      throw new Error("sheet conflicts with the qualified range");
+      throw statusError(StatusCode.InvalidArgument, "sheet conflicts with the qualified range");
     }
     const sheet = qualifiedSheet ?? selectedSheet ?? findSheetIndex(session.workbook, undefined);
     assertInGrid(parsed.start.row, parsed.start.col);
@@ -122,7 +137,8 @@ function readStoredCells(
   const handle = session.workbook.sheet(sheet);
   const stored = handle.listCells();
   if (stored.length > MAX_AUDIT_INVENTORY_CELLS) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `formula audit cannot inspect sheet ${sheet}: ${stored.length} stored cells exceeds the inventory limit of ${MAX_AUDIT_INVENTORY_CELLS}; pass an explicit range`,
     );
   }
@@ -232,7 +248,8 @@ export function auditSessionFormulas(
   const validated = validateOptions(options);
   const target = resolveSheetAndRange(session, options);
   if (target.range && rangeArea(target.range) > validated.maxCells) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `audit range ${rangeText(target.range)} spans ${rangeArea(target.range)} cells (limit ${validated.maxCells}); narrow the range or raise maxCells`,
     );
   }
@@ -262,7 +279,8 @@ export function auditSessionFormulas(
   }
   const area = rangeArea(range);
   if (area > validated.maxCells) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `audit range ${rangeText(range)} spans ${area} cells (limit ${validated.maxCells}); narrow the range or raise maxCells`,
     );
   }

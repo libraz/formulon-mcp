@@ -1,3 +1,4 @@
+import { StatusCode, statusError } from "../formulon.js";
 /** OOXML `ST_UnderlineValues`, in the order the engine's ordinals follow. */
 export const UNDERLINE = [
   "none",
@@ -86,7 +87,10 @@ export function ordinal<T extends number = number>(
 ): T {
   const index = table.indexOf(name);
   if (index < 0) {
-    throw new Error(`unknown ${what}: ${name} (expected one of ${table.join(", ")})`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `unknown ${what}: ${name} (expected one of ${table.join(", ")})`,
+    );
   }
   return index as T;
 }
@@ -99,7 +103,10 @@ export function ordinal<T extends number = number>(
 export function parseColor(spec: string): number {
   const hex = spec.trim().replace(/^#/, "");
   if (!(/^[0-9a-fA-F]{6}$/.test(hex) || /^[0-9a-fA-F]{8}$/.test(hex))) {
-    throw new Error(`invalid color: ${spec} (expected #RRGGBB or #AARRGGBB)`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `invalid color: ${spec} (expected #RRGGBB or #AARRGGBB)`,
+    );
   }
   const value = Number.parseInt(hex, 16);
   return hex.length === 6 ? (value + 0xff000000) >>> 0 : value >>> 0;

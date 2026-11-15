@@ -12,6 +12,7 @@ import {
   ValidationType,
 } from "@libraz/formulon";
 import { z } from "zod";
+import { StatusCode, statusError } from "../formulon.js";
 
 type EnumTable = Readonly<Record<string, number>>;
 /** Where an enum value sits in an input record: a key holding a table's member name, a nested record or a list of them. */
@@ -44,7 +45,7 @@ function enumOrdinals(value: unknown, spec: EnumSpec, path: string): unknown {
       }
     } else if (isTable(inner)) {
       if (typeof field !== "string" || !Object.hasOwn(inner, field)) {
-        throw new TypeError(`${at} must be one of ${names(inner)}`);
+        throw statusError(StatusCode.InvalidArgument, `${at} must be one of ${names(inner)}`);
       }
       out[key] = inner[field];
     } else {

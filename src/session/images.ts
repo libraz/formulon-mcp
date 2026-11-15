@@ -8,7 +8,9 @@ import {
   formulonModule,
   ImageFormat,
   resolveUserPath,
+  StatusCode,
   sheetAt,
+  statusError,
 } from "../formulon.js";
 import { mmToPoints, pixelsToPoints, pointsToPixels } from "./geometry.js";
 import { assertInGrid, refA1, sheetName } from "./shared.js";
@@ -77,7 +79,7 @@ export function lengthToEmu(length: ImageLength | undefined, label: string): num
         : length.size;
   const emu = Math.round(points * EMU_PER_POINT);
   if (!(Number.isFinite(emu) && emu >= 0)) {
-    throw new Error(`${label} must be a finite non-negative length`);
+    throw statusError(StatusCode.InvalidArgument, `${label} must be a finite non-negative length`);
   }
   return emu;
 }
@@ -181,7 +183,10 @@ export function getSessionImage(
 function anchorCell(anchor: string) {
   const cell = parseCellRef(anchor);
   if (cell.sheetName !== undefined) {
-    throw new Error("anchor must be a cell on the selected sheet, without a sheet name");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "anchor must be a cell on the selected sheet, without a sheet name",
+    );
   }
   assertInGrid(cell.row, cell.col);
   return cell;
@@ -192,7 +197,10 @@ function readImageFile(input: string) {
   const path = resolveUserPath(input);
   const bytes = new Uint8Array(readFileSync(path));
   if (bytes.byteLength > MAX_IMAGE_BYTES) {
-    throw new Error(`image exceeds ${MAX_IMAGE_BYTES} bytes: ${path}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `image exceeds ${MAX_IMAGE_BYTES} bytes: ${path}`,
+    );
   }
   return { path, bytes };
 }
@@ -266,7 +274,10 @@ export function removeSessionImage(
   const sheetHandle = sheetAt(session.workbook, sheetIndex);
   const { kind } = sheetHandle.drawing(objectId);
   if (kind !== DrawingObjectKind.Picture && kind !== DrawingObjectKind.Chart) {
-    throw new Error(`drawing object ${objectId} is not a picture or chart`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `drawing object ${objectId} is not a picture or chart`,
+    );
   }
   touch(session, true);
   sheetHandle.removeDrawing(objectId);
@@ -300,7 +311,10 @@ export function moveSessionImage(
   const current = drawing.getDrawingProperties().anchor;
   const anchor = input.anchor === undefined ? undefined : parseCellRef(input.anchor);
   if (anchor?.sheetName !== undefined) {
-    throw new Error("anchor must be a cell on the selected sheet, without a sheet name");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "anchor must be a cell on the selected sheet, without a sheet name",
+    );
   }
   if (anchor) {
     assertInGrid(anchor.row, anchor.col);
@@ -367,7 +381,7 @@ export function reorderSessionImage(
   const sheetIndex = findSheetIndex(session.workbook, sheet);
   const drawing = sheetAt(session.workbook, sheetIndex).drawing(objectId);
   if (!isStackable(drawing)) {
-    throw new Error(`drawing object ${objectId} cannot be reordered`);
+    throw statusError(StatusCode.InvalidArgument, `drawing object ${objectId} cannot be reordered`);
   }
   touch(session, true);
   drawing.setZOrder(index);
@@ -416,7 +430,7 @@ export function getSessionCellPicture(
   const cell = anchorCell(anchor);
   const picture = sheetAt(session.workbook, sheetIndex).getCellPicture(cell.row, cell.col);
   if (picture === null) {
-    throw new Error(`no picture in cell ${refA1(cell.row, cell.col)}`);
+    throw statusError(StatusCode.NotFound, `no picture in cell ${refA1(cell.row, cell.col)}`);
   }
   const bytes = Buffer.from(picture.bytes);
   const written = outputPath === undefined ? undefined : resolveUserPath(outputPath);

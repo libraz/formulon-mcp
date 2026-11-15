@@ -1,5 +1,5 @@
 import { PivotAxis } from "@libraz/formulon";
-import { nativeToJson, okStatus, resultToJson } from "../formulon.js";
+import { nativeToJson, okStatus, resultToJson, StatusCode, statusError } from "../formulon.js";
 import {
   AGGREGATIONS,
   assignAxes,
@@ -54,7 +54,10 @@ function validatePivotRequest(session: WorkbookSession, options: CreatePivotOpti
   const sourceRange = resolveRange(session, sourceReference(options), options.sourceSheet);
   const sourceLimit = options.sourceLimit ?? 10_000;
   if (!Number.isInteger(sourceLimit) || sourceLimit < 2 || sourceLimit > 10_000) {
-    throw new Error("sourceLimit must be an integer from 2 through 10000");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "sourceLimit must be an integer from 2 through 10000",
+    );
   }
   validateRangeSize(sourceRange, sourceLimit);
   const rows = normalizeFieldList(options.rows, "row");
@@ -78,7 +81,7 @@ function validatePivotRequest(session: WorkbookSession, options: CreatePivotOpti
 function requiredText(value: string | undefined, name: string): string {
   const trimmed = value?.trim() ?? "";
   if (!trimmed) {
-    throw new Error(`${name} is required`);
+    throw statusError(StatusCode.InvalidArgument, `${name} is required`);
   }
   return trimmed;
 }
@@ -118,7 +121,8 @@ export function createSessionPivot(id: string, options: CreatePivotOptions) {
     cache.refresh();
     const fields = cache.listFields().map((field) => field.name);
     if (fields.join("\u0000") !== source.headers.join("\u0000")) {
-      throw new Error(
+      throw statusError(
+        StatusCode.InvalidArgument,
         `pivot cache fields ${JSON.stringify(fields)} differ from the source headers ${JSON.stringify(source.headers)}`,
       );
     }

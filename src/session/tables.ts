@@ -6,7 +6,15 @@ import {
   TableTotalsRowFunction,
 } from "@libraz/formulon";
 import { normalizeRange, parseRangeRef } from "../a1.js";
-import { findSheetIndex, okStatus, rectA1, resultToJson, sheetAt } from "../formulon.js";
+import {
+  findSheetIndex,
+  okStatus,
+  rectA1,
+  resultToJson,
+  StatusCode,
+  sheetAt,
+  statusError,
+} from "../formulon.js";
 import { assertInGrid, lowerFirst, rangeA1, sheetName } from "./shared.js";
 import { getSession, publicInfo, touch } from "./state.js";
 
@@ -77,7 +85,8 @@ function styleToggles(options: TableStyleToggles): TableStyleToggles {
 function totalsFunctionOrdinal(name: string): TableTotalsRowFunction {
   const ordinal = TOTALS_FUNCTION_ORDINALS.get(name);
   if (ordinal === undefined) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `unknown totalsRowFunction ${JSON.stringify(name)}; expected one of ${TABLE_TOTALS_FUNCTION_NAMES.join(", ")} or null`,
     );
   }
@@ -116,10 +125,10 @@ type TableRange = {
 
 function requireIndex(index: number | undefined, operation: string): number {
   if (index === undefined) {
-    throw new Error(`index is required for table ${operation}`);
+    throw statusError(StatusCode.InvalidArgument, `index is required for table ${operation}`);
   }
   if (!Number.isInteger(index) || index < 0) {
-    throw new Error(`index must be a nonnegative integer: ${index}`);
+    throw statusError(StatusCode.InvalidArgument, `index must be a nonnegative integer: ${index}`);
   }
   return index;
 }
@@ -127,7 +136,7 @@ function requireIndex(index: number | undefined, operation: string): number {
 function requiredText(value: string | undefined, name: string): string {
   const trimmed = value?.trim() ?? "";
   if (!trimmed) {
-    throw new Error(`${name} is required`);
+    throw statusError(StatusCode.InvalidArgument, `${name} is required`);
   }
   return trimmed;
 }
@@ -136,7 +145,7 @@ function tableRef(options: TableOperationOptions): string {
   const range = options.range?.trim();
   const ref = options.ref?.trim();
   if (range && ref) {
-    throw new Error("provide only one of range or ref");
+    throw statusError(StatusCode.InvalidArgument, "provide only one of range or ref");
   }
   return requiredText(range ?? ref, "range");
 }
@@ -151,11 +160,15 @@ function resolveTableRange(
   assertInGrid(parsed.start.row, parsed.start.col);
   assertInGrid(parsed.end.row, parsed.end.col);
   if (parsed.end.row < parsed.start.row || parsed.end.col < parsed.start.col) {
-    throw new Error(`table range must have a positive width and height: ${reference}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `table range must have a positive width and height: ${reference}`,
+    );
   }
   const sheetIndex = findSheetIndex(session.workbook, parsed.sheetName ?? fallbackSheet);
   if (expectedSheet !== undefined && sheetIndex !== expectedSheet) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `table range sheet ${sheetName(session, sheetIndex)} does not match the existing table sheet ${sheetName(session, expectedSheet)}`,
     );
   }
@@ -190,7 +203,11 @@ function workbookTables(session: ReturnType<typeof getSession>): IndexedTable[] 
 function tableAtIndex(session: ReturnType<typeof getSession>, index: number): IndexedTable {
   const found = workbookTables(session)[index];
   if (found === undefined) {
-    throw new Error(`table index out of bounds: ${index}`);
+    throw statusError(
+      StatusCode.IndexOutOfRange,
+      "table index out of range",
+      `index=${index} count=${workbookTables(session).length}`,
+    );
   }
   return found;
 }
@@ -233,12 +250,16 @@ function createTable(session: ReturnType<typeof getSession>, options: TableOpera
   const width = range.lastCol - range.firstCol + 1;
   const settings = options.columns ?? [];
   if (settings.length > width) {
-    throw new Error(`table columns count ${settings.length} exceeds range width ${width}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `table columns count ${settings.length} exceeds range width ${width}`,
+    );
   }
   // The engine names the columns; given names must cover every column.
   const names = settings.flatMap(({ name }) => (name === undefined ? [] : [name]));
   if (names.length > 0 && names.length !== width) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       "give every column a name in columns, one per range column, or none to let the engine name them",
     );
   }
@@ -263,7 +284,7 @@ function createTable(session: ReturnType<typeof getSession>, options: TableOpera
   }
   const entry = workbookTables(session).find(({ table }) => table === created);
   if (entry === undefined) {
-    throw new Error(`created table ${name} is not listed`);
+    throw statusError(StatusCode.InternalError, "created table is not listed", `table=${name}`);
   }
   return {
     session: publicInfo(session),
@@ -287,13 +308,15 @@ function updateTable(session: ReturnType<typeof getSession>, options: TableOpera
     options.totalsRow === undefined &&
     options.columns === undefined
   ) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       "table update requires at least one of range, name, style, a style toggle, headerRow, totalsRow, or columns",
     );
   }
   const named = options.columns?.findIndex((column) => column.name !== undefined) ?? -1;
   if (named >= 0) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `columns[${named}].name names a column on create only; rename a column with Table.renameColumn through formulon_workbook_call`,
     );
   }
@@ -310,7 +333,10 @@ function updateTable(session: ReturnType<typeof getSession>, options: TableOpera
     const oldWidth = Math.abs(oldRange.end.col - oldRange.start.col) + 1;
     const width = range.lastCol - range.firstCol + 1;
     if (width !== oldWidth) {
-      throw new Error(`updated table range must keep ${oldWidth} columns; received ${width}`);
+      throw statusError(
+        StatusCode.InvalidArgument,
+        `updated table range must keep ${oldWidth} columns; received ${width}`,
+      );
     }
     patch.range = range.ref;
   }

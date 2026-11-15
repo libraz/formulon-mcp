@@ -123,7 +123,7 @@ export function formulonModule(): Promise<Formulon> {
 /** The engine module, for synchronous callers; it is loaded before any workbook session exists. */
 export function loadedFormulon(): Formulon {
   if (loadedModule === undefined) {
-    throw new Error("the Formulon engine is not loaded yet");
+    throw statusError(StatusCode.PreconditionFailed, "the Formulon engine is not loaded yet");
   }
   return loadedModule;
 }
@@ -245,6 +245,14 @@ export function errorText(error: unknown): string {
   return parts.join(" ");
 }
 
+/**
+ * An error the server itself raises, in the engine's own form: tool results report it as
+ * `<StatusName>: <message> (<context>)` with a JSON item, like an engine `FormulonError`.
+ */
+export function statusError(code: StatusCode, message: string, context?: string): FormulonError {
+  return new FormulonError(code, message, context);
+}
+
 /** Converts arbitrary Formulon return values into JSON-friendly data. */
 export function resultToJson(value: unknown): unknown {
   if (value instanceof ExcelError) {
@@ -303,7 +311,7 @@ export function isDate1904(wb: Workbook): boolean {
 /** Resolves a user-supplied path relative to the MCP server process cwd. */
 export function resolveUserPath(filePath: string): string {
   if (!filePath.trim()) {
-    throw new Error("path must not be empty");
+    throw statusError(StatusCode.InvalidArgument, "path must not be empty");
   }
   return path.resolve(process.cwd(), filePath);
 }
@@ -361,13 +369,16 @@ export async function createOrLoadWorkbook(
         wb.setProfileId(profile);
       } catch (error) {
         wb.dispose();
-        throw new Error(`set excel profile ${profile}${source} failed: ${errorText(error)}`);
+        throw statusError(
+          StatusCode.InvalidArgument,
+          `set excel profile ${profile}${source} failed: ${errorText(error)}`,
+        );
       }
     }
     return wb;
   }
   if (profile !== undefined && !(await isKnownProfile(profile))) {
-    throw new Error(`unknown excel profile: ${profile}${source}`);
+    throw statusError(StatusCode.InvalidArgument, `unknown excel profile: ${profile}${source}`);
   }
   const Module = await formulonModule();
   return profile === undefined
@@ -380,19 +391,23 @@ export function findSheetIndex(wb: Workbook, sheet: number | string | undefined)
   const sheetCount = wb.sheetCount;
   if (sheet === undefined) {
     if (sheetCount === 0) {
-      throw new Error("workbook has no sheets");
+      throw statusError(StatusCode.PreconditionFailed, "workbook has no sheets");
     }
     return 0;
   }
   if (typeof sheet === "number") {
     if (!Number.isInteger(sheet) || sheet < 0 || sheet >= sheetCount) {
-      throw new Error(`sheet index out of bounds: ${sheet}`);
+      throw statusError(
+        StatusCode.SheetIndexOutOfRange,
+        "sheet index out of range",
+        `sheet_index=${sheet} sheet_count=${sheetCount}`,
+      );
     }
     return sheet;
   }
   const found = wb.listSheets().find((handle) => handle.name === sheet);
   if (found === undefined) {
-    throw new Error(`sheet not found: ${sheet}`);
+    throw statusError(StatusCode.NotFound, "sheet not found", `sheet=${sheet}`);
   }
   return found.index;
 }
@@ -527,7 +542,7 @@ export function workbookFormatFor(outputPath: string): WorkbookFormat {
   if (extension === ".xlsb") {
     return WorkbookFormat.Xlsb;
   }
-  throw new Error("outputPath must end with .xlsx or .xlsb");
+  throw statusError(StatusCode.InvalidArgument, "outputPath must end with .xlsx or .xlsb");
 }
 
 export type SavedWorkbook = {

@@ -1,5 +1,11 @@
 import { cellToA1 } from "../a1.js";
-import { isDate1904, normalizeFormula, type Workbook } from "../formulon.js";
+import {
+  isDate1904,
+  normalizeFormula,
+  StatusCode,
+  statusError,
+  type Workbook,
+} from "../formulon.js";
 import { classifyNumberFormat, isoToExcelSerial } from "../numfmt.js";
 import { applyRangeStyle, type StyleInput } from "../styles.js";
 import type {
@@ -105,7 +111,8 @@ function bindFormula(formula: string, names: NameTable, rowScope?: Map<string, s
       return whole;
     }
     const known = [...(rowScope ? Array.from(rowScope.keys()) : []), ...names.known()];
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `unknown reference {${key}} in formula "${formula}"; known names: ${known.join(", ") || "(none)"}`,
     );
   });
@@ -225,7 +232,8 @@ function pairColumns(
 
 function assertFits(layout: Layout, cols: ReturnType<typeof pairColumns>, what: string): void {
   if (cols.labelFirst < layout.firstCol || cols.valueLast > layout.lastCol) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `${what} needs ${cols.valueLast - cols.labelFirst + 1} columns but the document is ${
         layout.lastCol - layout.firstCol + 1
       } wide`,
@@ -291,10 +299,11 @@ function tableRowValue(source: TableRow, column: TableColumn, index: number): Ce
 export function placeTable(layout: Layout, block: TableBlock, top: number): Placed {
   const width = layout.lastCol - layout.firstCol + 1;
   if (block.columns.length === 0) {
-    throw new Error("table block needs at least one column");
+    throw statusError(StatusCode.InvalidArgument, "table block needs at least one column");
   }
   if (block.columns.length > width) {
-    throw new Error(
+    throw statusError(
+      StatusCode.InvalidArgument,
       `table needs ${block.columns.length} columns but the document is ${width} wide`,
     );
   }
@@ -483,7 +492,7 @@ export function placeSummary(layout: Layout, block: SummaryBlock, top: number): 
 export function documentWidth(spec: DocumentSpec): number {
   if (spec.width !== undefined) {
     if (spec.width < 1) {
-      throw new Error("width must be at least 1 column");
+      throw statusError(StatusCode.InvalidArgument, "width must be at least 1 column");
     }
     return spec.width;
   }

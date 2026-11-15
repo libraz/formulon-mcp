@@ -10,7 +10,7 @@ import type {
   ShapePatch,
 } from "@libraz/formulon";
 import { parseCellRef } from "../a1.js";
-import { AnchorKind, findSheetIndex, sheetAt } from "../formulon.js";
+import { AnchorKind, findSheetIndex, StatusCode, sheetAt, statusError } from "../formulon.js";
 import { formatColor, parseColor } from "../styles/input.js";
 import { describePlacement, emuSize, type ImageLength, KIND_NAMES, lengthToEmu } from "./images.js";
 import { assertInGrid, sheetName } from "./shared.js";
@@ -50,7 +50,10 @@ type ShapeFieldsSpec = ShapePatch & Pick<DrawingPatch, "name" | "hidden">;
 function sheetCell(ref: string, label: string) {
   const cell = parseCellRef(ref);
   if (cell.sheetName !== undefined) {
-    throw new Error(`${label} must be a cell on the selected sheet, without a sheet name`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `${label} must be a cell on the selected sheet, without a sheet name`,
+    );
   }
   assertInGrid(cell.row, cell.col);
   return cell;
@@ -62,7 +65,10 @@ function paint(spec: ShapePaintInput, label: string): ChartFillPatch {
   }
   const argb = parseColor(spec);
   if (argb >>> 24 !== 0xff) {
-    throw new Error(`${label} must be an opaque #RRGGBB colour or none: ${spec}`);
+    throw statusError(
+      StatusCode.InvalidArgument,
+      `${label} must be an opaque #RRGGBB colour or none: ${spec}`,
+    );
   }
   return { color: formatColor(argb), none: false };
 }
@@ -129,7 +135,10 @@ function fieldsSpec(fields: ShapeFields): ShapeFieldsSpec {
   }
   if (fields.rotation !== undefined) {
     if (!Number.isFinite(fields.rotation)) {
-      throw new Error(`rotation must be a finite number of degrees: ${fields.rotation}`);
+      throw statusError(
+        StatusCode.InvalidArgument,
+        `rotation must be a finite number of degrees: ${fields.rotation}`,
+      );
     }
     spec.rotationDeg = ((fields.rotation % 360) + 360) % 360;
   }
@@ -162,7 +171,10 @@ function anchorSpec(input: ShapePlacementInput, current?: DrawingAnchor): Drawin
       ? AnchorKind.OneCell
       : AnchorKind.TwoCell;
   if (kind === AnchorKind.Absolute) {
-    throw new Error("an absolutely anchored shape cannot be moved by cell");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "an absolutely anchored shape cannot be moved by cell",
+    );
   }
   const from = input.anchor === undefined ? undefined : sheetCell(input.anchor, "anchor");
   const offsets = {
@@ -179,13 +191,19 @@ function anchorSpec(input: ShapePlacementInput, current?: DrawingAnchor): Drawin
   };
   if (kind === AnchorKind.TwoCell) {
     if (input.width !== undefined || input.height !== undefined) {
-      throw new Error("a two-cell shape is sized by its to cell; width and height do not apply");
+      throw statusError(
+        StatusCode.InvalidArgument,
+        "a two-cell shape is sized by its to cell; width and height do not apply",
+      );
     }
     const to = input.to === undefined ? undefined : sheetCell(input.to, "to");
     const toRow = to?.row ?? current?.toRow ?? 0;
     const toCol = to?.col ?? current?.toCol ?? 0;
     if (toRow < offsets.fromRow || toCol < offsets.fromCol) {
-      throw new Error("to must not lie above or left of the anchor cell");
+      throw statusError(
+        StatusCode.InvalidArgument,
+        "to must not lie above or left of the anchor cell",
+      );
     }
     return {
       kind: AnchorKind.TwoCell,
@@ -197,14 +215,20 @@ function anchorSpec(input: ShapePlacementInput, current?: DrawingAnchor): Drawin
     };
   }
   if (input.to !== undefined) {
-    throw new Error("a one-cell shape keeps its anchor kind; use width and height instead of to");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "a one-cell shape keeps its anchor kind; use width and height instead of to",
+    );
   }
   const widthEmu =
     input.width === undefined ? current?.widthEmu : lengthToEmu(input.width, "width");
   const heightEmu =
     input.height === undefined ? current?.heightEmu : lengthToEmu(input.height, "height");
   if (!(widthEmu && heightEmu)) {
-    throw new Error("a one-cell shape needs a positive width and height, or a to cell");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "a one-cell shape needs a positive width and height, or a to cell",
+    );
   }
   return { kind: AnchorKind.OneCell, ...offsets, widthEmu, heightEmu };
 }
@@ -260,7 +284,11 @@ export function updateSessionShape(
   const sheetIndex = findSheetIndex(session.workbook, sheet);
   const current = currentShape(session, sheetIndex, objectId);
   if (!current) {
-    throw new Error(`no shape ${objectId} on sheet ${sheetIndex}`);
+    throw statusError(
+      StatusCode.NotFound,
+      "no such shape",
+      `object_id=${objectId} sheet_index=${sheetIndex}`,
+    );
   }
   const spec = {
     ...fieldsSpec(input),
@@ -269,7 +297,10 @@ export function updateSessionShape(
       : {}),
   };
   if (Object.keys(spec).length === 0) {
-    throw new Error("shape update requires at least one field or placement change");
+    throw statusError(
+      StatusCode.InvalidArgument,
+      "shape update requires at least one field or placement change",
+    );
   }
   touch(session, true);
   current.update(spec);

@@ -1,6 +1,13 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { formulonModule, normalizeFormula, okStatus, valueToJson } from "../formulon.js";
+import {
+  formulonModule,
+  normalizeFormula,
+  okStatus,
+  StatusCode,
+  statusError,
+  valueToJson,
+} from "../formulon.js";
 import { resolveSessionSheet } from "../session/workbook.js";
 import { fail, labeledOk, ok, sheetRefSchema } from "./shared.js";
 
@@ -58,7 +65,8 @@ export function registerCoreTools(server: McpServer, version: string): void {
           );
         }
         if (typeof sheet === "string") {
-          throw new Error(
+          throw statusError(
+            StatusCode.InvalidArgument,
             "sheet names require sessionId; global evaluation has only the default sheet",
           );
         }
