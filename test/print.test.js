@@ -3,6 +3,7 @@ import { test } from "vitest";
 import {
   applySheetOperation,
   closeSession,
+  inspectSessionLayout,
   openSession,
   sessionPrintSettings,
   setSessionRange,
@@ -121,6 +122,15 @@ test("sets the three-state sheet tab visibility", async () => {
     const hidden = setSessionSheetView("print-visibility", 0, { visibility: "veryHidden" });
     assert.equal(hidden.statuses.length, 1);
     assert.equal(hidden.statuses[0].ok, true);
+    const layout = inspectSessionLayout("print-visibility", {
+      includeCells: false,
+      includeStyles: false,
+      maxCells: 10,
+    });
+    assert.deepEqual(
+      layout.sheets.map((sheet) => sheet.visibility),
+      ["veryHidden", "visible"],
+    );
   } finally {
     closeSession("print-visibility");
   }

@@ -163,6 +163,15 @@ const VISIBILITY_CODES: Record<SheetVisibilityName, SheetVisibility> = {
   veryHidden: SheetVisibility.VeryHidden,
 };
 
+/** The name of an engine sheet visibility code. */
+export function sheetVisibilityName(code: SheetVisibility): SheetVisibilityName {
+  return (
+    (Object.keys(VISIBILITY_CODES) as SheetVisibilityName[]).find(
+      (name) => VISIBILITY_CODES[name] === code,
+    ) ?? "visible"
+  );
+}
+
 /**
  * Updates sheet view settings such as zoom, frozen panes, and tab visibility.
  *

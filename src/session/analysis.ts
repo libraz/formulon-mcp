@@ -13,6 +13,7 @@ import {
   usedRange,
 } from "./shared.js";
 import { getSession, publicInfo, touch, type WorkbookSession } from "./state.js";
+import { sheetVisibilityName } from "./workbook.js";
 
 export type LayoutOptions = {
   sheet?: number | string;
@@ -34,6 +35,7 @@ export function inspectSessionLayout(id: string, options: LayoutOptions) {
       cellCount,
       mergedRanges: safeReadJson(() => handle.listMerges()),
       view: safeReadJson(() => handle.getView()),
+      visibility: sheetVisibilityName(handle.getVisibility()),
       columns: safeReadJson(() => handle.listColumnOverrides()),
       rows: safeReadJson(() => handle.listRowOverrides()),
       protection: safeReadJson(() => handle.getSheetProtection()),
