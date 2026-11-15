@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "vitest";
 import {
   applySessionMutations,
@@ -574,5 +575,27 @@ test("saving a manual-calculation session computes stale formulas unless calcOnS
   } finally {
     closeSession("stale-save");
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/** Manual calculation; B1 =A1*2 caches 2 while A1 holds 5, and nothing is marked for recalculation. */
+const MANUAL_CACHED_FIXTURE = fileURLToPath(
+  new URL("../fixtures/manual-cached.xlsx", import.meta.url),
+);
+
+test("opening a manual-calculation file under a profile keeps the values it cached", async () => {
+  for (const [id, profile] of [
+    ["manual-default", undefined],
+    ["manual-mac-ja", "mac-365-ja_JP"],
+  ]) {
+    await openSession(MANUAL_CACHED_FIXTURE, id, profile);
+    try {
+      assert.equal(getSession(id).workbook.getProfileId(), profile ?? "win-365-en_US");
+      const cell = getSessionCellByA1(id, "B1");
+      assert.equal(cell.value.value, 2, id);
+      assert.equal(cell.stale, undefined, id);
+    } finally {
+      closeSession(id);
+    }
   }
 });

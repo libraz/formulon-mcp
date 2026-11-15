@@ -145,6 +145,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Opening a file with a profile (`profile`, or `FORMULON_MCP_PROFILE`) loads
+  it under that profile, so a manual-calculation workbook keeps the values it
+  cached and computes only what the file left stale, as without a profile.
+  Before, the profile was set after the load and every formula was recomputed
+  under it. An unknown profile is reported as `unknown excel profile` for a
+  file as for a new workbook.
 - Errors the server itself raises (an index out of range, a missing or invalid
   argument, an unknown session or sheet) now use the same
   `<StatusName>: <message> (<context>)` text and second JSON content item

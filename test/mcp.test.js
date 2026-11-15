@@ -1060,8 +1060,8 @@ function resolveMcpProfile(requestedKey, envKey) {
   };
 }
 
-function assertProfileError(message, expected, source) {
-  const head = source === "new" ? "unknown excel profile: " : "set excel profile ";
+function assertProfileError(message, expected) {
+  const head = "unknown excel profile: ";
   const suffix = expected.fromEnv ? ` (from ${PROFILE_ENV})` : "";
   assert.ok(message.startsWith(`InvalidArgument: ${head}${expected.chosen}${suffix}`), message);
   assert.equal(message.includes(PROFILE_ENV), expected.fromEnv, message);
@@ -1082,7 +1082,7 @@ async function runMcpProfileCase(client, file, [tool, requestedKey, envKey, sour
       ...profile,
     });
     if (!expected.known) {
-      assertProfileError(errorPayload(opened), expected, source);
+      assertProfileError(errorPayload(opened), expected);
       const { sessions } = textPayload(await callTool(client, "formulon_list_sessions"));
       assert.equal(
         sessions.some((session) => session.id === sessionId),
@@ -1126,7 +1126,7 @@ async function runMcpProfileCase(client, file, [tool, requestedKey, envKey, sour
       ...profile,
     });
     if (!expected.known) {
-      assertProfileError(errorPayload(inspected), expected, "loaded");
+      assertProfileError(errorPayload(inspected), expected);
       return;
     }
     const summary = textPayload(inspected);
@@ -1141,7 +1141,7 @@ async function runMcpProfileCase(client, file, [tool, requestedKey, envKey, sour
     ...profile,
   });
   if (!expected.known) {
-    assertProfileError(errorPayload(updated), expected, source);
+    assertProfileError(errorPayload(updated), expected);
     assert.equal(existsSync(out), false, "a rejected profile writes no output");
     return;
   }

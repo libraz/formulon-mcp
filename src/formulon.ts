@@ -325,11 +325,15 @@ export function resolveUserPath(filePath: string): string {
  */
 export async function loadWorkbook(
   filePath: string,
-  options: { cachedValues?: boolean } = {},
+  options: { cachedValues?: boolean; profile?: ProfileId } = {},
 ): Promise<Workbook> {
   const Module = await formulonModule();
   const bytes = await readFile(resolveUserPath(filePath));
-  const wb = Module.Workbook.load(bytes);
+  // The profile is given at load, so a manual-calculation file keeps the stale state it was saved with.
+  const wb = Module.Workbook.load(
+    bytes,
+    options.profile === undefined ? undefined : { profileId: options.profile },
+  );
   if (options.cachedValues) {
     wb.setCalcMode(CalcMode.Manual);
   }
@@ -362,23 +366,11 @@ export async function createOrLoadWorkbook(
   const configured = process.env[PROFILE_ENV]?.trim() || undefined;
   const profile = requested ?? (configured as ProfileId | undefined);
   const source = requested === undefined ? ` (from ${PROFILE_ENV})` : "";
-  if (filePath) {
-    const wb = await loadWorkbook(filePath, options);
-    if (profile !== undefined) {
-      try {
-        wb.setProfileId(profile);
-      } catch (error) {
-        wb.dispose();
-        throw statusError(
-          StatusCode.InvalidArgument,
-          `set excel profile ${profile}${source} failed: ${errorText(error)}`,
-        );
-      }
-    }
-    return wb;
-  }
   if (profile !== undefined && !(await isKnownProfile(profile))) {
     throw statusError(StatusCode.InvalidArgument, `unknown excel profile: ${profile}${source}`);
+  }
+  if (filePath) {
+    return loadWorkbook(filePath, { ...options, profile });
   }
   const Module = await formulonModule();
   return profile === undefined

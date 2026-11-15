@@ -341,10 +341,7 @@ for (const row of PROFILE_CASES) {
             : () => createOrLoadWorkbook(input, requested);
 
         if (!expected.known) {
-          const message =
-            source === "new"
-              ? `unknown excel profile: ${expected.chosen}`
-              : `set excel profile ${expected.chosen}`;
+          const message = `unknown excel profile: ${expected.chosen}`;
           const error = await open().then(
             () => assert.fail("an unknown profile must be rejected"),
             (caught) => caught,
