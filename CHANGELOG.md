@@ -181,7 +181,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   profile always counted two.
 - `formulon_save_session` reports that `.xlsb` output leaves out a
   PivotTable built in the session and the custom views of a workbook opened
-  from `.xlsx`; tables, print settings, notes, AutoFilter and the other
-  features the tools author are kept. An `.xlsb` save of a data bar whose
+  from `.xlsx`; a PivotTable opened from a file is written, edits included,
+  and tables, print settings, notes, AutoFilter and the other features the
+  tools author are kept. An `.xlsb` save of a data bar whose
   minimum or maximum is a formula fails with `IoFeatureNotWritable` and
   writes nothing.
