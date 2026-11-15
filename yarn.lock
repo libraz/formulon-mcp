@@ -233,7 +233,7 @@ __metadata:
   resolution: "@libraz/formulon-mcp@workspace:."
   dependencies:
     "@biomejs/biome": "npm:^2.6.7"
-    "@libraz/formulon": "npm:^0.18.0"
+    "@libraz/formulon": "file:/tmp/formulon-0.19.0-mcp/libraz-formulon-0.19.0-r38.tgz"
     "@modelcontextprotocol/sdk": "npm:^1.32.2"
     "@resvg/resvg-js": "npm:^2.6.2"
     "@types/node": "npm:^26.6.6"
@@ -247,10 +247,10 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@libraz/formulon@npm:^0.18.0":
-  version: 0.18.0
-  resolution: "@libraz/formulon@npm:0.18.0"
-  checksum: 10c0/3562d338b7dd64fe3531252cfbb128f83a736c8995ae6ef4fed0ee5aa993cf5df63cc1e354006817299d1917c9d12306772e95855ae8ca1aa653ba30be756a52
+"@libraz/formulon@file:/tmp/formulon-0.19.0-mcp/libraz-formulon-0.19.0-r38.tgz::locator=%40libraz%2Fformulon-mcp%40workspace%3A.":
+  version: 0.19.0
+  resolution: "@libraz/formulon@file:/tmp/formulon-0.19.0-mcp/libraz-formulon-0.19.0-r38.tgz#/tmp/formulon-0.19.0-mcp/libraz-formulon-0.19.0-r38.tgz::hash=bd761d&locator=%40libraz%2Fformulon-mcp%40workspace%3A."
+  checksum: 10c0/7e1e5aff167892796992d9ef7ce92ef50ecbaa3b3ed4b80a7a1c87304fb398363cc4c0d35ced6cfaa82fb2a7e88387b907776493d7a3c26666255d8e64435f3b
   languageName: node
   linkType: hard
 
