@@ -15,13 +15,19 @@ test("AI tools publish validation and conditional-format shapes and reject inval
     // and every other key is forwarded to the engine, which validates it.
     assert.deepEqual(rule.required, ["ranges", "type"]);
     assert.equal(rule.properties.type.type, "string");
-    assert.equal(rule.properties.operator.type, "string");
-    assert.equal(rule.properties.timePeriod.type, "string");
+    // A null optional member reads as omitted, so a listed record adds back as listed.
+    const memberTypes = (schema) =>
+      [schema.type, ...(schema.anyOf ?? []).map((branch) => branch.type)]
+        .flat()
+        .filter(Boolean)
+        .sort();
+    assert.deepEqual(memberTypes(rule.properties.operator), ["null", "string"]);
+    assert.deepEqual(memberTypes(rule.properties.timePeriod), ["null", "string"]);
     assert.notEqual(rule.additionalProperties, false);
     const record = validation.inputSchema.properties.validation;
     assert.deepEqual(record.required, ["ranges", "type"]);
     assert.equal(record.properties.type.type, "string");
-    assert.equal(record.properties.errorStyle.type, "string");
+    assert.deepEqual(memberTypes(record.properties.errorStyle), ["null", "string"]);
     assert.notEqual(record.additionalProperties, false);
     const sessionId = "schema-preflight";
     textPayload(
@@ -214,9 +220,12 @@ test("AI tools preserve icon floors and data-bar directions through xlsx and xls
             operation: "list",
           });
           assert.equal(rules.method, "Sheet.listCfRules");
-          assert.equal(rules.result.find((rule) => rule.type === 3).dataBar.direction, 2);
-          assert.deepEqual(rules.result.find((rule) => rule.type === 4).iconSet.floor, {
-            type: 0,
+          assert.equal(
+            rules.result.find((rule) => rule.type === "DataBar").dataBar.direction,
+            "RightToLeft",
+          );
+          assert.deepEqual(rules.result.find((rule) => rule.type === "IconSet").iconSet.floor, {
+            type: "Number",
             value: "10",
             gte: true,
           });

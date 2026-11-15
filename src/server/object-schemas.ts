@@ -7,6 +7,7 @@ import {
   type ConditionalFormatInput,
   type DataValidationInput,
   DatePeriod,
+  enumName,
   IconSetName,
   ValidationErrorStyle,
   ValidationType,
@@ -55,6 +56,36 @@ function enumOrdinals(value: unknown, spec: EnumSpec, path: string): unknown {
   return out;
 }
 
+/**
+ * The inverse of {@link enumOrdinals}: replaces each ordinal in an engine record with its member
+ * name at the places `spec` names, so a listed record is the shape the matching add takes. A null
+ * field and an ordinal without a member pass through.
+ */
+function enumNames(value: unknown, spec: EnumSpec): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return value;
+  }
+  const out: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+  for (const [key, inner] of Object.entries(spec)) {
+    const field = out[key];
+    if (field === undefined || field === null) {
+      continue;
+    }
+    if (Array.isArray(inner)) {
+      if (Array.isArray(field)) {
+        out[key] = field.map((item) => enumNames(item, inner[0]));
+      }
+    } else if (isTable(inner)) {
+      if (typeof field === "number") {
+        out[key] = enumName(inner, field) ?? field;
+      }
+    } else {
+      out[key] = enumNames(field, inner as EnumSpec);
+    }
+  }
+  return out;
+}
+
 const valueObject: EnumSpec = { type: CfValueObjectType };
 
 const VALIDATION_ENUMS: EnumSpec = {
@@ -92,6 +123,16 @@ export function conditionalFormatInput(rule: Record<string, unknown>): Condition
   return enumOrdinals(rule, CF_ENUMS, "rule") as ConditionalFormatInput;
 }
 
+/** A validation record as the tool's `validation` input takes it: enum fields by member name. */
+export function validationRecord(validation: unknown): unknown {
+  return enumNames(validation, VALIDATION_ENUMS);
+}
+
+/** A conditional-format record as the tool's `rule` input takes it: enum fields by member name. */
+export function conditionalFormatRecord(rule: unknown): unknown {
+  return enumNames(rule, CF_ENUMS);
+}
+
 const ranges = z
   .union([z.string(), z.array(z.union([z.string(), z.object({}).passthrough()]))])
   .describe(
@@ -108,13 +149,13 @@ export const validationSchema = z
     type: z.string().describe(`ValidationType member: ${names(ValidationType)}.`),
     operator: z
       .string()
-      .optional()
+      .nullish()
       .describe(
         `ComparisonOperator member for whole, decimal, date, time and textLength: ${names(ComparisonOperator)}.`,
       ),
     errorStyle: z
       .string()
-      .optional()
+      .nullish()
       .describe(`ValidationErrorStyle member: ${names(ValidationErrorStyle)}.`),
   })
   .passthrough()
@@ -132,11 +173,11 @@ export const conditionalFormatSchema = z
     type: z.string().describe(`CfRuleType member: ${names(CfRuleType)}.`),
     operator: z
       .string()
-      .optional()
+      .nullish()
       .describe(`CellIs: ComparisonOperator member: ${names(ComparisonOperator)}.`),
     timePeriod: z
       .string()
-      .optional()
+      .nullish()
       .describe(`TimePeriod: DatePeriod member: ${names(DatePeriod)}.`),
   })
   .passthrough()

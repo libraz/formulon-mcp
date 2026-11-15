@@ -16,8 +16,10 @@ import {
 } from "../sessions.js";
 import {
   conditionalFormatInput,
+  conditionalFormatRecord,
   conditionalFormatSchema,
   validationInput,
+  validationRecord,
   validationSchema,
 } from "./object-schemas.js";
 import { fail, imageLengthSchema, labeledOk, ok, rangeSchema, sheetInputSchema } from "./shared.js";
@@ -262,7 +264,7 @@ export function registerObjectTools(server: McpServer): void {
     {
       title: "Validation operation",
       description:
-        "List, add, remove by index, or clear data validations on a sheet. An omitted boolean field defaults to false, so a rule that should accept empty cells has to spell allowBlank: true; showDropDown is the only field that defaults to true.",
+        "List, add, remove by index, or clear data validations on a sheet. A listed validation uses the member names add takes, so it can be added back as listed. An omitted boolean field defaults to false, so a rule that should accept empty cells has to spell allowBlank: true; showDropDown is the only field that defaults to true.",
       inputSchema: {
         ...sheetInputSchema,
         operation: z.enum(["list", "add", "removeAt", "clear"]),
@@ -275,7 +277,7 @@ export function registerObjectTools(server: McpServer): void {
         const sheetIndex = resolveSessionSheet(sessionId, sheet);
         if (operation === "list") {
           return labeledOk(sessionId, "Sheet.listValidations", "read", (wb) =>
-            wb.sheet(sheetIndex).listValidations(),
+            wb.sheet(sheetIndex).listValidations().map(validationRecord),
           );
         }
         if (operation === "clear") {
@@ -308,7 +310,8 @@ export function registerObjectTools(server: McpServer): void {
     "formulon_conditional_format_operation",
     {
       title: "Conditional format operation",
-      description: "List, add, remove by index, clear, or evaluate conditional format rules.",
+      description:
+        "List, add, remove by index, clear, or evaluate conditional format rules. A listed rule uses the member names add takes (type, operator, thresholds, icon sets), so it can be added back as listed.",
       inputSchema: {
         ...sheetInputSchema,
         operation: z.enum(["list", "add", "removeAt", "clear", "evaluate"]),
@@ -342,7 +345,7 @@ export function registerObjectTools(server: McpServer): void {
         const sheetIndex = resolveSessionSheet(sessionId, sheet);
         if (operation === "list") {
           return labeledOk(sessionId, "Sheet.listCfRules", "read", (wb) =>
-            wb.sheet(sheetIndex).listCfRules(),
+            wb.sheet(sheetIndex).listCfRules().map(conditionalFormatRecord),
           );
         }
         if (operation === "clear") {

@@ -145,6 +145,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `formulon_validation_operation` and `formulon_conditional_format_operation`
+  list records with the member names their inputs take, at every enum field
+  (validation `type`, `operator`, `errorStyle`; rule `type`, `operator`,
+  `timePeriod`, threshold `type`, data-bar `axisPosition` and `direction`,
+  icon-set `name` and custom `icons[].iconSet`), so a listed record can be
+  added back as it is. A null `operator`, `errorStyle` or `timePeriod` is
+  accepted on input as omitted.
+
+  ```jsonc
+  // before
+  { "type": 1, "operator": 6, "errorStyle": 0 }
+  // after
+  { "type": "Whole", "operator": "Between", "errorStyle": "Stop" }
+  ```
+
 - Opening a file with a profile (`profile`, or `FORMULON_MCP_PROFILE`) loads
   it under that profile, so a manual-calculation workbook keeps the values it
   cached and computes only what the file left stale, as without a profile.
