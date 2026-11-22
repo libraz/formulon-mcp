@@ -40,7 +40,7 @@ export function registerTableTools(server: McpServer): void {
                 .string()
                 .optional()
                 .describe(
-                  "Create only: the column's name. Name every column or none; none lets Excel's naming rule apply. Rename an existing column with Table.renameColumn through formulon_workbook_call.",
+                  "Create only: the column's name. Name every column or none; none lets Excel's naming rule apply. An empty name is refused. Rename an existing column with Table.renameColumn through formulon_workbook_call.",
                 ),
               totalsRowFunction: z
                 .enum(TABLE_TOTALS_FUNCTION_NAMES)
@@ -74,9 +74,10 @@ export function registerTableTools(server: McpServer): void {
           ),
         style: z
           .string()
+          .nullable()
           .optional()
-          .describe("Excel TableStyle name; an empty string clears it on update."),
-        styleName: z.string().optional().describe("Alias for style."),
+          .describe("Excel TableStyle name; null clears it on update."),
+        styleName: z.string().nullable().optional().describe("Alias for style."),
         headerRow: z
           .boolean()
           .optional()

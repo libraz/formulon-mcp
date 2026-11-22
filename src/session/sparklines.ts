@@ -64,7 +64,7 @@ export type SparklineGroupOptions = Partial<Record<(typeof FLAGS)[number], boole
   emptyCells?: SparklineEmptyName;
   minAxis?: SparklineAxisBound;
   maxAxis?: SparklineAxisBound;
-  dateAxis?: string;
+  dateAxis?: string | null;
 };
 
 type Session = ReturnType<typeof getSession>;
@@ -159,7 +159,7 @@ function groupSpec(options: SparklineGroupOptions) {
     spec.manualMax = max.manual;
   }
   if (options.dateAxis !== undefined) {
-    const dateRange = options.dateAxis.trim().replace(/^=/, "");
+    const dateRange = (options.dateAxis ?? "").trim().replace(/^=/, "");
     spec.dateAxis = dateRange !== "";
     if (dateRange !== "") {
       parseRangeRef(dateRange);

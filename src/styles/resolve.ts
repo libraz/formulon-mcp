@@ -291,7 +291,10 @@ function deriveStyle(
 
   let numFmtId = baseXf.numFmtId;
   if (style.numberFormat !== undefined) {
-    numFmtId = style.numberFormat === "" ? 0 : ooxml.addNumberFormat(style.numberFormat);
+    numFmtId =
+      style.numberFormat === null || style.numberFormat === ""
+        ? 0
+        : ooxml.addNumberFormat(style.numberFormat);
   }
 
   const derived: DerivedStyle = {

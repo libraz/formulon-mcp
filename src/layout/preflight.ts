@@ -106,8 +106,12 @@ function rowStoredSize(size: number, unit: "pt" | "px" | "mm" | undefined): numb
   return stored;
 }
 
-function printAreaRanges(workbook: Workbook, selectedSheet: number, printArea: string): void {
-  if (printArea.trim() === "") {
+function printAreaRanges(
+  workbook: Workbook,
+  selectedSheet: number,
+  printArea: string | null,
+): void {
+  if (printArea === null || printArea.trim() === "") {
     return;
   }
   for (const [index, ref] of printArea.split(",").entries()) {
@@ -120,7 +124,7 @@ function validatePrintTitles(settings: PrintSettingsInput): void {
   if (!titles) {
     return;
   }
-  if (titles.repeatRows !== undefined && titles.repeatRows !== "") {
+  if (titles.repeatRows != null && titles.repeatRows !== "") {
     const match = /^(\d+):(\d+)$/.exec(titles.repeatRows.trim());
     if (
       !match ||
@@ -134,7 +138,7 @@ function validatePrintTitles(settings: PrintSettingsInput): void {
       );
     }
   }
-  if (titles.repeatCols !== undefined && titles.repeatCols !== "") {
+  if (titles.repeatCols != null && titles.repeatCols !== "") {
     const match = /^([A-Za-z]+):([A-Za-z]+)$/.exec(titles.repeatCols.trim());
     if (!match) {
       throw statusError(
@@ -162,10 +166,10 @@ function preparedPrintSettings(
   if (parsed.printTitles) {
     parsed.printTitles = {
       ...parsed.printTitles,
-      ...(parsed.printTitles.repeatRows !== undefined
+      ...(parsed.printTitles.repeatRows != null
         ? { repeatRows: parsed.printTitles.repeatRows.trim() }
         : {}),
-      ...(parsed.printTitles.repeatCols !== undefined
+      ...(parsed.printTitles.repeatCols != null
         ? { repeatCols: parsed.printTitles.repeatCols.trim() }
         : {}),
     };

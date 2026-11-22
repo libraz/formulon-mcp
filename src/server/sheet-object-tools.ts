@@ -149,8 +149,9 @@ export function registerSheetObjectTools(server: McpServer): void {
         maxAxis: axisBoundSchema.optional(),
         dateAxis: z
           .string()
+          .nullable()
           .optional()
-          .describe("Date range that spaces the points by date; an empty string removes it."),
+          .describe("Date range that spaces the points by date; null removes it."),
       },
     },
     ({ sessionId, sheet, operation, index, sparklines, ...options }) => {

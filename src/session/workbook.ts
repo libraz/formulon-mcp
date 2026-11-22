@@ -93,14 +93,14 @@ export function applySheetOperation(
 export function setSessionDefinedName(
   id: string,
   name: string,
-  formula: string,
+  formula: string | null,
   sheet?: number | string,
-  attrs: { comment?: string; hidden?: boolean } = {},
+  attrs: { comment?: string | null; hidden?: boolean } = {},
 ) {
   const session = getSession(id);
   // OOXML <definedName> content is a bare expression with no leading '='.
   // Strip one if the caller supplied it so the saved file is Excel-conformant.
-  const trimmed = formula.trim();
+  const trimmed = (formula ?? "").trim();
   const refersTo = trimmed.startsWith("=") ? trimmed.slice(1) : trimmed;
   const hasAttrs = attrs.comment !== undefined || attrs.hidden !== undefined;
   if (refersTo === "" && hasAttrs) {
@@ -118,7 +118,8 @@ export function setSessionDefinedName(
   } else {
     // The engine replaces every attribute of the name, so an omitted one keeps its stored value.
     const existing = session.workbook.getDefinedName(name, scope);
-    const comment = attrs.comment ?? existing?.comment ?? undefined;
+    const comment =
+      attrs.comment === null ? undefined : (attrs.comment ?? existing?.comment ?? undefined);
     const hidden = attrs.hidden ?? existing?.hidden;
     session.workbook.setDefinedName({
       name,

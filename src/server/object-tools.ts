@@ -186,14 +186,15 @@ export function registerObjectTools(server: McpServer): void {
         index: z.number().int().nonnegative().optional(),
         target: z
           .string()
+          .nullable()
           .optional()
-          .describe("External URL; leave empty for an in-workbook link."),
+          .describe("External URL; omit (or null) for an in-workbook link."),
         display: z.string().optional(),
         tooltip: z.string().optional(),
         location: z
           .string()
           .optional()
-          .describe("In-workbook destination such as Sheet2!A1, used when target is empty."),
+          .describe("In-workbook destination such as Sheet2!A1, used when target is omitted."),
       },
     },
     ({

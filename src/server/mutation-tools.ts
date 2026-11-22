@@ -143,18 +143,22 @@ export function registerMutationTools(server: McpServer): void {
     {
       title: "Set defined name",
       description:
-        "Add, replace, or remove a defined name. Without `sheet` the name is workbook-scoped; with it the name is local to that sheet. Print settings (_xlnm.Print_Area, _xlnm.Print_Titles) must be sheet-scoped — Excel ignores a workbook-scoped one without reporting an error. Empty formula removes it. Replacing a formula keeps the name's comment and hidden flag unless they are given.",
+        "Add, replace, or remove a defined name. Without `sheet` the name is workbook-scoped; with it the name is local to that sheet. Print settings (_xlnm.Print_Area, _xlnm.Print_Titles) must be sheet-scoped — Excel ignores a workbook-scoped one without reporting an error. A null formula removes it. Replacing a formula keeps the name's comment and hidden flag unless they are given.",
       inputSchema: {
         sessionId: z.string(),
         name: z.string(),
-        formula: z.string().describe("Formula with or without '='; pass empty string to remove."),
+        formula: z
+          .string()
+          .nullable()
+          .describe("Formula with or without '='; null removes the name."),
         sheet: sheetRefSchema
           .optional()
           .describe("Scope the name to this sheet. Omit for workbook scope."),
         comment: z
           .string()
+          .nullable()
           .optional()
-          .describe("Note shown in Excel's Name Manager; an empty string clears it."),
+          .describe("Note shown in Excel's Name Manager; null clears it."),
         hidden: z.boolean().optional().describe("Hide the name from Excel's Name Manager."),
       },
     },

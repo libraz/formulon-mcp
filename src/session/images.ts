@@ -232,8 +232,8 @@ export async function insertSessionImage(
   touch(session, true);
   const twoCell = input.anchorKind === "twoCell";
   const picture = sheetAt(session.workbook, sheetIndex).addPicture(bytes, {
-    name: input.name ?? "",
-    description: input.description ?? "",
+    ...(input.name === undefined ? {} : { name: input.name }),
+    ...(input.description === undefined ? {} : { description: input.description }),
     anchor: {
       kind: twoCell ? AnchorKind.TwoCell : AnchorKind.OneCell,
       ...(twoCell ? { editAs: AnchorEditAs.OneCell } : {}),

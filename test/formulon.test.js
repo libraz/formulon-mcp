@@ -438,3 +438,21 @@ test("supports catalog-listed workbook calls and rejects unknown methods", async
     closeSession("low-level");
   }
 });
+
+test("a null formula removes a defined name and a null comment clears the note", async () => {
+  await openSession(undefined, "name-null");
+  try {
+    setSessionDefinedName("name-null", "Rate", "=0.1", undefined, { comment: "base rate" });
+    const read = () => getSession("name-null").workbook.getDefinedName("Rate", null);
+    assert.equal(read().comment, "base rate");
+
+    setSessionDefinedName("name-null", "Rate", "=0.2", undefined, { comment: null });
+    assert.equal(read().formula, "=0.2");
+    assert.equal(read().comment ?? null, null);
+
+    setSessionDefinedName("name-null", "Rate", null);
+    assert.equal(read() ?? null, null);
+  } finally {
+    closeSession("name-null");
+  }
+});

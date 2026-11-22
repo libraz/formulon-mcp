@@ -55,28 +55,29 @@ export type PageMarginsSpec = {
 };
 
 export type PrintTitlesSpec = {
-  repeatRows?: string;
-  repeatCols?: string;
+  repeatRows?: string | null;
+  repeatCols?: string | null;
 };
 
 export type PrintSettingsInput = {
   pageSetup?: PageSetupSpec;
   margins?: PageMarginsSpec;
   printOptions?: Partial<PrintOptionsInput>;
-  headerFooter?: Partial<HeaderFooterInput>;
-  /** Comma-separated A1 ranges, for example `A1:F40` or `A1:B10,D5:E20`. Empty removes it. */
-  printArea?: string;
+  /** A null section text clears that section. */
+  headerFooter?: { [K in keyof HeaderFooterInput]?: HeaderFooterInput[K] | null };
+  /** Comma-separated A1 ranges, for example `A1:F40` or `A1:B10,D5:E20`. Null removes it. */
+  printArea?: string | null;
   printTitles?: PrintTitlesSpec;
   /** Zero-based rows each manual break precedes. Replaces the sheet's row breaks. */
   rowBreaks?: number[];
   /** Zero-based columns each manual break precedes. Replaces the sheet's column breaks. */
   colBreaks?: number[];
-  /** Raw XML escape hatches for attributes the engine does not model. */
-  pageSetupXml?: string;
-  pageMarginsXml?: string;
-  printOptionsXml?: string;
-  headerFooterXml?: string;
-  sheetPrXml?: string;
+  /** Raw XML escape hatches for attributes the engine does not model; null removes the fragment. */
+  pageSetupXml?: string | null;
+  pageMarginsXml?: string | null;
+  printOptionsXml?: string | null;
+  headerFooterXml?: string | null;
+  sheetPrXml?: string | null;
 };
 
 /**
@@ -170,7 +171,7 @@ function pageBreaks(breaks: readonly { index: number; manual: boolean }[]) {
 
 function spanText(span: { first: number; last: number } | null | undefined, axis: "row" | "col") {
   if (!span) {
-    return "";
+    return null;
   }
   const name = (index: number) => (axis === "row" ? `${index + 1}` : indexToCol(index));
   return `${name(span.first)}:${name(span.last)}`;
@@ -216,7 +217,7 @@ export function readPrintSettings(wb: Workbook, sheetIndex: number) {
       headerStated: margins.headerInStated,
       footerStated: margins.footerInStated,
     },
-    printArea: (printArea ?? []).map(rectA1).join(","),
+    printArea: printArea && printArea.length > 0 ? printArea.map(rectA1).join(",") : null,
     printTitles: {
       repeatRows: spanText(printTitles?.rows, "row"),
       repeatCols: spanText(printTitles?.columns, "col"),
@@ -229,9 +230,9 @@ export function readPrintSettings(wb: Workbook, sheetIndex: number) {
     ),
     // Neither of these has a structured getter, so the stored fragment is the
     // only way to read back what a typed setter wrote.
-    printOptionsXml: sheet.ooxml.getPrintOptionsXml() ?? "",
-    headerFooterXml: sheet.ooxml.getHeaderFooterXml() ?? "",
-    sheetPrXml: sheet.ooxml.getSheetPrXml() ?? "",
+    printOptionsXml: sheet.ooxml.getPrintOptionsXml(),
+    headerFooterXml: sheet.ooxml.getHeaderFooterXml(),
+    sheetPrXml: sheet.ooxml.getSheetPrXml(),
     pageCount: pagination.pageCount,
     // The layout the engine actually resolves: paper and margins in points.
     layout: {
@@ -322,11 +323,14 @@ export function writePrintSettings(wb: Workbook, sheetIndex: number, input: Prin
     step("printOptions", () => sheet.updatePrintOptions(options));
   }
   if (input.headerFooter) {
-    const headerFooter = input.headerFooter;
+    // The engine clears a section with empty text.
+    const headerFooter = Object.fromEntries(
+      Object.entries(input.headerFooter).map(([key, value]) => [key, value === null ? "" : value]),
+    ) as Partial<HeaderFooterInput>;
     step("headerFooter", () => sheet.updateHeaderFooter(headerFooter));
   }
   if (input.printArea !== undefined) {
-    const ranges = input.printArea
+    const ranges = (input.printArea ?? "")
       .split(",")
       .map((range) => range.trim())
       .filter((range) => range !== "");

@@ -10,7 +10,14 @@ import type {
   ShapePatch,
 } from "@libraz/formulon";
 import { parseCellRef } from "../a1.js";
-import { AnchorKind, findSheetIndex, StatusCode, sheetAt, statusError } from "../formulon.js";
+import {
+  AnchorKind,
+  ColorKind,
+  findSheetIndex,
+  StatusCode,
+  sheetAt,
+  statusError,
+} from "../formulon.js";
 import { formatColor, parseColor } from "../styles/input.js";
 import { describePlacement, emuSize, type ImageLength, KIND_NAMES, lengthToEmu } from "./images.js";
 import { assertInGrid, sheetName } from "./shared.js";
@@ -45,7 +52,11 @@ export type ShapePlacementInput = {
 export type ShapeInsertInput = ShapeFields & ShapePlacementInput & { anchor: string };
 
 type Session = ReturnType<typeof getSession>;
-type ShapeFieldsSpec = ShapePatch & Pick<DrawingPatch, "name" | "hidden">;
+type ShapeFieldsSpec = Pick<
+  ShapePatch,
+  "presetGeometry" | "text" | "textBox" | "fill" | "line" | "rotationDeg"
+> &
+  Pick<DrawingPatch, "name" | "hidden">;
 
 function sheetCell(ref: string, label: string) {
   const cell = parseCellRef(ref);
@@ -80,8 +91,8 @@ function describePaint(paintState: ChartFill | ChartLine | null): string | undef
   if (paintState.none) {
     return "none";
   }
-  if (paintState.color?.kind === 1) {
-    return formatColor(paintState.color.argb);
+  if (paintState.color?.base.kind === ColorKind.Rgb) {
+    return formatColor(paintState.color.base.argb);
   }
   return paintState.other || paintState.color ? "other" : undefined;
 }

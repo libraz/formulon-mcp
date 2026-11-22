@@ -166,8 +166,8 @@ export type StyleInput = {
   font?: FontStyleInput;
   fill?: FillStyleInput;
   border?: BorderStyleInput;
-  /** Excel format code, for example `#,##0` or `yyyy/mm/dd`. Empty means General. */
-  numberFormat?: string;
+  /** Excel format code, for example `#,##0` or `yyyy/mm/dd`. Null resets it to General. */
+  numberFormat?: string | null;
   align?: AlignStyleInput;
 };
 

@@ -38,7 +38,7 @@ test("scopes a defined name to one sheet and reports the scope back", async () =
     const byName = Object.fromEntries(workbook.definedNames.map((entry) => [entry.name, entry]));
     assert.equal(byName.Rate.localSheetId, -1);
     assert.equal(byName["_xlnm.Print_Area"].localSheetId, 1);
-    assert.equal(byName["_xlnm.Print_Area"].formula, "='Sheet2'!$A$1:$C$3");
+    assert.equal(byName["_xlnm.Print_Area"].formula, "=Sheet2!$A$1:$C$3");
   } finally {
     closeSession("defined-name-scope");
   }

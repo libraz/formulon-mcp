@@ -1722,3 +1722,48 @@ test("MCP workbook_call serializes typed-array results as plain arrays and stays
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("adds an in-workbook hyperlink with the target omitted or null", async () => {
+  await withClient(async (client) => {
+    const sessionId = "hyperlink-internal";
+    textPayload(
+      await client.callTool({ name: "formulon_open_workbook", arguments: { sessionId } }),
+    );
+    try {
+      for (const [row, extra] of [
+        [0, {}],
+        [1, { target: null }],
+      ]) {
+        const added = textPayload(
+          await client.callTool({
+            name: "formulon_hyperlink_operation",
+            arguments: {
+              sessionId,
+              operation: "add",
+              row,
+              col: 0,
+              location: "Sheet1!B2",
+              ...extra,
+            },
+          }),
+        );
+        assert.equal(added.method, "Sheet.setHyperlink");
+      }
+      const listed = textPayload(
+        await client.callTool({
+          name: "formulon_hyperlink_operation",
+          arguments: { sessionId, operation: "list" },
+        }),
+      );
+      assert.deepEqual(
+        listed.result.map((link) => [link.target, link.location]),
+        [
+          [null, "Sheet1!B2"],
+          [null, "Sheet1!B2"],
+        ],
+      );
+    } finally {
+      await client.callTool({ name: "formulon_close_workbook", arguments: { sessionId } });
+    }
+  });
+});

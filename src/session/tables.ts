@@ -58,8 +58,8 @@ export type TableOperationOptions = TableStyleToggles & {
   ref?: string;
   name?: string;
   columns?: TableColumnSettings[];
-  style?: string;
-  styleName?: string;
+  style?: string | null;
+  styleName?: string | null;
   headerRow?: boolean;
   totalsRow?: boolean;
   index?: number;
@@ -265,7 +265,7 @@ function createTable(session: ReturnType<typeof getSession>, options: TableOpera
   }
   const patch = columnsPatch(settings);
   const name = requiredText(options.name, "name");
-  const styleName = options.styleName ?? options.style;
+  const styleName = options.styleName ?? options.style ?? undefined;
   const input: TableInput = {
     range: range.ref,
     name,
@@ -351,7 +351,7 @@ function updateTable(session: ReturnType<typeof getSession>, options: TableOpera
   }
   const styleOptions: TableStyleOptionsPatch = {
     ...toggles,
-    ...(hasStyle ? { styleName: options.styleName ?? options.style ?? "" } : {}),
+    ...(hasStyle ? { styleName: options.styleName ?? options.style ?? null } : {}),
   };
   touch(session, true);
   const { table } = entry;

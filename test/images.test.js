@@ -879,14 +879,14 @@ test("places, reads, replaces and removes a picture held in a cell", async () =>
         /^IoImageUnsupported:/,
       );
 
-      // Placing replaces a formula, a formula reading the picture cell sees #VALUE!, and
-      // removing empties the cell.
+      // Placing replaces a formula, a formula reading the picture cell carries the picture
+      // (TYPE 128), and removing empties the cell.
       textPayload(
         await callTool(client, "formulon_set_cells", {
           sessionId,
           mutations: [
             { type: "formula", a1: "D4", formula: "=1+1" },
-            { type: "formula", a1: "E4", formula: "=ISERROR(D4)" },
+            { type: "formula", a1: "E4", formula: "=TYPE(D4)" },
           ],
         }),
       );
@@ -894,14 +894,14 @@ test("places, reads, replaces and removes a picture held in a cell", async () =>
       const read = (a1) =>
         callTool(client, "formulon_get_cell", { sessionId, a1, recalc: true }).then(textPayload);
       assert.equal((await read("D4")).formula, "");
-      assert.deepEqual((await read("E4")).value, { kind: "bool", value: true });
+      assert.deepEqual((await read("E4")).value, { kind: "number", value: 128 });
       assert.equal(
         textPayload(await op({ operation: "removeInCell", anchor: "D4" })).removed,
         true,
       );
       assert.match(errorPayload(await op({ operation: "getInCell", anchor: "D4" })), /no picture/);
       assert.equal((await read("D4")).value.kind, "blank");
-      assert.deepEqual((await read("E4")).value, { kind: "bool", value: false });
+      assert.deepEqual((await read("E4")).value, { kind: "number", value: 1 });
       assert.equal(
         textPayload(await op({ operation: "removeInCell", anchor: "D4" })).removed,
         false,
@@ -921,6 +921,32 @@ test("places, reads, replaces and removes a picture held in a cell", async () =>
       // The JPEG stays a JPEG through the save.
       assert.equal(reopened.content[0].mimeType, "image/jpeg");
       assert.equal(JSON.parse(reopened.content[1].text).pxHeight, 3);
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("inserts a picture without sending a name or description the client left out", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "formulon-mcp-images-anon-"));
+  try {
+    const logo = path.join(dir, "logo.png");
+    await writeFile(logo, solidPng(8, 8));
+    await withClient(async (client) => {
+      const sessionId = "images-anon";
+      textPayload(await callTool(client, "formulon_open_workbook", { sessionId }));
+      const inserted = textPayload(
+        await callTool(client, "formulon_image_operation", {
+          sessionId,
+          operation: "insert",
+          path: logo,
+          anchor: "B2",
+        }),
+      );
+      // The engine's own default name shows that no empty name was supplied.
+      assert.notEqual(inserted.placed.name, "");
+      assert.equal(typeof inserted.placed.name, "string");
+      textPayload(await callTool(client, "formulon_close_workbook", { sessionId }));
     });
   } finally {
     await rm(dir, { recursive: true, force: true });

@@ -52,8 +52,9 @@ export const styleSchema = z.object({
     .optional(),
   numberFormat: z
     .string()
+    .nullable()
     .optional()
-    .describe('Excel format code such as "#,##0" or "yyyy/mm/dd". Empty string means General.'),
+    .describe('Excel format code such as "#,##0" or "yyyy/mm/dd"; null resets it to General.'),
   align: z
     .object({
       horizontal: z.enum(STYLE_VOCABULARY.horizontalAlign).optional(),
@@ -108,19 +109,19 @@ const printOptionsSchema = z.object({
 
 const headerFooterSchema = z
   .object({
-    oddHeader: z.string().optional(),
-    oddFooter: z.string().optional(),
-    evenHeader: z.string().optional(),
-    evenFooter: z.string().optional(),
-    firstHeader: z.string().optional(),
-    firstFooter: z.string().optional(),
+    oddHeader: z.string().nullable().optional(),
+    oddFooter: z.string().nullable().optional(),
+    evenHeader: z.string().nullable().optional(),
+    evenFooter: z.string().nullable().optional(),
+    firstHeader: z.string().nullable().optional(),
+    firstFooter: z.string().nullable().optional(),
     differentOddEven: z.boolean().optional(),
     differentFirst: z.boolean().optional(),
     scaleWithDoc: z.boolean().optional(),
     alignWithMargins: z.boolean().optional(),
   })
   .describe(
-    'Section text uses Excel\'s own codes — &L/&C/&R pick the section, &P the page number, &N the page count, &D the date, and && a literal ampersand (for example \'&C&"MS Gothic"Invoice &P/&N\'). Each section is tri-state: omit to leave it, "" to clear it.',
+    "Section text uses Excel's own codes — &L/&C/&R pick the section, &P the page number, &N the page count, &D the date, and && a literal ampersand (for example '&C&\"MS Gothic\"Invoice &P/&N'). Each section is tri-state: omit to leave it, null to clear it.",
   );
 
 /** The flat print-settings input shared by read/write and batch layout tools. */
@@ -131,17 +132,26 @@ export const printSettingsSchema = z.object({
   headerFooter: headerFooterSchema.optional(),
   printArea: z
     .string()
+    .nullable()
     .optional()
     .describe(
-      'Comma-separated A1 ranges, for example "A1:F40" or "A1:B10,D5:E20". Empty string removes the print area.',
+      'Comma-separated A1 ranges, for example "A1:F40" or "A1:B10,D5:E20". null removes the print area.',
     ),
   printTitles: z
     .object({
-      repeatRows: z.string().optional().describe('Whole-row span such as "1:2".'),
-      repeatCols: z.string().optional().describe('Whole-column span such as "A:A".'),
+      repeatRows: z
+        .string()
+        .nullable()
+        .optional()
+        .describe('Whole-row span such as "1:2"; null removes it.'),
+      repeatCols: z
+        .string()
+        .nullable()
+        .optional()
+        .describe('Whole-column span such as "A:A"; null removes it.'),
     })
     .optional()
-    .describe("Rows and columns repeated on every printed page. Both empty removes them."),
+    .describe("Rows and columns repeated on every printed page. Both null removes them."),
   rowBreaks: z
     .array(z.number().int().nonnegative())
     .max(10_000)
@@ -152,11 +162,27 @@ export const printSettingsSchema = z.object({
     .max(10_000)
     .optional()
     .describe("Zero-based columns each manual break precedes. Replaces the sheet's breaks."),
-  pageSetupXml: z.string().optional().describe("Raw <pageSetup> fragment; empty removes it."),
-  pageMarginsXml: z.string().optional().describe("Raw <pageMargins> fragment; empty removes it."),
-  printOptionsXml: z.string().optional().describe("Raw <printOptions> fragment; empty removes it."),
-  headerFooterXml: z.string().optional().describe("Raw <headerFooter> fragment; empty removes it."),
-  sheetPrXml: z.string().optional().describe("Raw <sheetPr> fragment; empty removes it."),
+  pageSetupXml: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("Raw <pageSetup> fragment; null removes it."),
+  pageMarginsXml: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("Raw <pageMargins> fragment; null removes it."),
+  printOptionsXml: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("Raw <printOptions> fragment; null removes it."),
+  headerFooterXml: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("Raw <headerFooter> fragment; null removes it."),
+  sheetPrXml: z.string().nullable().optional().describe("Raw <sheetPr> fragment; null removes it."),
 });
 
 /** The write-only variant; an empty object would otherwise become a read. */

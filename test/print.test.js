@@ -89,7 +89,7 @@ test("removes a print area with an empty range list", async () => {
   try {
     sessionPrintSettings("print-clear", 0, { printArea: "A1:C5" });
     const cleared = sessionPrintSettings("print-clear", 0, { printArea: "" });
-    assert.equal(cleared.settings.printArea, "");
+    assert.equal(cleared.settings.printArea, null);
   } finally {
     closeSession("print-clear");
   }
@@ -175,5 +175,57 @@ test("reads the resolved page layout of a fit-to-width landscape sheet", async (
     assert.match(layout.pages[0].ref, /^A1:B\d+$/);
   } finally {
     closeSession("print-layout");
+  }
+});
+
+test("a null raw print fragment removes it and the read side reports null", async () => {
+  await openSession(undefined, "print-null-xml");
+  try {
+    const written = sessionPrintSettings("print-null-xml", 0, {
+      printOptionsXml: '<printOptions horizontalCentered="1"/>',
+    });
+    assert.match(written.settings.printOptionsXml, /horizontalCentered="1"/);
+
+    const removed = sessionPrintSettings("print-null-xml", 0, { printOptionsXml: null });
+    assert.equal(removed.settings.printOptionsXml, null);
+    // A fragment that was never written reads as absent, not as an empty string.
+    assert.equal(removed.settings.sheetPrXml, null);
+  } finally {
+    closeSession("print-null-xml");
+  }
+});
+
+test("an empty raw print fragment reaches the client as the engine's refusal", async () => {
+  await openSession(undefined, "print-empty-xml");
+  try {
+    assert.throws(
+      () => sessionPrintSettings("print-empty-xml", 0, { pageSetupXml: "" }),
+      /not a valid element/,
+    );
+  } finally {
+    closeSession("print-empty-xml");
+  }
+});
+
+test("null clears a print area, the print titles and a header section", async () => {
+  await openSession(undefined, "print-null-clear");
+  try {
+    sessionPrintSettings("print-null-clear", 0, {
+      printArea: "A1:B20",
+      printTitles: { repeatRows: "1:1", repeatCols: "A:A" },
+      headerFooter: { oddHeader: "&CTitle", oddFooter: "&P" },
+    });
+    const { settings } = sessionPrintSettings("print-null-clear", 0, {
+      printArea: null,
+      printTitles: { repeatRows: null, repeatCols: null },
+      headerFooter: { oddHeader: null },
+    });
+    assert.equal(settings.printArea, null);
+    assert.equal(settings.printTitles.repeatRows, null);
+    assert.equal(settings.printTitles.repeatCols, null);
+    assert.doesNotMatch(settings.headerFooterXml ?? "", /oddHeader/);
+    assert.match(settings.headerFooterXml, /oddFooter/);
+  } finally {
+    closeSession("print-null-clear");
   }
 });

@@ -689,3 +689,29 @@ test("new tools are registered and reachable over stdio", async () => {
     }
   });
 });
+
+test("a null sparkline dateAxis removes the date axis", async () => {
+  await withSession("sparkline-date-axis", () => {
+    setSessionRange(
+      "sparkline-date-axis",
+      "A1",
+      [
+        [1, 3, 2, 5],
+        [45000, 45001, 45002, 45003],
+      ],
+      0,
+      false,
+    );
+    const added = addSessionSparklines(
+      "sparkline-date-axis",
+      0,
+      [{ data: "A1:D1", location: "E1" }],
+      { dateAxis: "A2:D2" },
+    );
+    assert.equal(added.group.dateAxis, "'Sheet1'!A2:D2");
+    const cleared = updateSessionSparklines("sparkline-date-axis", 0, 0, undefined, {
+      dateAxis: null,
+    });
+    assert.equal(cleared.group.dateAxis, undefined);
+  });
+});

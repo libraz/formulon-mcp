@@ -1008,3 +1008,16 @@ test("styles far-apart columns over many rows without dense row storage", async 
     closeSession("style-far-columns");
   }
 });
+
+test("a null number format resets the cells to General", async () => {
+  await openSession(undefined, "style-null-format");
+  try {
+    setSessionRange("style-null-format", "A1", [[1000]], undefined, false);
+    styleSessionRange("style-null-format", "A1", { numberFormat: "#,##0" }, undefined, "existing");
+    assert.notEqual(cellXf("style-null-format", 0, 0, 0).numFmtId, 0);
+    styleSessionRange("style-null-format", "A1", { numberFormat: null }, undefined, "existing");
+    assert.equal(cellXf("style-null-format", 0, 0, 0).numFmtId, 0);
+  } finally {
+    closeSession("style-null-format");
+  }
+});

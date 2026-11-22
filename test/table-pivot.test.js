@@ -15,7 +15,7 @@ import {
   tableOperation,
   traceSession,
 } from "../dist/sessions.js";
-import { textPayload, withClient } from "./helpers/mcp.js";
+import { callTool, errorPayload, textPayload, withClient } from "./helpers/mcp.js";
 
 const sheet0 = { kind: "Sheet", sheet: 0 };
 
@@ -439,6 +439,52 @@ test("registers and executes native Table/Pivot tools through MCP", async () => 
         name: "formulon_close_workbook",
         arguments: { sessionId: "mcp-table-pivot" },
       });
+    }
+  });
+});
+
+test("a null table style clears it on update", async () => {
+  await openSession(undefined, "table-style-null");
+  try {
+    setSessionRange("table-style-null", "Sheet1!A1", sales, 0, true);
+    const created = tableOperation("table-style-null", "create", {
+      range: "Sheet1!A1:C4",
+      name: "StyledSales",
+      style: "TableStyleMedium2",
+    });
+    assert.equal(created.table.raw.styleName, "TableStyleMedium2");
+    const cleared = tableOperation("table-style-null", "update", { index: 0, style: null });
+    assert.equal(cleared.table.raw.styleName, null);
+  } finally {
+    closeSession("table-style-null");
+  }
+});
+
+test("an empty table column name reaches the client as a tool error naming the field", async () => {
+  await withClient(async (client) => {
+    const sessionId = "table-empty-column";
+    textPayload(await callTool(client, "formulon_open_workbook", { sessionId }));
+    try {
+      textPayload(
+        await callTool(client, "formulon_set_range", {
+          sessionId,
+          start: "Sheet1!A1",
+          values: sales,
+        }),
+      );
+      const message = errorPayload(
+        await callTool(client, "formulon_table_operation", {
+          sessionId,
+          operation: "create",
+          range: "Sheet1!A1:C4",
+          name: "EmptyColumn",
+          columns: [{ name: "" }, { name: "Product" }, { name: "Amount" }],
+        }),
+      );
+      assert.match(message, /column/i);
+      assert.match(message, /\[0\]/);
+    } finally {
+      await callTool(client, "formulon_close_workbook", { sessionId });
     }
   });
 });
