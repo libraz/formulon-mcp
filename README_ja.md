@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/libraz/formulon-mcp/blob/main/LICENSE)
 [![Docs](https://img.shields.io/badge/docs-formulon.libraz.net-2563eb)](https://formulon.libraz.net/ja/mcp/)
 
-AI エージェント向けの Excel MCP サーバーです。[Formulon](https://github.com/libraz/formulon) のエンジンを使い、ローカルの stdio で動きます。エージェントから Excel ワークブックの調査・編集、数式の再計算、印刷用帳票の作成、範囲のプレビュー、コピーした数式の監査、Excel テーブルとピボットテーブルの作成ができます。
+AI エージェント向けの Excel MCP サーバーです。Excel なしで .xlsx / .xlsb ワークブックを開き、編集、再計算、保存できます。[Formulon](https://github.com/libraz/formulon) のエンジンを使い、ローカルの stdio で動きます。エージェントからは、印刷用帳票の作成、範囲のプレビュー、コピーした数式の監査、Excel テーブルとピボットテーブルの作成もできます。
 
 **[詳細ドキュメント](https://formulon.libraz.net/ja/mcp/)** は Formulon のサイトにまとめています。ツールの入力・応答・制限と、具体的な作業例を掲載しています。
 
@@ -45,6 +45,11 @@ yarn test
 ```
 
 テストは `dist/` をビルドして実行します。計算エンジンは別の [Formulon リポジトリ](https://github.com/libraz/formulon)で管理しています。
+
+## 関連プロジェクト
+
+- [Formulon](https://formulon.libraz.net/ja/) — Excel 365 計算エンジン（WASM、Python、ネイティブ）
+- [formulon-cell](https://formulon.libraz.net/ja/cell/) — ブラウザ、React、Vue 向けの Excel 風スプレッドシートコンポーネント
 
 ## ライセンス
 

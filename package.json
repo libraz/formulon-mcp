@@ -1,10 +1,10 @@
 {
   "name": "@libraz/formulon-mcp",
-  "version": "0.11.0",
-  "description": "MCP server for Formulon Excel-compatible formula and workbook evaluation",
+  "version": "0.12.0",
+  "description": "Excel MCP server for AI agents: open, edit, recalculate and save .xlsx / .xlsb workbooks without Excel.",
   "license": "Apache-2.0",
   "author": "libraz",
-  "homepage": "https://github.com/libraz/formulon-mcp",
+  "homepage": "https://formulon.libraz.net/mcp/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/libraz/formulon-mcp.git"
@@ -38,7 +38,7 @@
     "prepare": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@libraz/formulon": "file:/tmp/formulon-0.19.0-mcp/libraz-formulon-0.19.0-r38.tgz",
+    "@libraz/formulon": "0.19.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@resvg/resvg-js": "^2.6.2",
     "zod": "^4.6.7"
@@ -70,7 +70,11 @@
     "formula",
     "office-365",
     "typescript",
-    "nodejs"
+    "nodejs",
+    "excel-mcp",
+    "spreadsheet-mcp",
+    "xlsb",
+    "agent-tools"
   ],
   "sideEffects": false
 }

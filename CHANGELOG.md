@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-23
+
 ### BREAKING
 
 - The server runs on `@libraz/formulon` 0.19. Tool results that pass an engine
@@ -16,12 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [upgrade guide](https://github.com/libraz/formulon/blob/main/docs/releases/upgrading-0.19.md).
 - `formulon_workbook_call` addresses the object a method belongs to. `target`
   names a handle kind of the installed engine (`Workbook`, `Sheet`, `Table`,
-  `Pivot`, `PivotCache`, `Chart` and the other drawing kinds, the `ooxml`
-  layers) and the key each accessor on the way takes, or `Formulon` for the
-  engine's module functions (`compareText`, `getCollationClasses`,
-  `getLocaleFacts`, ...); an omitted `target` is the workbook. The callable
-  methods are read from the engine's declarations instead of a fixed list, and
-  the result carries `target`.
+  `Pivot`, `PivotCache`, the drawing kinds, the `ooxml` layers) and the key each
+  accessor on the way takes, or `Formulon` for the engine's module functions;
+  an omitted `target` is the workbook. The callable methods are read from the
+  engine's declarations, and the result carries `target`. `formulon_workbook_api`
+  lists every kind's methods with their `target`.
 
   ```jsonc
   // before
@@ -30,159 +31,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   { "sessionId": "s", "target": { "kind": "Sheet", "sheet": 0 }, "method": "listMerges", "args": [] }
   ```
 
-- `formulon_workbook_api` lists the methods of every handle kind, each with
-  its `target` (`kind` and `keys`), so an entry feeds `formulon_workbook_call`
-  directly. `describe` takes `Kind.method` (`Sheet.addValidation`) or a bare
-  name that only one kind has.
-- `formulon_validation_operation` takes `validation` as the engine's
-  `DataValidationInput`, with `ranges` and its enum fields given by member
-  name. The engine checks the record, and its refusal is the tool error.
-
-  ```jsonc
-  // before
-  { "ranges": [{ "firstRow": 0, "firstCol": 2, "lastRow": 9, "lastCol": 2 }],
-    "type": 1, "op": 0, "formula1": "1", "formula2": "10" }
-  // after
-  { "ranges": "C1:C10", "type": "Whole", "operator": "Between", "formula1": "1", "formula2": "10" }
-  ```
-
-- `formulon_conditional_format_operation` takes `rule` as the engine's
-  `ConditionalFormatInput`, with `ranges` and its enum fields (rule type,
-  operator, time period, threshold types, icon sets, data-bar axis and
-  direction) given by member name. `evaluate` without `todaySerial` evaluates
-  time-period rules against the pinned clock, else today; before, it
-  skipped them.
-
-  ```jsonc
-  // before
-  { "sqref": [{ "firstRow": 0, "firstCol": 0, "lastRow": 9, "lastCol": 0 }],
-    "type": 0, "formula1": "=A1>0" }
-  // after
-  { "ranges": "A1:A10", "type": "Expression", "formula1": "=A1>0" }
-  ```
+- `formulon_validation_operation` and `formulon_conditional_format_operation`
+  take the engine's `DataValidationInput` and `ConditionalFormatInput`: `ranges`
+  is an A1 string and every enum field is a member name. Listings use the same
+  names, so a listed record can be added back as it is. Records carry the
+  engine's fields: formulas start with `=`, an unset text is `null`, and
+  `showInCellDropdown` replaces `showDropDown`. Conditional-format `evaluate`
+  nests the data bar in `bar`, names the format `dxfIndex`, and evaluates
+  time-period rules against the pinned clock, else today, where it skipped them.
 
 - Tools that report `{ session, method, result }` (merge, comment, hyperlink,
   validation, conditional format, function lookup, session-mode formula
-  evaluation) name the engine call they made in `method`, for example
-  `Sheet.listMerges` or `Formulon.listFunctionNames`, and `result` is that
-  call's return value.
-- An engine failure is reported as `<StatusName>: <message> (<context>)`,
+  evaluation) name the engine call in `method`, for example `Sheet.listMerges`,
+  and `result` is that call's return value.
+- Errors, the server's own included, read `<StatusName>: <message> (<context>)`
   followed by a JSON content item with `code`, `message`, `context` and, for a
-  formula syntax error, `parseError` with its positions.
-
-- `formulon_table_operation` takes `columns` as one record per column,
-  `{ name?, totalsRowFunction?, totalsRowLabel?, totalsRowFormula?,
-  calculatedFormula? }`, and `totals` is removed. Totals functions use the
-  engine's names (`countNumbers`; `null` for none). The `table` record in a
-  result is the engine's (`headerRow` and `totalsRow` are booleans). Turning
-  on `totalsRow` adds a row below the data instead of turning the last data
-  row into the totals row. Blank and duplicate headers get the names Excel
-  gives them (`Column1`, `qty2`) instead of failing, and a table name that
-  reads as a cell address or a table overlapping another is refused.
-
-  ```jsonc
-  // before
-  { "columns": ["Item", "Qty"], "totals": [{ "column": "Qty", "function": "sum" }] }
-  // after
-  { "columns": [{ "name": "Item" }, { "name": "Qty", "totalsRowFunction": "sum" }] }
-  ```
-
+  formula syntax error, `parseError`. A merge index out of range now reads
+  `IndexOutOfRange: merge index out of range (index=9 count=1)`.
+- `formulon_table_operation` takes `columns` as one record per column
+  (`{ name?, totalsRowFunction?, totalsRowLabel?, totalsRowFormula?,
+  calculatedFormula? }`) and `totals` is removed. Totals functions use the
+  engine's names (`countNumbers`; `null` for none), and turning on `totalsRow`
+  adds a row below the data. Blank and duplicate headers get Excel's names
+  (`Column1`, `qty2`); an empty `columns[].name`, a table name that reads as a
+  cell address and a table overlapping another are refused.
 - `formulon_create_pivot` and `formulon_trace` report a PivotTable's spill as
   `null` or `{ blocked, cause, anchor, rows, cols, range }` (it was
-  `{ engaged, ... }`) and its drawn region as `layout.rect` (it was `top`,
-  `left`, `rows`, `cols`). `formulon_create_pivot` returns `spill`. The
-  report's cells read through `formulon_get_cell` and `formulon_get_range`,
-  and a report that would overlap another is refused with
-  `PreconditionFailed`.
-- `formulon_hyperlink_operation` follows the engine's range-keyed hyperlinks.
-  `list` returns an array of links, each with its `range` and a `target` that
-  is `null` for a link to a location in the workbook, and URLs come back
-  normalised (`https://example.com/`). `add` on cells that already hold a link
-  replaces it, and writes the link text and the Hyperlink style into the cell.
-  `remove` of a link that does not exist fails with `NotFound`, and `add`
-  without a target or a location is refused.
-- Validation and conditional-format listings carry the engine's records:
-  formulas start with `=`, an unset text is `null`, `showInCellDropdown`
-  replaces `showDropDown`, and `allowBlank`, `showInputMessage` and
-  `showErrorMessage` are `true` unless set otherwise. The conditional-format
-  `evaluate` result nests the data bar in `bar` and names the format
-  `dxfIndex`.
-- Calls Excel refuses now fail instead of succeeding: an overlapping merge
-  (`AlreadyExists`), a defined name Excel does not accept (`InvalidArgument`),
-  and a formula with a syntax error in `formulon_eval_formula` and in the
-  localize and canonicalize lookups (`ParserUnexpectedToken`, where it gave
-  `#NAME?`). Reading a note that does not exist returns `result: null`
-  instead of failing, and a note without an author reports `null`.
+  `{ engaged, ... }`) and its drawn region as `layout.rect`. A report that
+  would overlap another is refused with `PreconditionFailed`.
+- `formulon_hyperlink_operation` follows range-keyed hyperlinks: `list` returns
+  links with their `range`, a `target` that is `null` inside the workbook, and
+  normalised URLs; `add` over a cell that holds a link replaces it and writes
+  the link text and Hyperlink style into the cell; `remove` of a missing link
+  fails with `NotFound`.
 - `formulon_inspect_layout` and `formulon_inspect_session` count and list only
   cells with content in `cellCount`, `usedRange` and `cells`; a cell that
-  carries only a format is listed in `formattedCells` (with `includeStyles`)
-  and counted in `formattedCellCount`. A sheet's tab visibility is
-  `visibility` (`visible`, `hidden` or `veryHidden`), next to `view`, which no
-  longer carries it.
-- `formulon_print_settings` raw records write booleans as `1` and `0`, locale
-  facts give `dateOrder` as the engine's number, and the first picture placed
-  on a sheet is named `Picture 1`.
+  carries only a format is in `formattedCells` and `formattedCellCount`. A
+  sheet's tab visibility is `visibility`, no longer part of `view`.
+- Clearing a setting takes `null`: `numberFormat`, `printArea`,
+  `printTitles.repeatRows` and `repeatCols`, header and footer sections, the raw
+  `*Xml` print fragments, a table `style` and `styleName`, a sparkline
+  `dateAxis`, a defined name's `formula` and `comment`, a hyperlink `target`.
+  An empty string no longer removes a raw print fragment or a table style; the
+  engine refuses it. Print settings read back `null`, not `""`, for no print
+  area, no repeated rows or columns and an absent raw fragment.
+- Calls Excel refuses now fail: an overlapping merge (`AlreadyExists`), a
+  defined name Excel does not accept (`InvalidArgument`), a formula with a
+  syntax error in `formulon_eval_formula` and the localize and canonicalize
+  lookups (`ParserUnexpectedToken`, where it gave `#NAME?`). Formula entry
+  refuses what Excel refuses, such as a wrong argument count or a value where
+  a function takes only a reference. Reading a missing note returns `null`.
+- `LEN`, `MID`, `FIND`, `SEARCH` and `REPLACE` count a character outside the
+  Basic Multilingual Plane by the workbook's Compatibility Version: one
+  position in a new workbook or a file stamped version 2, two in a file without
+  the stamp or stamped version 1. Before, the default profile counted two.
+- A picture held in a cell is a value of its own kind: `TYPE` gives 128 and
+  `ISERROR` FALSE where the cell read `#VALUE!`. Defined-name formulas read back
+  with Excel's quoting (`=Sheet2!$A$1:$C$3`, not `='Sheet2'!$A$1:$C$3`).
+- A save to `.xlsb` of something the format cannot hold, such as a protected
+  range whose security descriptor it cannot keep, fails with
+  `IoFeatureNotWritable` and writes nothing instead of dropping it.
 
 ### Added
 
-- `formulon_function_lookup` translates a formula's references to and from
-  R1C1 (`r1c1`, with `baseRow` and `baseCol` naming the cell the references
-  are relative to).
-
-- `formulon_sparkline_operation` takes and lists `rightToLeft`, which plots a
-  group's points from right to left.
-- `formulon_recalc_session` returns `circularReferences`, every cell
-  (`Sheet!A1`) that sits in an unresolved circular reference.
-- `formulon_get_cell` and `formulon_get_range` mark a formula cell
-  `stale: true` when manual calculation left its value behind a change to its
-  inputs. Saving the session computes such formulas first, which clears the
-  mark, unless the workbook's `calcOnSave` is off.
 - `formulon_theme_operation` applies a `.thmx` theme file to a session's
   workbook or saves the workbook's theme as one.
 - `formulon_image_operation` places, reads and removes a PNG or JPEG picture
-  held in a cell (`insertInCell`, `getInCell`, `removeInCell`), as Excel's
-  Place in Cell does; formulas that read such a cell see `#VALUE!`.
+  held in a cell (`insertInCell`, `getInCell`, `removeInCell`).
+- `formulon_function_lookup` translates a formula's references to and from
+  R1C1 (`r1c1`, with `baseRow` and `baseCol` naming the base cell).
+- `formulon_recalc_session` returns `circularReferences`, every cell
+  (`Sheet!A1`) in an unresolved circular reference.
+- `formulon_get_cell` and `formulon_get_range` mark a formula cell
+  `stale: true` when manual calculation left its value behind a change to its
+  inputs; saving computes such formulas first unless `calcOnSave` is off.
+- `formulon_sparkline_operation` takes and lists `rightToLeft`.
+- `.xlsb` saves write PivotTables, calculated fields included, and the custom
+  views of a workbook opened from `.xlsx`. A PivotTable with alternative text,
+  or whose cache is saved without its data, is left out and counted in
+  `losses.deferredFeatures`.
 
 ### Changed
 
-- `formulon_validation_operation` and `formulon_conditional_format_operation`
-  list records with the member names their inputs take, at every enum field
-  (validation `type`, `operator`, `errorStyle`; rule `type`, `operator`,
-  `timePeriod`, threshold `type`, data-bar `axisPosition` and `direction`,
-  icon-set `name` and custom `icons[].iconSet`), so a listed record can be
-  added back as it is. A null `operator`, `errorStyle` or `timePeriod` is
-  accepted on input as omitted.
+- An omitted picture `name` or `description` takes the engine's default
+  instead of an empty text.
 
-  ```jsonc
-  // before
-  { "type": 1, "operator": 6, "errorStyle": 0 }
-  // after
-  { "type": "Whole", "operator": "Between", "errorStyle": "Stop" }
-  ```
+### Fixed
 
-- Opening a file with a profile (`profile`, or `FORMULON_MCP_PROFILE`) loads
-  it under that profile, so a manual-calculation workbook keeps the values it
-  cached and computes only what the file left stale, as without a profile.
-  Before, the profile was set after the load and every formula was recomputed
-  under it. An unknown profile is reported as `unknown excel profile` for a
+- Opening a file with a profile (`profile`, or `FORMULON_MCP_PROFILE`) loads it
+  under that profile, so a manual-calculation workbook keeps the values it
+  cached and computes only what the file left stale; before, every formula was
+  recomputed. An unknown profile is reported as `unknown excel profile` for a
   file as for a new workbook.
-- Errors the server itself raises (an index out of range, a missing or invalid
-  argument, an unknown session or sheet) now use the same
-  `<StatusName>: <message> (<context>)` text and second JSON content item
-  (`{code, message, context}`) as engine errors. Removing a merge that does not
-  exist used to read `merge index out of range: 9 (1 merges)`; it now reads
-  `IndexOutOfRange: merge index out of range (index=9 count=1)`.
 
-- `LEN`, `MID`, `FIND`, `SEARCH` and `REPLACE` count a character outside the
-  Basic Multilingual Plane (an emoji, a rare CJK ideograph) by the workbook's
-  Compatibility Version, as the engine now does: a new workbook and a file
-  stamped with version 2 count it as one position, and a file without the
-  stamp or stamped with version 1 counts it as two. Before, the default
-  profile always counted two.
-- `formulon_save_session` reports that `.xlsb` output leaves out a
-  PivotTable built in the session and the custom views of a workbook opened
-  from `.xlsx`; a PivotTable opened from a file is written, edits included,
-  and tables, print settings, notes, AutoFilter and the other features the
-  tools author are kept. An `.xlsb` save of a data bar whose
-  minimum or maximum is a formula fails with `IoFeatureNotWritable` and
-  writes nothing.
+[Unreleased]: https://github.com/libraz/formulon-mcp/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/libraz/formulon-mcp/compare/v0.11.0...v0.12.0
