@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://formulon.libraz.net/mcp/
+    about: Installation, tool inputs and workflows
+  - name: Wrong calculation results or files that load wrongly
+    url: https://github.com/libraz/formulon/issues
+    about: Formula evaluation, recalculation and xlsx / xlsb parsing belong to the Formulon engine
+  - name: Security vulnerabilities
+    url: https://github.com/libraz/formulon-mcp/blob/main/SECURITY.md
+    about: Report privately as described in the security policy
