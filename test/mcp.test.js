@@ -1195,7 +1195,8 @@ test("MCP tools resolve the Excel profile from the argument, the environment, th
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
+  // One server start per environment value; a start takes several seconds on a CI runner.
+}, 120_000);
 
 const MALFORMED_PROFILES = [
   "ja_JP",
